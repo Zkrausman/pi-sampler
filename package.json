@@ -11,7 +11,7 @@
     "test:legacy": "node --test extensions/delivery-controller/src/*.test.mjs extensions/wiki-delivery/src/*.test.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "npm publish --workspaces --access restricted"
+    "release": "changeset publish"
   },
   "engines": { "node": ">=22" },
   "devDependencies": {

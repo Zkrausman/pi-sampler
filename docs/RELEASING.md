@@ -47,11 +47,23 @@ Update them deliberately in the consumer configuration.
    Select only the affected package and choose patch, minor, or major according
    to semantic versioning.
 
-2. Merge the changeset with its implementation and tests.
-3. The release workflow opens/updates a version PR.
-4. Merge that PR. The workflow publishes the packages to GitHub Packages and
-   creates the associated release commits/tags.
+2. Create the version PR locally after reviewing the pending bump:
 
-The workflow uses `GITHUB_TOKEN`; repository Actions settings must permit it to
-write packages and pull requests. Do not store registry tokens in this
-repository.
+   ```powershell
+   npm run version-packages
+   git add .
+   git commit -m "chore: version Pi packages"
+   git push
+   ```
+
+   The command updates package versions, changelogs, and the lockfile, and
+   consumes the included Changeset files.
+3. Merge the version PR.
+4. From the default branch, run the **Release Pi packages** GitHub Actions
+   workflow manually. It reruns tests and uses `changeset publish` to publish
+   only versions that are not already present in GitHub Packages.
+
+The release workflow uses `GITHUB_TOKEN`; repository Actions settings must
+permit it to write packages. The version PR is intentionally created by a
+maintainer, so the repository does not need to grant Actions permission to
+create pull requests. Do not store registry tokens in this repository.
