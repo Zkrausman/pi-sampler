@@ -37,9 +37,9 @@ Restart Pi or run `/reload`. For a one-session smoke test, run:
 pi -e E:/Repos/pi-sampler/extensions/output-optimizer/src/index.ts
 ```
 
-Each extension README lists its prerequisites and configuration. Pi also
-supports project-local extensions under `.pi/extensions/`; use that option only
-for a project you trust.
+Each extension README lists its prerequisites, configuration, and concrete
+usage examples. Pi also supports project-local extensions under `.pi/extensions/`;
+use that option only for a project you trust.
 
 ## Project profiles
 
@@ -47,7 +47,8 @@ Use [`profiles/project-profile.schema.json`](profiles/project-profile.schema.jso
 to document consumer-owned values such as work-item identifiers, verification
 commands, source repository, required checks, and evidence/specification paths.
 [`profiles/example-project.json`](profiles/example-project.json) is a generic
-example. The Gelt profile is an example consumer configuration, not a default.
+example. Treat every profile as consumer-owned configuration, never as a
+repository default.
 
 ## Optional governance module
 

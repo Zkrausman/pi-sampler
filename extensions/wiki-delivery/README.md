@@ -18,6 +18,43 @@ The extension registers three tools:
 It gates the installed LLM Wiki tools so an active lifecycle follows the
 approved sequence. It stores only redacted lifecycle receipts in the Pi session.
 
+## Example: record a completed feature as governed knowledge
+
+Use this after implementing a feature whose design notes, verification results,
+and code-review outcome should become durable project knowledge. Start a run
+with the delivery metadata and redacted source files. This abbreviated example
+shows the shape of `wiki_delivery_begin`; a real run supplies at least five
+sources and one or more canonical pages:
+
+```json
+{
+  "ticket_id": "ENG-42",
+  "recall_query": "health endpoint design and verification",
+  "okf_path": "docs/specifications/ENG-42-health-endpoint.md",
+  "delivery_state": "review_ready",
+  "pr_number": 42,
+  "pr_url": "https://github.com/acme/example-service/pull/42",
+  "pr_draft": false,
+  "review_verdict": "approved",
+  "merge_status": "not_merged",
+  "sources": [
+    { "kind": "specification", "title": "Feature specification", "file_path": "docs/specifications/ENG-42-health-endpoint.md" }
+  ],
+  "canonical_pages": [
+    { "type": "requirement", "title": "Health endpoint" }
+  ],
+  "verifications": [
+    { "command": "npm test", "exit_code": 0, "outcome": "passed", "output_sha256": "<sha256>" }
+  ]
+}
+```
+
+The controller directs the agent through capture, ingestion, canonical-page
+creation, observation, linting, and attestations. After those steps and the
+canonical Wiki changes are committed, call `wiki_delivery_finalize` with the
+run ID and that clean commit SHA. The extension writes a manifest only when the
+installed validator accepts it.
+
 ## Prerequisites
 
 This extension is for projects that use the compatible LLM Wiki toolset and

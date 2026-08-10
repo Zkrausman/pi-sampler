@@ -17,6 +17,25 @@ changes command arguments, or persists raw command output.
 - Adds `pith_pi_status` and `pith_pi_raw` tools. A caller can bypass a single
   transform with `pith_raw: true` on the shell tool input.
 
+## Example: investigating a noisy test run
+
+Use this when Pi needs to inspect a command that produces thousands of lines of
+successful progress output, such as a monorepo test suite, build, or dependency
+scan. Install the extension, then let Pi run the normal command:
+
+```text
+npm run test:integration
+```
+
+When the command succeeds with output above the threshold, Pi receives a compact
+version containing the beginning, relevant status lines, and the end. The shell
+command itself still ran exactly once and its exit status is unchanged.
+
+If the command exits non-zero, contains a failure marker, or emits a diff, Pi
+receives the original output instead. When an investigation needs every line of
+a successful, large command, call `pith_pi_raw` and pass `pith_raw: true` on
+that individual shell-tool call.
+
 ## Install
 
 1. Clone `pi-sampler` to a trusted local path.

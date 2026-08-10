@@ -15,9 +15,9 @@ commands, environment variable names, or evidence layout.
 ## Architecture
 
 - `extensions/` contains Pi-facing integrations.
-- `packages/delivery-core/` contains portable state, redaction, and worktree
-  review mechanisms.
-- `packages/governance/` holds deterministic, offline governance validators.
+- `extensions/delivery-controller/` contains portable dispatch, ledger,
+  redaction, and review mechanisms.
+- `governance/` holds deterministic, offline governance validators.
 - `profiles/` holds schemas and examples. A profile is required for all
   repository-specific behavior.
 
@@ -29,9 +29,10 @@ commands, environment variable names, or evidence layout.
 
 ## Completion criteria
 
-1. Existing Gelt Pi extension sources no longer live in Gelt.
-2. Generic source contains no Gelt repository default, ticket prefix,
-   environment-variable prefix, broker-specific verification, or binary name.
+1. Legacy consumer-specific Pi extension sources no longer live with a
+   consumer's product code.
+2. Generic source contains no consuming repository default, ticket prefix,
+   environment-variable prefix, domain-specific verification, or binary name.
 3. A profile supplies verification commands, paths, identifiers, and required
    checks.
-4. Tests cover generic defaults and a non-Gelt profile.
+4. Tests cover generic defaults and a generic example profile.

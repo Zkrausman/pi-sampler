@@ -27,6 +27,42 @@ verification commands, required checks, and delivery paths. Start from
 validate against
 [`../../profiles/project-profile.schema.json`](../../profiles/project-profile.schema.json).
 
+## Example: dispatch an approved implementation task
+
+Use this after a human has selected and approved a bounded task—for example,
+adding a health endpoint to a service. The agent supplies the task rather than
+asking the extension to discover work:
+
+```json
+{
+  "config": {
+    "ledgerPath": ".delivery/jobs.ndjson",
+    "approvalEnvRef": "$PROJECT_DELIVERY_APPROVAL"
+  },
+  "item": {
+    "id": "ENG-42",
+    "source": "sources/github/acme/example-service",
+    "branch": "feature/eng-42-health-endpoint",
+    "baseRef": "origin/main",
+    "verificationContract": "Run npm test and npm run lint.",
+    "instructions": [
+      "Add GET /health with a documented JSON response.",
+      "Do not change deployment configuration."
+    ],
+    "title": "Add health endpoint"
+  },
+  "providerAuthEnvRef": "$DELIVERY_PROVIDER_TOKEN",
+  "idempotencyKey": "eng-42-dispatch-v1",
+  "correlationId": "delivery-eng-42"
+}
+```
+
+The controller records the request and dispatches it through the provider
+adapter. It does **not** approve the work, choose a different task, merge the
+branch, or alter an issue tracker. In CI or other non-interactive modes, set
+`PROJECT_DELIVERY_APPROVAL=approved` only in the authorized execution
+environment.
+
 ## Install
 
 1. Clone `pi-sampler` to a trusted local path.
