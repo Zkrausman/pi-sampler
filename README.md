@@ -14,33 +14,27 @@ and governance policy.
 | Extension | Purpose | Documentation |
 | --- | --- | --- |
 | [Delivery controller](extensions/delivery-controller/README.md) | Dispatch one explicitly supplied work item to a configured provider. It does not select work, merge code, or update a tracker. | [Install and use](extensions/delivery-controller/README.md) |
-| [Output optimizer](extensions/output-optimizer/README.md) | Safely reduces large successful shell output while preserving failures, diffs, and small output verbatim. | [Install and use](extensions/output-optimizer/README.md) |
 | [Wiki delivery](extensions/wiki-delivery/README.md) | Coordinates a fail-closed LLM Wiki delivery lifecycle and validates its manifest. | [Install and use](extensions/wiki-delivery/README.md) |
 
 ## Install an extension
 
 Released extensions are private, independently versioned Pi packages hosted in
 GitHub Packages. Configure npm with a read-only GitHub Packages token, then
-install the package in the consumer project:
+install the desired package in the consumer project. For example:
 
 ```powershell
-pi install -l npm:@zkrausman/pi-output-optimizer
+pi install -l npm:@zkrausman/pi-delivery-controller
 ```
 
 Pi shows a package-update notice for unversioned package sources at session
 start. Run `pi update --extensions` after reviewing release notes. Pin an exact
-version when a reproducible deployment is required:
-
-```powershell
-pi install -l npm:@zkrausman/pi-output-optimizer@0.1.0
-```
+version when a reproducible deployment is required.
 
 For local development, add an extension's `src/index.ts` path to Pi's
-`extensions` setting or run it for one session:
+`extensions` setting or run it for one session.
 
-```powershell
-pi -e E:/Repos/pi-sampler/extensions/output-optimizer/src/index.ts
-```
+> **Output optimization:** `@zkrausman/pi-output-optimizer` has been withdrawn
+> from GitHub Packages. Use Pith and install its Pi hook with `pith install --pi` instead.
 
 Each extension README lists its prerequisites, configuration, and concrete
 usage examples. See [`docs/RELEASING.md`](docs/RELEASING.md) for private-registry

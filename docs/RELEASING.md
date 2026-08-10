@@ -5,7 +5,6 @@ GitHub Packages:
 
 | Extension | Package | Initial version |
 | --- | --- | --- |
-| Output optimizer | `@zkrausman/pi-output-optimizer` | `0.1.0` |
 | Delivery controller | `@zkrausman/pi-delivery-controller` | `0.1.0` |
 | Wiki delivery | `@zkrausman/pi-wiki-delivery` | `0.1.0` |
 
@@ -19,19 +18,18 @@ A consumer with GitHub Packages read access configures npm once:
 ```
 
 `GITHUB_PACKAGES_TOKEN` must be a read-only token with access to these private
-packages. Then install a package in Pi project settings:
+packages. Then install the desired package in Pi project settings:
 
 ```powershell
-pi install -l npm:@zkrausman/pi-output-optimizer
+pi install -l npm:@zkrausman/pi-delivery-controller
 ```
 
 An unversioned npm source lets Pi show its package-update notice at session
 start; run `pi update --extensions` after reviewing the release notes. Pin an
-exact version for reproducible automation:
+exact version for reproducible automation.
 
-```text
-npm:@zkrausman/pi-output-optimizer@0.1.0
-```
+> `@zkrausman/pi-output-optimizer` was withdrawn from GitHub Packages; use
+> `pith install --pi` for Pi output optimization. Do not publish it again.
 
 Exact versions and Git commits are not advanced by `pi update --extensions`.
 Update them deliberately in the consumer configuration.
