@@ -7,3 +7,8 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# LLM Wiki runtime state and immutable source packets stay local.
+.llm-wiki/raw/
+.llm-wiki/meta/
+.llm-wiki/wiki/log.md
