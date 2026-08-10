@@ -1,6 +1,6 @@
 {
   "name": "@zkrausman/pi-output-optimizer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Safe, opt-in Pi shell-output optimization.",
   "license": "UNLICENSED",
   "private": false,
