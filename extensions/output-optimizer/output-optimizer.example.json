@@ -1,8 +1,6 @@
 {
   "enabled": true,
   "thresholdBytes": 8000,
-  "maxOutputBytes": 12000,
   "telemetryEnabled": false,
-  "additionalToolNames": [],
-  "caps": { "errors": 20, "warnings": 10, "flatList": 20, "inventory": 50 }
+  "additionalToolNames": []
 }

@@ -8,8 +8,8 @@ changes command arguments, or persists raw command output.
 
 - Observes `bash`, `exec`, and `run_command` tool results.
 - Preserves small output, non-zero exits, failure markers, and diffs verbatim.
-- Compacts only recognized, noisy successful commands using command-aware
-  summaries, diagnostics, and bounded data-class samples.
+- Compresses only large successful output by retaining the beginning, useful
+  middle lines, and end.
 - Redacts recognized secrets before returning transformed output.
 - Requires a trusted project before transforming output.
 - Keeps telemetry disabled by default; when enabled, it records counters only,
@@ -46,10 +46,8 @@ safe defaults below and is reported by `output_optimizer_status`.
 {
   "enabled": true,
   "thresholdBytes": 8000,
-  "maxOutputBytes": 12000,
   "telemetryEnabled": false,
-  "additionalToolNames": [],
-  "caps": { "errors": 20, "warnings": 10, "flatList": 20, "inventory": 50 }
+  "additionalToolNames": []
 }
 ```
 
@@ -59,10 +57,8 @@ consumer project's `.pi/output-optimizer.json` and adjust only these options:
 | Option | Allowed values | Default |
 | --- | --- | --- |
 | `enabled` | Boolean | `true` |
-| `thresholdBytes` | Integer from 1,024 through 1,000,000; trigger for considering compaction | `8000` |
-| `maxOutputBytes` | Integer from 1,024 through 100,000; UTF-8 target for transformed output | `12000` |
+| `thresholdBytes` | Integer from 8,000 through 100,000 | `8000` |
 | `telemetryEnabled` | Boolean; counters only, never raw output | `false` |
-| `caps` | `errors`, `warnings`, `flatList`, `inventory`, each 1–100 | `20`, `10`, `20`, `50` |
 | `additionalToolNames` | Up to 32 unique lowercase underscore-style tool names | `[]` |
 
 Secret redaction and trusted-project-only transformation are safety invariants;
@@ -74,17 +70,12 @@ the configuration cannot disable them. Each listed custom tool must also return
 | Tool input | `output_raw: true` or `raw: true` |
 | Command text | `--output-raw` |
 
-Supported command classes are test runners, package-manager commands, `git`
-status/history, searches, directory/list output, and inventories. Unknown or
-ambiguous commands are intentionally preserved in full rather than blindly
-truncated. Non-zero exits, failure markers, diffs, cancellations, and raw
-requests are also preserved in full except mandatory secret redaction.
-
 The optimizer always transforms result events from `bash`, `exec`, and
-`run_command`. A custom tool requires both a listed name and
-`details.outputOptimizerEligible: true`; it must return textual command output
-or `details.output`. This double opt-in keeps structured, sensitive, diff, and
-evidence results untouched by default.
+`run_command`. It transforms a custom tool only when both the project
+configuration lists its name and the tool result sets
+`details.outputOptimizerEligible: true`. The result must use the same textual
+content or `details.output` shape as a command result. This double opt-in keeps
+structured, sensitive, diff, and evidence results untouched by default.
 
 ## Install
 
