@@ -7,6 +7,9 @@
   "type": "module",
   "workspaces": ["extensions/*"],
   "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
     "test": "node --test tests/*.test.mjs",
     "test:legacy": "node --test extensions/delivery-controller/src/*.test.mjs extensions/wiki-delivery/src/*.test.mjs",
     "changeset": "changeset",
@@ -14,7 +17,16 @@
     "release": "changeset publish"
   },
   "engines": { "node": ">=22" },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
   "devDependencies": {
-    "@changesets/cli": "^2.27.9"
+    "@changesets/cli": "^2.27.9",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1"
   }
 }
