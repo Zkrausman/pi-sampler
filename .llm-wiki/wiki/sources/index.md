@@ -11,3 +11,4 @@
 - [Observation: Initial packages released and consumer updated](obs-2026-08-10-initial-packages-released-and-consumer-updated.md)
 - [Observation: Output optimizer renamed](obs-2026-08-10-output-optimizer-renamed.md)
 - [Observation: Persistent output optimizer configuration added](obs-2026-08-10-persistent-output-optimizer-configuration-added.md)
+- [Observation: Pith designated as optimizer engine](obs-2026-08-10-pith-designated-as-optimizer-engine.md)
