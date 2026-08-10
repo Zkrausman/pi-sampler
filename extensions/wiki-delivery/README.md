@@ -18,6 +18,27 @@ The extension registers three tools:
 It gates the installed LLM Wiki tools so an active lifecycle follows the
 approved sequence. It stores only redacted lifecycle receipts in the Pi session.
 
+## Configuration
+
+This extension has no project configuration file or path adapter yet. Its
+validator convention is fixed and requires `cmd/delivery-evidence-validator`
+and `evidence/delivery/` at the consumer project root.
+
+The `wiki_delivery_begin` call supplies the run-specific configuration:
+
+| Input | Purpose |
+| --- | --- |
+| Delivery metadata | Work-item ID, specification path, delivery state, pull request, review verdict, and merge status. |
+| `sources` | At least five redacted local files to capture as immutable sources. |
+| `canonical_pages` | One or more required canonical Wiki pages. |
+| `verifications` | Command outcome metadata and output digests, never raw command output. |
+
+`wiki_delivery_attest` accepts only the generated run ID and `ingestion` or
+`lint` as its stage. `wiki_delivery_finalize` accepts the run ID and the clean
+commit SHA containing the canonical Wiki changes. The required Wiki-tool
+sequence, clean-worktree requirement, and validator command are safeguards, not
+configuration options.
+
 ## Example: record a completed feature as governed knowledge
 
 Use this after implementing a feature whose design notes, verification results,

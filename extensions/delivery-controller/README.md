@@ -27,6 +27,24 @@ verification commands, required checks, and delivery paths. Start from
 validate against
 [`../../profiles/project-profile.schema.json`](../../profiles/project-profile.schema.json).
 
+## Configuration
+
+The extension has no persistent controller configuration file. Configuration is
+passed with each `delivery_controller_dispatch` request:
+
+| Field | Required value |
+| --- | --- |
+| `config.ledgerPath` | A non-empty, repository-relative path that does not escape the checkout. |
+| `config.approvalEnvRef` | An environment-variable reference such as `$PROJECT_DELIVERY_APPROVAL`. In non-interactive mode, its value must be `approved`. |
+| `providerAuthEnvRef` | An environment-variable reference for the provider credential; never a secret value. |
+| `item` | The explicit work item, including `id`, `sources/...` identifier, branch, base ref, verification contract, and instructions. |
+| `idempotencyKey` / `correlationId` | Caller-supplied stable identifiers for deduplication and audit correlation. |
+
+A project profile documents the consumer-owned work-item pattern, source,
+verification commands, required checks, and paths. The profile helper validates
+those values for review workflows; the dispatch tool currently requires the
+corresponding item values explicitly and does not auto-load a profile.
+
 ## Example: dispatch an approved implementation task
 
 Use this after a human has selected and approved a bounded task—for example,

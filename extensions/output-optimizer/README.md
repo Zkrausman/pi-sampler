@@ -36,6 +36,25 @@ receives the original output instead. When an investigation needs every line of
 a successful, large command, call `output_optimizer_raw` and pass `output_raw: true` on
 that individual shell-tool call.
 
+## Configuration and custom-tool support
+
+This version has no persistent project configuration file. It uses these fixed,
+safe runtime defaults: enabled, an 8,000-byte compression threshold, secret
+redaction enabled, trusted-project-only transformation, and telemetry disabled.
+
+| Per-call bypass | Accepted form |
+| --- | --- |
+| Tool input | `output_raw: true` or `raw: true` |
+| Command text | `--output-raw` |
+
+The optimizer only transforms result events from `bash`, `exec`, and
+`run_command`. It does **not** automatically transform arbitrary custom-tool
+results. A custom tool can be compatible only when it deliberately emits the
+same command-output shape and uses one of those names; otherwise it remains
+untouched. Adding safe support for a differently named custom tool requires an
+explicit opt-in adapter/registry rather than a global setting, so structured,
+sensitive, diff, and evidence results are never transformed accidentally.
+
 ## Install
 
 1. Clone `pi-sampler` to a trusted local path.
