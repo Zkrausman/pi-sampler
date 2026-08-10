@@ -14,11 +14,15 @@ test("project configuration permits bounded policy and custom tool opt-in", () =
   const config = normalizeOutputOptimizerConfig({
     enabled: false,
     thresholdBytes: 12_000,
+    maxOutputBytes: 4_000,
     telemetryEnabled: true,
+    caps: { warnings: 5 },
     additionalToolNames: ["service_test_runner"],
   });
   assert.equal(config.enabled, false);
   assert.equal(config.thresholdBytes, 12_000);
+  assert.equal(config.maxOutputBytes, 4_000);
+  assert.equal(config.caps.warnings, 5);
   assert.equal(config.telemetryEnabled, true);
   assert.equal(config.redact, true);
   assert.equal(config.trustRequired, true);
@@ -30,7 +34,7 @@ test("project configuration loads from the trusted project path", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "output-optimizer-"));
   try {
     await mkdir(join(cwd, ".pi"));
-    await writeFile(join(cwd, ".pi", "output-optimizer.json"), JSON.stringify({ thresholdBytes: 16_000 }));
+    await writeFile(join(cwd, ".pi", "output-optimizer.json"), JSON.stringify({ thresholdBytes: 16_000, maxOutputBytes: 4_000 }));
     const loaded = await loadOutputOptimizerConfig(cwd);
     assert.equal(loaded.source, ".pi/output-optimizer.json");
     assert.equal(loaded.config.thresholdBytes, 16_000);
@@ -43,7 +47,9 @@ test("project configuration cannot relax safety or admit malformed tool names", 
   const invalid = (value) => assert.throws(() => normalizeOutputOptimizerConfig(value), (error) => error.code === "invalid_output_optimizer_config");
   invalid({ redact: false });
   invalid({ trustRequired: false });
-  invalid({ thresholdBytes: 7_999 });
+  invalid({ thresholdBytes: 1_023 });
+  invalid({ maxOutputBytes: 100_001 });
+  invalid({ caps: { warnings: 0 } });
   invalid({ additionalToolNames: ["not-a-tool"] });
   assert.equal(isOutputOptimizerEligibleTool({ toolName: "bash", details: {} }, DEFAULT_OUTPUT_OPTIMIZER_CONFIG), true);
 });
