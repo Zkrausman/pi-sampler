@@ -1,0 +1,62 @@
+{
+  "schema_version": "planning-rubric/v1",
+  "kind": "ticket",
+  "ticket_id": "WORK-902",
+  "work_class": "project-runtime",
+  "repository_research": {
+    "cited_paths": ["pkg/data/fetcher.go"],
+    "overlap_search": {
+      "queries": ["external fetcher"],
+      "existing_issues_checked": ["Linear search: fetcher"],
+      "docs_checked": ["docs/specs/EPIC_AI_Development_Governance_OKF_Compliance.md"]
+    },
+    "source_of_truth_refs": ["Linear WORK-902"]
+  },
+  "actor_authority": {
+    "actors": [
+      { "role": "controller", "authority": "none", "trust_boundary": "not involved" },
+      { "role": "implementer", "authority": "edits branch", "trust_boundary": "no status mutation" },
+      { "role": "reviewer", "authority": "reviews", "trust_boundary": "fresh worktree" }
+    ],
+    "no_self_approval": true,
+    "mutation_bounds": "pkg/data/**"
+  },
+  "async_agentic": {
+    "is_async": false,
+    "state_machine": "not_applicable",
+    "idempotency": "not_applicable",
+    "failure_retry_cancellation": "not_applicable",
+    "evidence": "not_applicable",
+    "observability": "not_applicable",
+    "rollback": "not_applicable"
+  },
+  "credentials_integrations": {
+    "requires_integration": true,
+    "least_privilege": "read-only",
+    "secret_redaction": "redacted digests",
+    "merge_completion_policy": "CI + branch protection"
+  },
+  "acceptance_criteria": {
+    "behavioral_tests": ["fetcher maps external response"],
+    "negative_cases": ["500 retries bounded"],
+    "verification_commands": ["go test -race ./pkg/data -count=1"],
+    "completion_evidence": "digests preserved",
+    "non_go_verification": "OKF updated"
+  },
+  "dependency_graph": {
+    "dependencies": [],
+    "foundation_before_automation": true,
+    "rationale": "none — incorrectly assumes API is known"
+  },
+  "discovery_spike": {
+    "requires_external_capability": false,
+    "spike_ticket": "",
+    "assumed_apis": ["plugin X method doesY — invented without discovery"]
+  },
+  "planning_report": {
+    "rubric_outcome": "fail",
+    "unresolved_assumptions": ["external capability assumed without spike"],
+    "dependency_rationale": "none stated",
+    "human_escalation_conditions": ["any assumed API without spike evidence"]
+  }
+}

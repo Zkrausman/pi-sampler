@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "wiki-governance-path-policy/v1",
+  "canonical_versioned": [
+    ".llm-wiki/README.md",
+    ".llm-wiki/WIKI_SCHEMA.md",
+    ".llm-wiki/templates/*.md",
+    ".llm-wiki/templates/**/*.md",
+    ".llm-wiki/wiki/*.md",
+    ".llm-wiki/wiki/**/*.md",
+    ".pi/README.md",
+    ".pi/policy.json",
+    "docs/wiki-governance/**",
+    "docs/specs/*.md",
+    "docs/okf/*.md",
+    "docs/okf/**/*.md",
+    "evidence/delivery/*.json",
+    "evidence/references/*.json",
+    "docs/planning-rubric/**"
+  ],
+  "generated_local": [
+    ".llm-wiki/config.json",
+    ".llm-wiki/meta/**",
+    ".llm-wiki/outputs/**",
+    ".llm-wiki/.discoveries/**"
+  ],
+  "external_immutable_evidence": [
+    ".llm-wiki/raw/**",
+    "evidence/raw/**"
+  ],
+  "sensitive_never_commit": [
+    ".pi/sessions/**",
+    ".pi/oauth/**",
+    ".pi/credentials/**",
+    ".pi/npm/**",
+    ".pi/cache/**",
+    ".pi/tmp/**",
+    ".llm-wiki/**/*.token",
+    ".llm-wiki/**/*.pem",
+    ".llm-wiki/**/*.key",
+    "artifacts/tool-output/**"
+  ],
+  "clean_clone_must_not_contain": [
+    ".llm-wiki/raw/**",
+    ".llm-wiki/meta/**",
+    ".llm-wiki/outputs/**",
+    ".llm-wiki/.discoveries/**",
+    ".llm-wiki/config.json",
+    ".pi/sessions/**",
+    ".pi/oauth/**",
+    ".pi/credentials/**",
+    ".pi/npm/**",
+    "evidence/raw/**",
+    "artifacts/tool-output/**"
+  ],
+  "reference_manifests": [
+    "evidence/references/*.json",
+    "evidence/delivery/*.json"
+  ]
+}

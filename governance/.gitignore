@@ -1,0 +1,78 @@
+# Binaries & Executables
+project.exe
+orchestrator.exe
+squire.json
+bin/
+
+# Local Environment & Secrets
+*.env
+.env
+*.token
+*.pem
+*.key
+project_mcp.json
+
+# Local App Data & User Configuration (.project)
+.project/
+*.json
+!.agents/skills/project-code-review/evolution/state.json
+!.agents/skills/project-code-review/references/finding.schema.json
+!.agents/skills/project-code-review/tests/fixtures/*.json
+
+# Local Telemetry Reports & Custom Plans
+docs/reports/theses/
+/config/
+*.yaml
+*.yml
+!.agents/skills/*/agents/openai.yaml
+config/plans/*.yaml
+
+# IDE & OS files
+.DS_Store
+Thumbs.db
+pkg/server/project_journal.db
+.worktrees/
+
+# Local telemetry backup
+cloud-telemetry-backup/
+
+# Shared Wiki/OKF collaboration boundary (WORK-121)
+# Fail closed: only canonical schema, templates, and Markdown pages are tracked.
+/.llm-wiki/*
+!/.llm-wiki/README.md
+!/.llm-wiki/WIKI_SCHEMA.md
+!/.llm-wiki/templates/
+!/.llm-wiki/templates/**/
+!/.llm-wiki/templates/**/*.md
+!/.llm-wiki/wiki/
+!/.llm-wiki/wiki/**/
+!/.llm-wiki/wiki/**/*.md
+
+# Only declared, non-secret Pi policy is shared. Local runtime state stays private.
+/.pi/*
+!/.pi/README.md
+!/.pi/policy.json
+
+# Immutable raw evidence and unredacted tool output are never Git artifacts.
+/evidence/raw/
+/artifacts/tool-output/
+# pi-subagents runtime logs, mission state, and transcripts are local-only.
+/.pi-subagents/
+
+# The repository policy and reference manifests are deliberate exceptions to the
+# legacy JSON ignore. They contain IDs/digests only, never raw evidence.
+!/.pi/policy.json
+!/docs/wiki-governance/
+!/docs/wiki-governance/*.json
+!/docs/planning-rubric/
+!/docs/planning-rubric/**
+!/evidence/
+!/evidence/delivery/
+!/evidence/delivery/*.json
+!/evidence/references/
+!/evidence/references/*.json
+
+# CI workflows that execute the machine-enforced collaboration checks.
+!/.github/workflows/wiki-governance.yml
+!/.github/workflows/delivery-evidence.yml
+!/.github/workflows/linear-reconciler.yml

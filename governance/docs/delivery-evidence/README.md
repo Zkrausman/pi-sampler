@@ -1,0 +1,9 @@
+# Delivery evidence contract v1
+
+`delivery-evidence/v1` is a committed JSON manifest validated by `go run ./cmd/delivery-evidence-validator -manifest <path> -repo-root . -expected-commit <delivery-sha>`. The validator is deterministic and offline: it reads only the manifest and its repository-contained `okf_path`; it does not access credentials, network services, broker code, or generated wiki metadata.
+
+A manifest binds a ticket, repository OKF artifact, PR identity, delivery commit, immutable source packet IDs, canonical wiki page IDs, observation IDs, command evidence, review evidence, and merge evidence. `-expected-commit` is mandatory and is the immutable delivery commit selected by CI from protected PR metadata; a mismatch is rejected. The evidence commit that adds or updates the manifest is necessarily a later Git commit, because a file cannot contain the hash of the commit that contains that same file. CI validates the selected delivery commit, not the evidence-recording commit. Command output is represented only by a SHA-256 digest. `environment_only` is permitted only for a command that exited zero but emitted a failure marker, and must carry the marker plus a human-readable classification reason.
+
+Allowed lifecycle states are deliberately fail-closed: `review_ready` requires a draft/unmerged PR and `self_review_complete`; `published` requires a non-draft/unmerged PR and independent `approved`; `merged` additionally requires matching merged commit evidence. IDs, duplicate entries, OKF frontmatter, and paths escaping the supplied repository root are rejected.
+
+`schema-v1.json` is a structural interchange schema, not the complete authority for paths or cross-field lifecycle/result rules. The Go validator is authoritative for those fail-closed semantic checks. See `examples/valid.json` and `fixtures/invalid/` for versioned examples.

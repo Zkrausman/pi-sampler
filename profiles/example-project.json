@@ -1,0 +1,15 @@
+{
+  "projectId": "example-service",
+  "workItem": { "idPattern": "^ENG-[0-9]+$" },
+  "repository": { "source": "sources/github/example-org/example-service" },
+  "verification": {
+    "commands": [
+      { "command": "npm", "args": ["test"] },
+      { "command": "npm", "args": ["run", "lint"] }
+    ]
+  },
+  "governance": {
+    "requiredChecks": ["test", "lint"],
+    "paths": { "evidence": ".delivery/evidence", "specification": "docs/specifications" }
+  }
+}

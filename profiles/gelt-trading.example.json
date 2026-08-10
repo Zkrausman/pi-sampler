@@ -1,0 +1,15 @@
+{
+  "projectId": "gelt-trading",
+  "workItem": { "idPattern": "^ZAR-[0-9]+$" },
+  "repository": { "source": "sources/github/Zkrausman/Gelt" },
+  "verification": {
+    "commands": [
+      { "command": "go", "args": ["test", "-race", "./..."] },
+      { "command": "go", "args": ["build", "./..."] }
+    ]
+  },
+  "governance": {
+    "requiredChecks": ["unit tests", "race tests"],
+    "paths": { "evidence": ".delivery/evidence", "specification": "docs/specifications" }
+  }
+}

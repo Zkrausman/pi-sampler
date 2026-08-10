@@ -1,0 +1,9 @@
+{
+  "schema_version": "project-pi-policy/v1",
+  "package_install_root": ".pi/npm",
+  "approved_package_sources": ["public npm registry or an organization-approved mirror"],
+  "package_pins": [{"name": "pi-subagents", "version": "0.44.0"}],
+  "package_pinning": "Install exactly the listed version and verify its published integrity through the approved package source before local installation.",
+  "prohibited_commit_paths": ["sessions", "oauth", "credentials", "npm", "cache", "tmp"],
+  "model_policy": "Select models through local runtime configuration only; never commit provider credentials, OAuth state, session transcripts, or unredacted tool output."
+}

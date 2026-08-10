@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+/.pi/
+/.pi-subagents/
+*.log
+.env
+.env.*
+!.env.example
