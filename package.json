@@ -2,18 +2,19 @@
   "name": "pi-sampler",
   "private": true,
   "version": "0.1.0",
-  "description": "Reusable Pi extensions and project-agnostic AI delivery tooling.",
+  "description": "Source monorepo for reusable Pi extension packages.",
+  "private": true,
   "type": "module",
+  "workspaces": ["extensions/*"],
   "scripts": {
-    "test": "node --test tests/**/*.test.mjs",
-    "test:legacy": "node --test extensions/delivery-controller/src/*.test.mjs extensions/wiki-delivery/src/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "test:legacy": "node --test extensions/delivery-controller/src/*.test.mjs extensions/wiki-delivery/src/*.test.mjs",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "npm publish --workspaces --access restricted"
   },
   "engines": { "node": ">=22" },
-  "pi": {
-    "extensions": [
-      "./extensions/delivery-controller/src/index.ts",
-      "./extensions/output-optimizer/src/index.ts",
-      "./extensions/wiki-delivery/src/index.ts"
-    ]
+  "devDependencies": {
+    "@changesets/cli": "^2.27.9"
   }
 }

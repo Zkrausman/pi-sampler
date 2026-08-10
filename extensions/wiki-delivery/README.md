@@ -97,7 +97,14 @@ until its adapter/configuration is supplied.
 1. Install and configure the LLM Wiki extension/tools in the consumer project.
 2. Add the compatible governance validator and ensure `go run
    ./cmd/delivery-evidence-validator` succeeds from the project root.
-3. Add this entry point to Pi's `extensions` setting:
+3. With GitHub Packages access configured, install the released package:
+
+   ```powershell
+   pi install -l npm:@zkrausman/pi-wiki-delivery
+   ```
+
+   For local development, clone `pi-sampler` to a trusted path instead.
+4. For a local checkout, add this entry point to Pi's `extensions` setting:
 
    ```json
    {

@@ -1,0 +1,24 @@
+{
+  "name": "@zkrausman/pi-output-optimizer",
+  "version": "0.0.0",
+  "description": "Safe, opt-in Pi shell-output optimization.",
+  "license": "UNLICENSED",
+  "private": false,
+  "files": ["src", "README.md", "output-optimizer.example.json"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zkrausman/pi-sampler.git",
+    "directory": "extensions/output-optimizer"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  }
+}

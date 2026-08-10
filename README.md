@@ -19,27 +19,32 @@ and governance policy.
 
 ## Install an extension
 
-Clone this repository, then add the extension's `src/index.ts` path to Pi's
-`extensions` setting. The exact settings file is the one used by your Pi
-installation (for example, its user-level `settings.json`):
+Released extensions are private, independently versioned Pi packages hosted in
+GitHub Packages. Configure npm with a read-only GitHub Packages token, then
+install the package in the consumer project:
 
-```json
-{
-  "extensions": [
-    "E:/Repos/pi-sampler/extensions/output-optimizer/src/index.ts"
-  ]
-}
+```powershell
+pi install -l npm:@zkrausman/pi-output-optimizer
 ```
 
-Restart Pi or run `/reload`. For a one-session smoke test, run:
+Pi shows a package-update notice for unversioned package sources at session
+start. Run `pi update --extensions` after reviewing release notes. Pin an exact
+version when a reproducible deployment is required:
+
+```powershell
+pi install -l npm:@zkrausman/pi-output-optimizer@0.1.0
+```
+
+For local development, add an extension's `src/index.ts` path to Pi's
+`extensions` setting or run it for one session:
 
 ```powershell
 pi -e E:/Repos/pi-sampler/extensions/output-optimizer/src/index.ts
 ```
 
 Each extension README lists its prerequisites, configuration, and concrete
-usage examples. Pi also supports project-local extensions under `.pi/extensions/`;
-use that option only for a project you trust.
+usage examples. See [`docs/RELEASING.md`](docs/RELEASING.md) for private-registry
+setup, semantic versioning, and release operations.
 
 ## Project profiles
 

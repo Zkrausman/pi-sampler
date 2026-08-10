@@ -1,0 +1,24 @@
+{
+  "name": "@zkrausman/pi-wiki-delivery",
+  "version": "0.0.0",
+  "description": "Fail-closed Pi controller for governed LLM Wiki delivery.",
+  "license": "UNLICENSED",
+  "private": false,
+  "files": ["src", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zkrausman/pi-sampler.git",
+    "directory": "extensions/wiki-delivery"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  }
+}

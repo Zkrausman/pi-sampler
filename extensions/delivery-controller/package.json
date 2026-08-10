@@ -1,0 +1,24 @@
+{
+  "name": "@zkrausman/pi-delivery-controller",
+  "version": "0.0.0",
+  "description": "Provider-neutral Pi controller for explicitly approved work dispatch.",
+  "license": "UNLICENSED",
+  "private": false,
+  "files": ["src", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zkrausman/pi-sampler.git",
+    "directory": "extensions/delivery-controller"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  }
+}

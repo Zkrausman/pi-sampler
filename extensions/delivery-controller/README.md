@@ -83,10 +83,16 @@ environment.
 
 ## Install
 
-1. Clone `pi-sampler` to a trusted local path.
+1. With GitHub Packages access configured, install the released package:
+
+   ```powershell
+   pi install -l npm:@zkrausman/pi-delivery-controller
+   ```
+
+   For local development, clone `pi-sampler` to a trusted path instead.
 2. Configure the consumer project's profile and keep provider credentials in
    environment variables, not in the profile or repository.
-3. Add this entry point to Pi's `extensions` setting:
+3. For a local checkout, add this entry point to Pi's `extensions` setting:
 
    ```json
    {

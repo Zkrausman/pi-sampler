@@ -79,8 +79,14 @@ structured, sensitive, diff, and evidence results untouched by default.
 
 ## Install
 
-1. Clone `pi-sampler` to a trusted local path.
-2. Add the extension entry point to Pi's `extensions` setting:
+1. With GitHub Packages access configured, install the released package:
+
+   ```powershell
+   pi install -l npm:@zkrausman/pi-output-optimizer
+   ```
+
+   For local development, clone `pi-sampler` to a trusted path instead.
+2. For a local checkout, add the extension entry point to Pi's `extensions` setting:
 
    ```json
    {
