@@ -38,22 +38,44 @@ that individual shell-tool call.
 
 ## Configuration and custom-tool support
 
-This version has no persistent project configuration file. It uses these fixed,
-safe runtime defaults: enabled, an 8,000-byte compression threshold, secret
-redaction enabled, trusted-project-only transformation, and telemetry disabled.
+In a trusted project, the extension loads
+`.pi/output-optimizer.json`. Missing or invalid configuration falls back to the
+safe defaults below and is reported by `output_optimizer_status`.
+
+```json
+{
+  "enabled": true,
+  "thresholdBytes": 8000,
+  "telemetryEnabled": false,
+  "additionalToolNames": []
+}
+```
+
+Copy [`output-optimizer.example.json`](output-optimizer.example.json) to the
+consumer project's `.pi/output-optimizer.json` and adjust only these options:
+
+| Option | Allowed values | Default |
+| --- | --- | --- |
+| `enabled` | Boolean | `true` |
+| `thresholdBytes` | Integer from 8,000 through 100,000 | `8000` |
+| `telemetryEnabled` | Boolean; counters only, never raw output | `false` |
+| `additionalToolNames` | Up to 32 unique lowercase underscore-style tool names | `[]` |
+
+Secret redaction and trusted-project-only transformation are safety invariants;
+the configuration cannot disable them. Each listed custom tool must also return
+`details.outputOptimizerEligible: true` to opt in at runtime.
 
 | Per-call bypass | Accepted form |
 | --- | --- |
 | Tool input | `output_raw: true` or `raw: true` |
 | Command text | `--output-raw` |
 
-The optimizer only transforms result events from `bash`, `exec`, and
-`run_command`. It does **not** automatically transform arbitrary custom-tool
-results. A custom tool can be compatible only when it deliberately emits the
-same command-output shape and uses one of those names; otherwise it remains
-untouched. Adding safe support for a differently named custom tool requires an
-explicit opt-in adapter/registry rather than a global setting, so structured,
-sensitive, diff, and evidence results are never transformed accidentally.
+The optimizer always transforms result events from `bash`, `exec`, and
+`run_command`. It transforms a custom tool only when both the project
+configuration lists its name and the tool result sets
+`details.outputOptimizerEligible: true`. The result must use the same textual
+content or `details.output` shape as a command result. This double opt-in keeps
+structured, sensitive, diff, and evidence results untouched by default.
 
 ## Install
 

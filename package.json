@@ -8,5 +8,12 @@
     "test": "node --test tests/**/*.test.mjs",
     "test:legacy": "node --test extensions/delivery-controller/src/*.test.mjs extensions/wiki-delivery/src/*.test.mjs"
   },
-  "engines": { "node": ">=22" }
+  "engines": { "node": ">=22" },
+  "pi": {
+    "extensions": [
+      "./extensions/delivery-controller/src/index.ts",
+      "./extensions/output-optimizer/src/index.ts",
+      "./extensions/wiki-delivery/src/index.ts"
+    ]
+  }
 }

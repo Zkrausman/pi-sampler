@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "thresholdBytes": 8000,
+  "telemetryEnabled": false,
+  "additionalToolNames": []
+}

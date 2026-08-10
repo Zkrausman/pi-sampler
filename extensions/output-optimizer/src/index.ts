@@ -10,6 +10,11 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+  DEFAULT_OUTPUT_OPTIMIZER_CONFIG,
+  isOutputOptimizerEligibleTool,
+  loadOutputOptimizerConfig,
+} from "./config.mjs";
 
 export type OutputOptimizerConfig = {
   enabled: boolean;
@@ -18,6 +23,7 @@ export type OutputOptimizerConfig = {
   rawBypass?: boolean;
   trustRequired?: boolean;
   telemetryEnabled?: boolean;
+  additionalToolNames?: readonly string[];
 };
 
 const SECRET_RE = /(api[_-]?key|secret|password|token)\s*[:=]\s*["']?[^"'\s;]+["']?/gi;
@@ -52,10 +58,6 @@ export function redact(s: string): string {
   out = out.replace(BEARER_RE, "Bearer [REDACTED]");
   for (const re of TOKEN_PATTERNS) out = out.replace(re, "[REDACTED]");
   return out;
-}
-
-export function isBashResult(event: { toolName: string }): boolean {
-  return event.toolName === "bash" || event.toolName === "exec" || event.toolName === "run_command";
 }
 
 export function extractCommand(event: { input?: unknown; toolName: string }): string {
@@ -155,17 +157,26 @@ export function recordTelemetry(inputLen: number, outputLen: number, compressed:
   if (compressed) telemetry.compressedCalls++;
 }
 
-export function resolveConfig(cwd: string, trusted: boolean): OutputOptimizerConfig {
-  // Reserved configuration location; current implementation uses the safe defaults
-  // below until project-level configuration loading is added.
-  void cwd; void trusted;
-  return { enabled: true, thresholdBytes: 8000, redact: true, trustRequired: true, telemetryEnabled: false, rawBypass: false };
-}
-
 export default function outputOptimizer(pi: ExtensionAPI) {
-  // Announce trust awareness: rely on ctx.isProjectTrusted() at tool_result time.
+  let activeConfig: OutputOptimizerConfig = DEFAULT_OUTPUT_OPTIMIZER_CONFIG;
+  let configSource = "defaults";
+  let configWarning: string | null = null;
+
+  pi.on("session_start", async (_event, ctx) => {
+    activeConfig = DEFAULT_OUTPUT_OPTIMIZER_CONFIG;
+    configSource = "defaults";
+    configWarning = null;
+    setTelemetryEnabled(false);
+    if (!ctx.isProjectTrusted()) return;
+    const loaded = await loadOutputOptimizerConfig(ctx.cwd);
+    activeConfig = loaded.config;
+    configSource = loaded.source;
+    configWarning = loaded.warning;
+    setTelemetryEnabled(activeConfig.telemetryEnabled ?? false);
+  });
+
   pi.on("tool_result", async (event: any, ctx: any) => {
-    if (!isBashResult(event)) return;
+    if (!isOutputOptimizerEligibleTool(event, activeConfig)) return;
     const command = extractCommand(event);
     const details: any = event.details ?? {};
     const exitCode: number = extractExitCode(details);
@@ -188,11 +199,8 @@ export default function outputOptimizer(pi: ExtensionAPI) {
 
     const isTrusted: boolean = typeof ctx?.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
     const cfg: OutputOptimizerConfig = {
-      enabled: true,
-      thresholdBytes: 8000,
-      redact: true,
+      ...activeConfig,
       rawBypass,
-      trustRequired: true,
       telemetryEnabled: isTelemetryEnabled(),
     };
 
@@ -228,8 +236,8 @@ export default function outputOptimizer(pi: ExtensionAPI) {
       const trusted = typeof ctx?.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
       const tel = getOutputOptimizerTelemetry();
       return {
-        content: [{ type: "text", text: `Output optimizer: enabled, threshold=8000, trusted=${trusted}, telemetryEnabled=${isTelemetryEnabled()}, calls=${tel.piCalls}, bytesIn=${tel.bytesIn}, bytesOut=${tel.bytesOut}` }],
-        details: { trusted, telemetryEnabled: isTelemetryEnabled(), telemetry: tel },
+        content: [{ type: "text", text: `Output optimizer: enabled=${activeConfig.enabled}, threshold=${activeConfig.thresholdBytes}, trusted=${trusted}, config=${configSource}, telemetryEnabled=${isTelemetryEnabled()}, calls=${tel.piCalls}, bytesIn=${tel.bytesIn}, bytesOut=${tel.bytesOut}${configWarning ? `, configWarning=${configWarning}` : ""}` }],
+        details: { trusted, configSource, configWarning, config: activeConfig, telemetryEnabled: isTelemetryEnabled(), telemetry: tel },
       };
     },
   });
