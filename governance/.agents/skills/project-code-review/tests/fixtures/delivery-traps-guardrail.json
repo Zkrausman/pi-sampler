@@ -3,7 +3,7 @@
   "fixture_id": "fixture.delivery-traps-guardrail",
   "rule_id": "rule.delivery-traps-guardrail",
   "harness": "evolution-state-transition-v1",
-  "description": "Delivery traps guardrail: wrong base origin/master drift, stale untracked wiki bypass + rebuild drift, pith/raw escape middle-out truncation + cross-platform sh -c vs cmd /c, and issues->pull sync via sync-pr-evidence.mjs",
+  "description": "Delivery traps guardrail: wrong base origin/master drift, stale untracked wiki bypass + rebuild drift, raw-output escape middle-out truncation + cross-platform sh -c vs cmd /c, and issues->pull sync via sync-pr-evidence.mjs",
   "cases": [
     {
       "case_id": "case.wrong-base-and-stale-wiki",
@@ -11,7 +11,7 @@
       "after": {"confirmed_review_ids": ["review.one", "review.two"]}
     },
     {
-      "case_id": "case.pith-raw-middleout-crossplatform",
+      "case_id": "case.raw-output-middleout-crossplatform",
       "before": {"confirmed_review_ids": ["review.one"]},
       "after": {"confirmed_review_ids": ["review.one", "review.two"]}
     }

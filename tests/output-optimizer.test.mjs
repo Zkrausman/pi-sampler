@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 function loadPure() {
   // Lightweight: extract JS semantics by reading the file and evaluating the export block is not needed;
-  // Instead exercise behavior by re-implementing helpers here matching pi-pith/index.ts contract.
+  // Instead exercise behavior by re-implementing helpers here matching output-optimizer/index.ts contract.
   // This is permissible: verifies the spec (lossless/markers/threshold/trust/cancel/bypass/redaction)
   // while real extension is validated via node --test of this file (mirror). Real TS compilation is verified by tsc build.
 
@@ -24,7 +24,7 @@ function loadPure() {
   function redact(s){ let out=s; out=out.replace(SECRET_RE, (_m,p1)=>`${String(p1).split(/[:=]/)[0].trim()}=[REDACTED]`); out=out.replace(BEARER_RE,"Bearer [REDACTED]"); for(const re of TOKEN_PATTERNS) out=out.replace(re,"[REDACTED]"); return out; }
   function shouldPreserveRaw(output, exitCode){ if(exitCode!==0) return true; if(ERROR_RE.test(output)) return true; if(DIFF_RE.test(output)) return true; return false; }
   function shouldCompress(output, cfg){ if(!cfg.enabled) return false; if(cfg.rawBypass) return false; if(output.length < (cfg.thresholdBytes||8000)) return false; return true; }
-  function compressLargeOutput(output){ const lines=output.split("\n"); let head=60, tail=60; if(lines.length>400){head=80;tail=80;} if(lines.length<=head+tail+1){ const thr=8000; const keep=thr-80<200?200:thr-80; const half=Math.floor(keep/2); return output.slice(0,half)+"\n... [middle truncated by Pith PiOptimize]\n"+output.slice(output.length-half);} const ms=head, me=lines.length-tail; const hot=new Set(); for(let i=ms;i<me;i++){ const low=lines[i].toLowerCase(); for(const k of ["warn","info","test","ok","pass"]) if(low.includes(k)){ hot.add(i); break; } } const res=[]; res.push(...lines.slice(0,head)); let kept=0; for(let i=ms;i<me && kept<10;i++){ if(hot.has(i)){ const s=Math.max(ms,i-1), e=Math.min(me-1,i+1); for(let j=s;j<=e;j++) res.push(lines[j]); kept++; } } const removed=(me-ms)-(res.length-head); if(removed>0) res.push(`... [${removed} lines removed by Pith PiOptimize] ...`); res.push(...lines.slice(lines.length-tail)); return res.join("\n"); }
+  function compressLargeOutput(output){ const lines=output.split("\n"); let head=60, tail=60; if(lines.length>400){head=80;tail=80;} if(lines.length<=head+tail+1){ const thr=8000; const keep=thr-80<200?200:thr-80; const half=Math.floor(keep/2); return output.slice(0,half)+"\n... [middle truncated by Output Optimizer]\n"+output.slice(output.length-half);} const ms=head, me=lines.length-tail; const hot=new Set(); for(let i=ms;i<me;i++){ const low=lines[i].toLowerCase(); for(const k of ["warn","info","test","ok","pass"]) if(low.includes(k)){ hot.add(i); break; } } const res=[]; res.push(...lines.slice(0,head)); let kept=0; for(let i=ms;i<me && kept<10;i++){ if(hot.has(i)){ const s=Math.max(ms,i-1), e=Math.min(me-1,i+1); for(let j=s;j<=e;j++) res.push(lines[j]); kept++; } } const removed=(me-ms)-(res.length-head); if(removed>0) res.push(`... [${removed} lines removed by Output Optimizer] ...`); res.push(...lines.slice(lines.length-tail)); return res.join("\n"); }
   function piOptimizeTransform(command, output, exitCode, cfg, opts={}){ if(opts.cancelled) return {output, compressed:false}; if(cfg.trustRequired && opts.isTrusted===false) return {output, compressed:false}; if(cfg.rawBypass) return {output, compressed:false}; if(!output) return {output, compressed:false}; if(shouldPreserveRaw(output,exitCode)) return {output: cfg.redact?redact(output):output, compressed:false}; if(!shouldCompress(output,cfg)) return {output: cfg.redact?redact(output):output, compressed:false}; const comp=compressLargeOutput(output); return {output: cfg.redact?redact(comp):comp, compressed:true}; }
   return { redact, shouldPreserveRaw, shouldCompress, compressLargeOutput, piOptimizeTransform };
 }
@@ -64,7 +64,7 @@ test("compress — large success above threshold", () => {
   const r = piOptimizeTransform("go test -v", large, 0, { enabled:true, thresholdBytes:8000, redact:false, trustRequired:false });
   assert.equal(r.compressed, true);
   assert.ok(r.output.length < large.length);
-  assert.ok(r.output.includes("Pith PiOptimize"));
+  assert.ok(r.output.includes("Output Optimizer"));
 });
 
 test("threshold", () => {

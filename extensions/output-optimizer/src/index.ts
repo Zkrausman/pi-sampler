@@ -1,6 +1,6 @@
 /**
  * Transform-only: never spawns/re-runs commands. Hooks Pi's bash tool_result lifecycle
- * via pi.on("tool_result"). Applies Pith PiOptimize semantics ported to JS so this
+ * via pi.on("tool_result"). Implements local output-optimization semantics so this
  * extension does not reimplement the optimizer as a library callout boundary — the
  * optimization behavior is implemented locally so the extension has no consumer-repository dependency.
  *
@@ -11,7 +11,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-export type PiPithConfig = {
+export type OutputOptimizerConfig = {
   enabled: boolean;
   thresholdBytes: number;
   redact: boolean;
@@ -80,7 +80,7 @@ export function shouldPreserveRaw(output: string, exitCode: number): boolean {
   return false;
 }
 
-export function shouldCompress(output: string, cfg: PiPithConfig): boolean {
+export function shouldCompress(output: string, cfg: OutputOptimizerConfig): boolean {
   if (!cfg.enabled) return false;
   if (cfg.rawBypass) return false;
   if (output.length < (cfg.thresholdBytes || 8000)) return false;
@@ -96,7 +96,7 @@ export function compressLargeOutput(output: string): string {
     const threshold = 8000;
     const keep = threshold - 80 < 200 ? 200 : threshold - 80;
     const half = Math.floor(keep / 2);
-    return output.slice(0, half) + "\n... [middle truncated by Pith PiOptimize]\n" + output.slice(output.length - half);
+    return output.slice(0, half) + "\n... [middle truncated by Output Optimizer]\n" + output.slice(output.length - half);
   }
   const middleStart = head, middleEnd = lines.length - tail;
   const hotKeywords = ["warn", "info", "test", "ok", "pass"];
@@ -117,7 +117,7 @@ export function compressLargeOutput(output: string): string {
     }
   }
   const removed = (middleEnd - middleStart) - (result.length - head);
-  if (removed > 0) result.push(`... [${removed} lines removed by Pith PiOptimize] ...`);
+  if (removed > 0) result.push(`... [${removed} lines removed by Output Optimizer] ...`);
   result.push(...lines.slice(lines.length - tail));
   return result.join("\n");
 }
@@ -126,7 +126,7 @@ export function piOptimizeTransform(
   command: string,
   output: string,
   exitCode: number,
-  cfg: PiPithConfig,
+  cfg: OutputOptimizerConfig,
   opts?: { cancelled?: boolean; isTrusted?: boolean },
 ): { output: string; compressed: boolean; reason: string; redacted: boolean } {
   const cancelled = opts?.cancelled ?? false;
@@ -142,11 +142,11 @@ export function piOptimizeTransform(
 }
 
 // Telemetry counters (counts only, no raw). Disabled by default.
-export type PithTelemetry = { piCalls: number; bytesIn: number; bytesOut: number; compressedCalls: number };
-let telemetry: PithTelemetry = { piCalls: 0, bytesIn: 0, bytesOut: 0, compressedCalls: 0 };
+export type OutputOptimizerTelemetry = { piCalls: number; bytesIn: number; bytesOut: number; compressedCalls: number };
+let telemetry: OutputOptimizerTelemetry = { piCalls: 0, bytesIn: 0, bytesOut: 0, compressedCalls: 0 };
 let telemetryEnabled = false;
-export function getPithTelemetry(): PithTelemetry { return { ...telemetry }; }
-export function resetPithTelemetry(): void { telemetry = { piCalls: 0, bytesIn: 0, bytesOut: 0, compressedCalls: 0 }; }
+export function getOutputOptimizerTelemetry(): OutputOptimizerTelemetry { return { ...telemetry }; }
+export function resetOutputOptimizerTelemetry(): void { telemetry = { piCalls: 0, bytesIn: 0, bytesOut: 0, compressedCalls: 0 }; }
 export function setTelemetryEnabled(v: boolean): void { telemetryEnabled = v; }
 export function isTelemetryEnabled(): boolean { return telemetryEnabled; }
 export function recordTelemetry(inputLen: number, outputLen: number, compressed: boolean): void {
@@ -155,14 +155,14 @@ export function recordTelemetry(inputLen: number, outputLen: number, compressed:
   if (compressed) telemetry.compressedCalls++;
 }
 
-export function resolveConfig(cwd: string, trusted: boolean): PiPithConfig {
-  // Minimal: read .pi/pith.json if trusted, else defaults (enabled but trustRequired blocks).
-  // Synchronous fallback: defaults; async file read is not required for tests.
+export function resolveConfig(cwd: string, trusted: boolean): OutputOptimizerConfig {
+  // Reserved configuration location; current implementation uses the safe defaults
+  // below until project-level configuration loading is added.
   void cwd; void trusted;
   return { enabled: true, thresholdBytes: 8000, redact: true, trustRequired: true, telemetryEnabled: false, rawBypass: false };
 }
 
-export default function piPith(pi: ExtensionAPI) {
+export default function outputOptimizer(pi: ExtensionAPI) {
   // Announce trust awareness: rely on ctx.isProjectTrusted() at tool_result time.
   pi.on("tool_result", async (event: any, ctx: any) => {
     if (!isBashResult(event)) return;
@@ -171,9 +171,9 @@ export default function piPith(pi: ExtensionAPI) {
     const exitCode: number = extractExitCode(details);
     const cancelled: boolean = Boolean(details.cancelled);
 
-    // Raw bypass flag: bash tool param pith_raw or env-driven
-    const rawBypass: boolean = Boolean((event.input as any)?.pith_raw ?? (event.input as any)?.raw ?? false)
-      || (typeof command === "string" && command.includes("--pith-raw"));
+    // Raw bypass flag: bash tool param output_raw or env-driven
+    const rawBypass: boolean = Boolean((event.input as any)?.output_raw ?? (event.input as any)?.raw ?? false)
+      || (typeof command === "string" && command.includes("--output-raw"));
     if (rawBypass) return;
 
     // Content extraction: pi bash tool returns content array or details.output
@@ -187,7 +187,7 @@ export default function piPith(pi: ExtensionAPI) {
     if (!output && typeof details.stdout === "string") output = details.stdout + (details.stderr ? "\n" + details.stderr : "");
 
     const isTrusted: boolean = typeof ctx?.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
-    const cfg: PiPithConfig = {
+    const cfg: OutputOptimizerConfig = {
       enabled: true,
       thresholdBytes: 8000,
       redact: true,
@@ -206,7 +206,7 @@ export default function piPith(pi: ExtensionAPI) {
       if (res.redacted && cfg.redact) {
         // Replace content with redacted lossless form
         const redactedOnly = redact(output);
-        return { content: [{ type: "text" as const, text: redactedOnly }], details: { ...details, pithOptimized: false, pithRedacted: true } };
+        return { content: [{ type: "text" as const, text: redactedOnly }], details: { ...details, outputOptimized: false, outputRedacted: true } };
       }
       return;
     }
@@ -215,35 +215,35 @@ export default function piPith(pi: ExtensionAPI) {
     recordTelemetry(output.length, res.output.length, true);
     return {
       content: [{ type: "text" as const, text: res.output }],
-      details: { ...details, pithOptimized: true, pithReason: res.reason, pithRedacted: res.redacted },
+      details: { ...details, outputOptimized: true, outputReason: res.reason, outputRedacted: res.redacted },
     };
   });
 
   pi.registerTool({
-    name: "pith_pi_status",
-    label: "Pith Pi Status",
-    description: "Reports Pi Pith optimization state (trust/threshold/telemetry counts). No raw output.",
+    name: "output_optimizer_status",
+    label: "Output Optimizer Status",
+    description: "Reports output-optimization state (trust/threshold/telemetry counts). No raw output.",
     parameters: Type.Object({}),
     async execute(_id: string, _params: unknown, _signal: unknown, _onUpdate: unknown, ctx: any) {
       const trusted = typeof ctx?.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
-      const tel = getPithTelemetry();
+      const tel = getOutputOptimizerTelemetry();
       return {
-        content: [{ type: "text", text: `Pith Pi: enabled, threshold=8000, trusted=${trusted}, telemetryEnabled=${isTelemetryEnabled()}, calls=${tel.piCalls}, bytesIn=${tel.bytesIn}, bytesOut=${tel.bytesOut}` }],
+        content: [{ type: "text", text: `Output optimizer: enabled, threshold=8000, trusted=${trusted}, telemetryEnabled=${isTelemetryEnabled()}, calls=${tel.piCalls}, bytesIn=${tel.bytesIn}, bytesOut=${tel.bytesOut}` }],
         details: { trusted, telemetryEnabled: isTelemetryEnabled(), telemetry: tel },
       };
     },
   });
 
   pi.registerTool({
-    name: "pith_pi_raw",
-    label: "Pith Pi Raw",
-    description: "Escape hatch: instructs next bash callers that pith raw unchanged should be used (sets pith_raw hint). No raw persistence.",
+    name: "output_optimizer_raw",
+    label: "Output Optimizer Raw",
+    description: "Escape hatch: instructs next bash callers that unoptimized output should be used (sets output_raw hint). No raw persistence.",
     parameters: Type.Object({ note: Type.Optional(Type.String()) }),
     async execute(_id: string, _params: unknown) {
-      // No state mutation globally; callers opt in per tool_call via pith_raw: true.
+      // No state mutation globally; callers opt in per tool_call via output_raw: true.
       return {
-        content: [{ type: "text", text: "Use bash with pith_raw: true to bypass Pi optimization for that call." }],
-        details: { rawHint: "pith_raw:true on next bash tool call" },
+        content: [{ type: "text", text: "Use bash with output_raw: true to bypass Pi optimization for that call." }],
+        details: { rawHint: "output_raw:true on next bash tool call" },
       };
     },
   });

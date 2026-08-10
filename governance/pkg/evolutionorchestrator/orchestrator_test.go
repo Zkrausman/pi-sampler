@@ -357,7 +357,7 @@ func TestConcurrentCaptureSerializesOrRetries(t *testing.T) {
 
 func TestDeliveryTrapsGuardrailFixture_TrappedThreeWays(t *testing.T) {
 	// Delivery-traps guardrail fixture must be present and HarnessVerifier-allowlisted.
-	// The fixture codifies the 3 traps in delivery-traps-and-fast-review-ready-loop: wrong base, stale wiki, pith/raw/middle-out+cross-platform.
+	// The fixture codifies the 3 traps in delivery-traps-and-fast-review-ready-loop: wrong base, stale wiki, raw-output/middle-out+cross-platform.
 	root := tempSkillRoot(t)
 	// tempSkillRoot seeds only fixture.test; replace with real skill root copy for this test.
 	// Use actual repo fixture file via HarnessVerifier.

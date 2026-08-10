@@ -14,8 +14,8 @@ changes command arguments, or persists raw command output.
 - Requires a trusted project before transforming output.
 - Keeps telemetry disabled by default; when enabled, it records counters only,
   never raw output.
-- Adds `pith_pi_status` and `pith_pi_raw` tools. A caller can bypass a single
-  transform with `pith_raw: true` on the shell tool input.
+- Adds `output_optimizer_status` and `output_optimizer_raw` tools. A caller can bypass a single
+  transform with `output_raw: true` on the shell tool input.
 
 ## Example: investigating a noisy test run
 
@@ -33,7 +33,7 @@ command itself still ran exactly once and its exit status is unchanged.
 
 If the command exits non-zero, contains a failure marker, or emits a diff, Pi
 receives the original output instead. When an investigation needs every line of
-a successful, large command, call `pith_pi_raw` and pass `pith_raw: true` on
+a successful, large command, call `output_optimizer_raw` and pass `output_raw: true` on
 that individual shell-tool call.
 
 ## Install
