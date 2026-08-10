@@ -1,10 +1,13 @@
 {
   "name": "@zkrausman/pi-wiki-delivery",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Fail-closed Pi controller for governed LLM Wiki delivery.",
   "license": "UNLICENSED",
   "private": false,
-  "files": ["src", "README.md"],
+  "files": [
+    "src",
+    "README.md"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Zkrausman/pi-sampler.git",
@@ -19,6 +22,8 @@
     "typebox": "*"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   }
 }
