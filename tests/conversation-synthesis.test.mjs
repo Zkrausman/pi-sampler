@@ -66,19 +66,16 @@ const source = (id, summary) => ({
   events: [{ id: `${id}-event-1`, category: "user", timestamp: "2025-01-01", summary, evidence: { reference: `${id}:event-0001` } }],
 });
 
-test("excluded selected conversations retain a pseudonymous navigable fallback without blocking two-selection generation", () => {
-  const one = source("one", "First");
-  const html = buildHindsightDocument([one, { reference: "session-excluded", excluded: true, events: [{ summary: "Hidden", evidence: { reference: "hidden:event-1" } }] }]);
-  assert.match(html, /one:event-0001/);
-  assert.match(html, /href="#citation-1-flow">flow<\/a>/);
-  assert.match(html, /href="#citation-2">session-excluded:excluded<\/a>/);
-  assert.match(html, /id="citation-2"/);
+test("an excluded selected conversation retains a pseudonymous navigable fallback without content", () => {
+  const html = buildHindsightDocument([{ reference: "session-excluded", excluded: true, events: [{ summary: "Hidden", evidence: { reference: "hidden:event-1" } }] }]);
+  assert.match(html, /href="#citation-1">session-excluded:excluded<\/a>/);
+  assert.match(html, /id="citation-1"/);
   assert.match(html, /Source context was excluded during redaction review/);
   assert.doesNotMatch(html, /Hidden|hidden:event-1/);
 });
 
 test("model claims and structured recommendations are escaped, cited, and rendered in an accessible table", () => {
-  const html = buildHindsightDocument([source("one", "First"), source("two", "Second")], {
+  const html = buildHindsightDocument([source("one", "First")], {
     title: "<unsafe title>",
     claims: [{ statement: "<img src=x onerror=alert(1)>", classification: "inference", evidenceReferences: ["one:event-0001"] }],
     recommendations: [{
@@ -90,7 +87,7 @@ test("model claims and structured recommendations are escaped, cited, and render
       acceptanceCriteria: ["<criterion> is measurable"],
       status: "proposed",
       source: "model-suggestion",
-      evidenceReferences: ["two:event-0001"],
+      evidenceReferences: ["one:event-0001"],
     }],
   });
   assert.match(html, /&lt;unsafe title&gt;/);
@@ -102,16 +99,16 @@ test("model claims and structured recommendations are escaped, cited, and render
   assert.match(html, /scope="col">Measurable acceptance criteria/);
   assert.match(html, /proposed · model-suggestion/);
   assert.match(html, /Not user-confirmed/);
-  assert.match(html, /href="#citation-2"/);
+  assert.match(html, /href="#citation-1"/);
 });
 
 test("safe hindsight recommendations reject missing, malformed, unconfirmed, or uncited model data", () => {
-  const sources = [source("one", "First"), source("two", "Second")];
+  const sources = [source("one", "First")];
   const claim = { statement: "Supported", classification: "inference", evidenceReferences: ["one:event-0001"] };
   const recommendation = {
     recommendation: "Improve handoff", priority: "medium", expectedImpact: "Reduce delays", suggestedOwner: "Delivery team",
     dependencies: [], acceptanceCriteria: ["A handoff completes within one business day"], status: "proposed", source: "model-suggestion",
-    evidenceReferences: ["two:event-0001"],
+    evidenceReferences: ["one:event-0001"],
   };
   assert.throws(() => buildHindsightDocument(sources, { claims: [claim] }), /recommendations must be an array/);
   assert.throws(() => buildHindsightDocument(sources, {
@@ -135,7 +132,7 @@ test("synthesis prompt includes redacted flow and relationship-map context", () 
     ],
     edges: [{ from: "one-event-1", to: "one-event-2", label: "parent entry" }],
   };
-  const prompt = buildSynthesisPrompt([linked, source("two", "Third")]);
+  const prompt = buildSynthesisPrompt([linked]);
   assert.match(prompt, /Do NOT write HTML/);
   assert.match(prompt, /hindsight_document_write/);
   assert.match(prompt, /one:event-0001/);
@@ -143,7 +140,11 @@ test("synthesis prompt includes redacted flow and relationship-map context", () 
   assert.match(prompt, /"mapContext":"parent entry → one:event-0002"/);
 });
 
-test("hindsight document rejects fewer than two included conversations", () => assert.throws(() => buildHindsightDocument([source("one", "First")]), /at least two/));
+test("hindsight document accepts exactly one conversation and rejects zero or multiple sources", () => {
+  assert.doesNotThrow(() => buildHindsightDocument([source("one", "First")]));
+  assert.throws(() => buildHindsightDocument([]), /exactly one/);
+  assert.throws(() => buildHindsightDocument([source("one", "First"), source("two", "Second")]), /exactly one/);
+});
 
 test("hindsight synthesis disables direct file-write tools and restores the session tool set", () => {
   const normalTools = ["read", "write", "edit", "bash", "hindsight_document_write"];
@@ -169,7 +170,7 @@ test("successful safe hindsight write remains restricted until agent settlement 
   const tools = [];
   const commands = [];
   const handlers = new Map();
-  let selectionCount = 0;
+  const selectionTitles = [];
   const pi = {
     on: (event, handler) => handlers.set(event, handler),
     registerTool: (tool) => tools.push(tool),
@@ -189,14 +190,19 @@ test("successful safe hindsight write remains restricted until agent settlement 
     hasUI: true,
     ui: {
       select: async (title, options) => {
-        if (!title.startsWith("Hindsight selection")) throw new Error(`Unexpected selection: ${title}`);
-        selectionCount += 1;
-        return selectionCount === 1 ? options[3] : selectionCount === 2 ? options[4] : "Generate document";
+        selectionTitles.push(title);
+        if (title !== "Select one conversation for hindsight") throw new Error(`Unexpected selection: ${title}`);
+        assert.deepEqual(options.slice(0, 1), ["Cancel"]);
+        assert.equal(options.length, 3);
+        assert.match(options[1], /^1\. /);
+        assert.match(options[2], /^2\. /);
+        return options[1];
       },
       confirm: async () => true,
       notify: () => {},
     },
   });
+  assert.deepEqual(selectionTitles, ["Select one conversation for hindsight"]);
   assert.deepEqual(activeTools, ["hindsight_document_write"]);
 
   const writer = tools.find((tool) => tool.name === "hindsight_document_write");

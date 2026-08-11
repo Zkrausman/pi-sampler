@@ -237,42 +237,31 @@ export default function conversationCatalog(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("hindsight-document", {
-    description: "Interactively select conversations and write a cited hindsight document",
+    description: "Interactively select one conversation and write a cited hindsight document",
     async handler(args, ctx) {
       try {
         if (!ctx.hasUI) throw new Error("Hindsight generation requires Pi's interactive UI.");
         const sessions = await SessionManager.listAll();
-        const selected: any[] = [];
-        while (true) {
-          const sessionOptions = sessions.map((session) => `${selected.some((item) => item.id === session.id) ? "✓ " : ""}${pickerLabel(session)}`);
-          // Keep actions visible in a small terminal even when many sessions exist.
-          const options = ["Generate document", "Remove selected conversation", "Cancel", ...sessionOptions];
-          const choice = await ctx.ui.select(`Hindsight selection (${selected.length} selected)`, options);
-          if (!choice || choice === "Cancel") throw new Error("Hindsight generation canceled.");
-          if (choice === "Generate document") break;
-          if (choice === "Remove selected conversation") {
-            const remove = await ctx.ui.select("Remove conversation", selected.map((session) => session.name || session.id));
-            const index = selected.findIndex((session) => (session.name || session.id) === remove);
-            if (index >= 0) selected.splice(index, 1);
-            continue;
-          }
-          const session = sessions[sessionOptions.indexOf(choice)];
-          if (session && !selected.some((item) => item.id === session.id)) selected.push(session);
-        }
-        if (selected.length < 2) throw new Error("Select at least two conversations before generation.");
+        if (sessions.length === 0) throw new Error("No saved conversations are available for hindsight generation.");
+        // Numbered choices remain unambiguous even if saved-session labels match.
+        // This command deliberately accepts exactly one conversation for now.
+        const sessionOptions = sessions.map((session, index) => `${index + 1}. ${pickerLabel(session)}`);
+        const choice = await ctx.ui.select("Select one conversation for hindsight", ["Cancel", ...sessionOptions]);
+        if (!choice || choice === "Cancel") throw new Error("Hindsight generation canceled.");
+        const selectedIndex = sessionOptions.indexOf(choice);
+        if (selectedIndex < 0) throw new Error("Select exactly one conversation for hindsight generation.");
+        const session = sessions[selectedIndex];
         const patterns = await configuredPatterns(ctx.cwd);
-        const sources = [];
-        for (const session of selected) {
-          const projection = projectConversation((await SessionManager.open(session.path)).getEntries());
-          const findings = findSensitiveContent(projection, patterns);
-          const review = await reviewRedactionChoices(ctx, findings);
-          const reference = pseudonymizeSession(session);
-          if (review.excluded) {
-            // Keep a local pseudonym so the generated report can link to an explicit
-            // redaction-review fallback without retaining any conversation content.
-            sources.push({ reference, excluded: true });
-            continue;
-          }
+        const projection = projectConversation((await SessionManager.open(session.path)).getEntries());
+        const findings = findSensitiveContent(projection, patterns);
+        const review = await reviewRedactionChoices(ctx, findings);
+        const reference = pseudonymizeSession(session);
+        // Keep a local pseudonym so an excluded source can link to an explicit
+        // redaction-review fallback without retaining conversation content.
+        const sources: any[] = [];
+        if (review.excluded) {
+          sources.push({ reference, excluded: true });
+        } else {
           const cited = attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions));
           sources.push({ reference, events: cited.events, edges: cited.edges });
         }
