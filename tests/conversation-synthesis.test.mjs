@@ -14,10 +14,22 @@ async function loadConversationCatalogExtension() {
   let extension = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
   extension = extension.replace(/^import[^\n]+;\r?\n/gm, "");
   const stubs = `
+const randomUUID = () => "test-uuid";
 const mkdir = async () => {};
 const readFile = async () => { const error = new Error("not found"); error.code = "ENOENT"; throw error; };
-const rm = async () => {};
-const writeFile = async (path, content) => { (globalThis.__hindsightWrites ||= []).push({ path, content }); };
+const rm = async (path) => { globalThis.__hindsightFiles?.delete(path); };
+const writeFile = async (path, content) => {
+  (globalThis.__hindsightWrites ||= []).push({ path, content });
+  if (globalThis.__hindsightWriteFailure?.(path)) throw new Error("simulated write failure");
+  (globalThis.__hindsightFiles ||= new Map()).set(path, content);
+};
+const rename = async (from, to) => {
+  (globalThis.__hindsightRenames ||= []).push({ from, to });
+  const content = globalThis.__hindsightFiles?.get(from);
+  if (content === undefined) throw new Error("temporary file missing");
+  globalThis.__hindsightFiles.set(to, content);
+  globalThis.__hindsightFiles.delete(from);
+};
 const dirname = () => ".";
 const extname = (path) => path.slice(path.lastIndexOf("."));
 const resolve = (cwd, path) => cwd + "/" + path;
@@ -139,10 +151,22 @@ test("disposition metadata keeps original model recommendations and pseudonymous
     modelSuggestion: { status: "proposed", source: "model-suggestion" },
     userDisposition: { status: "not-recorded", source: "not-user-confirmed", rationale: "" },
   });
-  assert.throws(() => createHindsightRecommendationDispositionMetadata({ recommendations: [{
+  const original = {
     recommendation: "Improve handoff", priority: "medium", expectedImpact: "Reduce delays", suggestedOwner: "Delivery team",
-    dependencies: [], acceptanceCriteria: ["A handoff completes within one business day"], status: "accepted", source: "user-confirmed",
+    dependencies: [], acceptanceCriteria: ["A handoff completes within one business day"], status: "proposed", source: "model-suggestion",
     evidenceReferences: ["one:event-0001"],
+  };
+  for (const [field, changed] of [
+    ["priority", { ...original, priority: "high" }],
+    ["expected impact", { ...original, expectedImpact: "Eliminate delays" }],
+    ["owner", { ...original, suggestedOwner: "Operations team" }],
+    ["dependencies", { ...original, dependencies: ["Staffing plan"] }],
+    ["acceptance criteria", { ...original, acceptanceCriteria: ["A handoff completes within four hours"] }],
+  ]) {
+    assert.notEqual(createHindsightRecommendationDispositionMetadata({ recommendations: [changed] }).reportId, metadata.reportId, `changed ${field} requires a fresh disposition identity`);
+  }
+  assert.throws(() => createHindsightRecommendationDispositionMetadata({ recommendations: [{
+    ...original, status: "accepted", source: "user-confirmed",
   }] }), /safe structured recommendation contract/);
 });
 
@@ -269,7 +293,7 @@ test("hindsight synthesis disables direct file-write tools and restores the sess
   assert.deepEqual(setActiveToolsCalls, [["hindsight_document_write"], normalTools]);
 });
 
-test("successful safe hindsight write remains restricted until agent settlement restores normal tools", async () => {
+test("safe hindsight write preserves a prior disposition seed on failure and remains restricted until settlement", async () => {
   const { default: conversationCatalog } = await loadConversationCatalogExtension();
   const normalTools = ["read", "write", "edit", "bash", "hindsight_document_write"];
   let activeTools = normalTools;
@@ -290,6 +314,9 @@ test("successful safe hindsight write remains restricted until agent settlement 
     sendUserMessage: () => {},
   };
   globalThis.__hindsightWrites = [];
+  globalThis.__hindsightRenames = [];
+  globalThis.__hindsightFiles = new Map();
+  globalThis.__hindsightWriteFailure = undefined;
   conversationCatalog(pi);
   const hindsight = commands.find((command) => command.name === "hindsight-document");
 
@@ -317,7 +344,19 @@ test("successful safe hindsight write remains restricted until agent settlement 
   const result = await writer.execute("call", { claims: [], recommendations: [] });
   assert.match(result.content[0].text, /Hindsight document written/);
   assert.match(result.content[0].text, /disposition seed written locally/);
-  assert.ok(globalThis.__hindsightWrites.some((write) => write.path.endsWith("pi-hindsight-document.dispositions.json")));
+  const dispositionPath = "/test/pi-hindsight-document.dispositions.json";
+  assert.ok(globalThis.__hindsightFiles.has(dispositionPath));
+  assert.ok(globalThis.__hindsightRenames.some((operation) => operation.to === dispositionPath));
+
+  // A report write failure must leave a prior seed intact and remove only the
+  // staged replacement file.
+  globalThis.__hindsightFiles.set(dispositionPath, "prior seed");
+  globalThis.__hindsightWriteFailure = (path) => path === "/test/pi-hindsight-document.html";
+  const failedResult = await writer.execute("failed-call", { claims: [], recommendations: [] });
+  assert.match(failedResult.content[0].text, /Unable to write hindsight document: simulated write failure/);
+  assert.equal(globalThis.__hindsightFiles.get(dispositionPath), "prior seed");
+  assert.equal([...globalThis.__hindsightFiles.keys()].filter((path) => path.endsWith(".tmp")).length, 0);
+  globalThis.__hindsightWriteFailure = undefined;
   assert.deepEqual(activeTools, ["hindsight_document_write"]);
 
   handlers.get("agent_settled")();
@@ -342,6 +381,9 @@ test("opt-in claim-support pass switches from the safe writer to the safe valida
     sendUserMessage: () => {},
   };
   globalThis.__hindsightWrites = [];
+  globalThis.__hindsightRenames = [];
+  globalThis.__hindsightFiles = new Map();
+  globalThis.__hindsightWriteFailure = undefined;
   conversationCatalog(pi);
   const hindsight = commands.find((command) => command.name === "hindsight-document");
   await hindsight.handler("--validate-claim-support reviewed/report.html", {
@@ -358,7 +400,7 @@ test("opt-in claim-support pass switches from the safe writer to the safe valida
     source: "model-validation", userDisposition: "not-user-confirmed", assessments: [],
   });
   assert.match(validationResult.content[0].text, /with claim-support validation written/);
-  assert.ok(globalThis.__hindsightWrites.some((write) => write.path.endsWith("reviewed/report.dispositions.json")));
+  assert.ok(globalThis.__hindsightFiles.has("/test/reviewed/report.dispositions.json"));
   handlers.get("agent_settled")();
   assert.deepEqual(activeTools, normalTools);
   assert.deepEqual(toolChanges, [["hindsight_document_write"], ["hindsight_claim_support_validate"], normalTools]);

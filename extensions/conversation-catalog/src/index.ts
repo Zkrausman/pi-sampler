@@ -1,4 +1,5 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -50,15 +51,18 @@ function hindsightDispositionMetadataPath(outputPath: string) {
 
 async function writeHindsightReport(outputPath: string, html: string, recommendationDocument: { recommendations: unknown[] }) {
   const dispositionPath = hindsightDispositionMetadataPath(outputPath);
+  const temporaryDispositionPath = `${dispositionPath}.${randomUUID()}.tmp`;
   const metadata = createHindsightRecommendationDispositionMetadata(recommendationDocument);
   await mkdir(dirname(outputPath), { recursive: true });
-  // Write the local, model-only seed before the report. If report creation
-  // fails, remove the companion so callers never receive an orphaned record.
-  await writeFile(dispositionPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  // Stage the replacement seed first, but do not replace an existing seed until
+  // the report itself has written. A failed HTML write therefore leaves the
+  // prior local disposition record intact.
+  await writeFile(temporaryDispositionPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
   try {
     await writeFile(outputPath, html, "utf8");
+    await rename(temporaryDispositionPath, dispositionPath);
   } catch (error) {
-    await rm(dispositionPath, { force: true }).catch(() => undefined);
+    await rm(temporaryDispositionPath, { force: true }).catch(() => undefined);
     throw error;
   }
   return dispositionPath;

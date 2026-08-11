@@ -92,10 +92,9 @@ function dispositionReportId(recommendations) {
   // This opaque, deterministic identifier stays local to the report. It is
   // derived from already-approved report content but never exposes it in a key.
   let hash = 2166136261;
-  for (const character of JSON.stringify(recommendations.map((recommendation) => ({
-    recommendation: recommendation.recommendation,
-    references: recommendation.references,
-  })))) {
+  // Include the complete normalized recommendation so a material model update
+  // receives a fresh local-storage namespace rather than inherited decisions.
+  for (const character of JSON.stringify(recommendations)) {
     hash ^= character.codePointAt(0);
     hash = Math.imul(hash, 16777619);
   }
