@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, rename, rmdir, unlink } from "node:fs/promises";
+import { mkdir, open, realpath, rename, rmdir, unlink } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 const SESSION_REFERENCE = /^session-[a-f0-9]{32}$/;
@@ -8,6 +9,10 @@ const NOTE_ID = /^note-[a-f0-9]{32}$/;
 const LOCK_TIMEOUT_MS = 10_000;
 const STALE_LOCK_MS = 60_000;
 const localLocks = new Map();
+const WINDOWS_REGISTRY_PREFIX = "HKCU\\Software\\Zkrausman\\PiConversationCatalog\\HindsightNotes\\v1";
+const WINDOWS_REGISTRY_EXECUTABLE = "C:\\Windows\\System32\\reg.exe";
+const WINDOWS_REGISTRY_RESPONSE_LIMIT = 64 * 1024;
+const WINDOWS_VALUE = /^n_[a-f0-9]{32}$/;
 
 export class HindsightNotesError extends Error {
   constructor(code) { super(code); this.code = code; }
@@ -62,6 +67,123 @@ export function parseHindsightNotes(value) {
   if (new Set(notes.map((note) => note.noteId)).size !== notes.length) throw new HindsightNotesError("malformed_notes");
   return { schemaVersion: 1, kind: "pi-hindsight-session-notes", sessionReference: value.sessionReference, notes };
 }
+
+function windowsProjectDigest(canonicalRoot) {
+  return createHash("sha256").update("pi-hindsight-notes-project:v1\0").update(canonicalRoot.toLowerCase()).digest("hex");
+}
+function windowsValueName(noteId) {
+  return `n_${createHash("sha256").update("pi-hindsight-note:v1\0").update(noteId).digest("hex").slice(0, 32)}`;
+}
+function registryRecord(sessionReference, note) {
+  return { schemaVersion: 1, kind: "pi-hindsight-session-note", sessionReference, note };
+}
+function parseRegistryRecord(value, sessionReference, expectedValueName) {
+  let parsed;
+  try { parsed = JSON.parse(Buffer.from(value, "base64").toString("utf8")); } catch { throw new HindsightNotesError("malformed_notes"); }
+  if (!exactKeys(parsed, ["schemaVersion", "kind", "sessionReference", "note"])
+    || parsed.schemaVersion !== 1 || parsed.kind !== "pi-hindsight-session-note" || parsed.sessionReference !== sessionReference) throw new HindsightNotesError("malformed_notes");
+  const note = normalizeNote(parsed.note);
+  if (windowsValueName(note.noteId) !== expectedValueName) throw new HindsightNotesError("malformed_notes");
+  return note;
+}
+
+/** Runs only the fixed Windows Registry utility with fixed command verbs and generated hash-only names. */
+async function directWindowsRegistry(args) {
+  if (process.platform !== "win32") throw new HindsightNotesError("secure_storage_unavailable");
+  return new Promise((resolveResult, reject) => {
+    let child;
+    try { child = spawn(WINDOWS_REGISTRY_EXECUTABLE, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); }
+    catch { reject(new HindsightNotesError("registry_unavailable")); return; }
+    let stdout = ""; let stderr = ""; let oversized = false;
+    const collect = (target) => (chunk) => {
+      if (oversized) return;
+      target.value += chunk.toString("utf8");
+      if (Buffer.byteLength(target.value, "utf8") > WINDOWS_REGISTRY_RESPONSE_LIMIT) { oversized = true; child.kill(); }
+    };
+    const out = { value: stdout }; const err = { value: stderr };
+    child.stdout.on("data", collect(out)); child.stderr.on("data", collect(err));
+    child.on("error", () => reject(new HindsightNotesError("registry_unavailable")));
+    child.on("close", (code) => oversized ? reject(new HindsightNotesError("registry_response_invalid")) : resolveResult({ code, stdout: out.value, stderr: err.value }));
+  });
+}
+
+/**
+ * Windows backend: individual note records are atomic REG_SZ values. It never
+ * receives a registry path; root/session/note value names are fixed SHA-256
+ * digests and every `reg.exe` invocation is direct (no shell or evaluator).
+ */
+export function createWindowsRegistryBackend({ runRegistry = directWindowsRegistry } = {}) {
+  const keyFor = async (projectRoot, sessionReference) => {
+    emptyHindsightNotes(sessionReference);
+    if (typeof projectRoot !== "string" || !projectRoot || projectRoot.includes("\0")) throw new HindsightNotesError("invalid_notes_path");
+    let canonical;
+    try { canonical = await realpath(projectRoot); } catch { throw new HindsightNotesError("invalid_notes_path"); }
+    return `${WINDOWS_REGISTRY_PREFIX}\\${windowsProjectDigest(canonical)}\\${sessionReference}`;
+  };
+  const invoke = async (args) => {
+    const result = await runRegistry(args);
+    if (!result || !Number.isInteger(result.code) || typeof result.stdout !== "string" || typeof result.stderr !== "string"
+      || Buffer.byteLength(result.stdout, "utf8") > WINDOWS_REGISTRY_RESPONSE_LIMIT || Buffer.byteLength(result.stderr, "utf8") > WINDOWS_REGISTRY_RESPONSE_LIMIT) throw new HindsightNotesError("registry_response_invalid");
+    return result;
+  };
+  const absent = (result) => result.code === 1 && /unable to find|cannot find/i.test(`${result.stdout}\n${result.stderr}`);
+  const list = async (projectRoot, sessionReference) => {
+    const key = await keyFor(projectRoot, sessionReference);
+    const result = await invoke(["query", key]);
+    if (absent(result)) return undefined;
+    if (result.code !== 0 || result.stderr.trim()) throw new HindsightNotesError("registry_query_failed");
+    const lines = result.stdout.replace(/\r/g, "").split("\n").filter(Boolean);
+    const canonicalHeader = `HKEY_CURRENT_USER${key.slice("HKCU".length)}`;
+    if (lines.length < 1 || lines[0].trim().toLowerCase() !== canonicalHeader.toLowerCase()) throw new HindsightNotesError("registry_response_invalid");
+    const notes = [];
+    for (const line of lines.slice(1)) {
+      const match = /^\s*(n_[a-f0-9]{32})\s+REG_SZ\s+([A-Za-z0-9+/=]+)\s*$/.exec(line);
+      if (!match) throw new HindsightNotesError("registry_response_invalid");
+      notes.push(parseRegistryRecord(match[2], sessionReference, match[1]));
+    }
+    if (new Set(notes.map((note) => note.noteId)).size !== notes.length || notes.length > 100) throw new HindsightNotesError("malformed_notes");
+    return { schemaVersion: 1, kind: "pi-hindsight-session-notes", sessionReference, notes: notes.sort((left, right) => left.noteId.localeCompare(right.noteId)) };
+  };
+  const readValue = async (key, valueName) => {
+    const result = await invoke(["query", key, "/v", valueName]);
+    if (absent(result)) return undefined;
+    if (result.code !== 0 || result.stderr.trim()) throw new HindsightNotesError("registry_query_failed");
+    const lines = result.stdout.replace(/\r/g, "").split("\n").filter(Boolean);
+    const matching = lines.filter((line) => new RegExp(`^\\s*${valueName}\\s+REG_SZ\\s+([A-Za-z0-9+/=]+)\\s*$`).test(line));
+    if (matching.length !== 1) throw new HindsightNotesError("registry_response_invalid");
+    return /^\s*\S+\s+REG_SZ\s+([A-Za-z0-9+/=]+)\s*$/.exec(matching[0])?.[1] || undefined;
+  };
+  const put = async (projectRoot, sessionReference, note) => {
+    const key = await keyFor(projectRoot, sessionReference); const valueName = windowsValueName(note.noteId);
+    const encoded = Buffer.from(JSON.stringify(registryRecord(sessionReference, note)), "utf8").toString("base64");
+    if (encoded.length > 12_000) throw new HindsightNotesError("malformed_notes");
+    const result = await invoke(["add", key, "/v", valueName, "/t", "REG_SZ", "/d", encoded, "/f"]);
+    if (result.code !== 0 || result.stderr.trim()) throw new HindsightNotesError("registry_write_failed");
+    // Bounded read-after-write detects a same-note concurrent overwrite without
+    // ever serializing or replacing unrelated note values.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if ((await readValue(key, valueName)) === encoded) return;
+      if (attempt === 2) throw new HindsightNotesError("notes_conflict");
+      await delay(5 * (attempt + 1));
+      const retry = await invoke(["add", key, "/v", valueName, "/t", "REG_SZ", "/d", encoded, "/f"]);
+      if (retry.code !== 0 || retry.stderr.trim()) throw new HindsightNotesError("registry_write_failed");
+    }
+  };
+  const remove = async (projectRoot, sessionReference, noteId) => {
+    const key = await keyFor(projectRoot, sessionReference); const valueName = windowsValueName(noteId);
+    const result = await invoke(["delete", key, "/v", valueName, "/f"]);
+    if (absent(result)) throw new HindsightNotesError("note_missing");
+    if (result.code !== 0 || result.stderr.trim()) throw new HindsightNotesError("registry_write_failed");
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if ((await readValue(key, valueName)) === undefined) return;
+      if (attempt === 2) throw new HindsightNotesError("notes_conflict");
+      await delay(5 * (attempt + 1));
+    }
+  };
+  return { list, put, remove };
+}
+
+const windowsRegistry = createWindowsRegistryBackend();
 
 // Node has no openat API. On Linux, /proc/self/fd/<directory-fd>/name is the
 // kernel's descriptor-relative lookup and does not re-resolve swapped parents.
@@ -153,6 +275,7 @@ async function readStoreAt(store) {
 }
 
 export async function readHindsightNotes(projectRoot, sessionReference) {
+  if (process.platform === "win32") return windowsRegistry.list(projectRoot, sessionReference);
   const store = await openStoreDirectory(projectRoot, sessionReference, false);
   try { return await readStoreAt(store); }
   finally { await closeAll([store.notes, store.pi, store.root]); }
@@ -279,6 +402,16 @@ function newNote(text, timestamp) {
 }
 
 export async function addHindsightNote(projectRoot, sessionReference, text, { now = () => new Date().toISOString() } = {}) {
+  if (process.platform === "win32") {
+    const current = await windowsRegistry.list(projectRoot, sessionReference);
+    if ((current?.notes.length || 0) >= 100) throw new HindsightNotesError("notes_limit_reached");
+    // UUID note identities make independent concurrent adds distinct registry values.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const note = newNote(text, now());
+      try { await windowsRegistry.put(projectRoot, sessionReference, note); return note; }
+      catch (error) { if (!(error instanceof HindsightNotesError) || error.code !== "notes_conflict" || attempt === 2) throw error; }
+    }
+  }
   return withNotesLock(projectRoot, sessionReference, async (store) => {
     const prior = await readStoreAt(store);
     const current = prior || emptyHindsightNotes(sessionReference);
@@ -290,6 +423,16 @@ export async function addHindsightNote(projectRoot, sessionReference, text, { no
 }
 export async function editHindsightNote(projectRoot, sessionReference, noteId, text, { now = () => new Date().toISOString() } = {}) {
   if (typeof noteId !== "string" || !NOTE_ID.test(noteId)) throw new HindsightNotesError("invalid_note_id");
+  if (process.platform === "win32") {
+    const current = await windowsRegistry.list(projectRoot, sessionReference);
+    const prior = current?.notes.find((note) => note.noteId === noteId);
+    if (!prior) throw new HindsightNotesError("note_missing");
+    const editedAt = now();
+    if (!validTimestamp(editedAt) || Date.parse(editedAt) < Date.parse(prior.provenance.createdAt)) throw new HindsightNotesError("malformed_notes");
+    const note = { ...prior, text: safeHindsightNoteText(text), provenance: { ...prior.provenance, editedAt } };
+    await windowsRegistry.put(projectRoot, sessionReference, note);
+    return note;
+  }
   return withNotesLock(projectRoot, sessionReference, async (store) => {
     const current = await readStoreAt(store);
     if (!current) throw new HindsightNotesError("notes_missing");
@@ -305,6 +448,12 @@ export async function editHindsightNote(projectRoot, sessionReference, noteId, t
 }
 export async function deleteHindsightNote(projectRoot, sessionReference, noteId) {
   if (typeof noteId !== "string" || !NOTE_ID.test(noteId)) throw new HindsightNotesError("invalid_note_id");
+  if (process.platform === "win32") {
+    const current = await windowsRegistry.list(projectRoot, sessionReference);
+    if (!current?.notes.some((note) => note.noteId === noteId)) throw new HindsightNotesError("note_missing");
+    await windowsRegistry.remove(projectRoot, sessionReference, noteId);
+    return;
+  }
   return withNotesLock(projectRoot, sessionReference, async (store) => {
     const current = await readStoreAt(store);
     if (!current) throw new HindsightNotesError("notes_missing");

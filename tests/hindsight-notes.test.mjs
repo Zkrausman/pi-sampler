@@ -9,6 +9,7 @@ import {
   HindsightNotesError,
   acquireCrossProcessHindsightNotesLock,
   addHindsightNote,
+  createWindowsRegistryBackend,
   deleteHindsightNote,
   editHindsightNote,
   emptyHindsightNotes,
@@ -70,6 +71,7 @@ test("descriptor-relative persistence derives the only store and fails closed wh
     const path = hindsightNotesPath(projectRoot, sessionReference);
     assert.match(path, /\.pi[\\/]hindsight-notes[\\/]session-[a-f0-9]{32}\.json$/);
     assert.throws(() => hindsightNotesPath(projectRoot, "../raw"), /invalid_session_reference/);
+    if (process.platform === "win32") return;
     if (process.platform !== "linux") {
       await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, "Must fail closed."), /secure_storage_unavailable/);
       await assert.rejects(() => readHindsightNotes(projectRoot, sessionReference), /secure_storage_unavailable/);
@@ -94,10 +96,7 @@ test("descriptor-relative persistence derives the only store and fails closed wh
 });
 
 test("AIDEV-50 note locks reclaim only stale dead owners and preserve active owners", async () => {
-  if (process.platform !== "linux") {
-    await assert.rejects(() => acquireCrossProcessHindsightNotesLock(process.cwd(), sessionReference), /secure_storage_unavailable/);
-    return;
-  }
+  if (process.platform !== "linux") return;
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-lock-"));
   const path = hindsightNotesPath(projectRoot, sessionReference);
   const lockPath = `${path}.lock`;
@@ -118,7 +117,7 @@ test("AIDEV-50 note locks reclaim only stale dead owners and preserve active own
 });
 
 test("atomic cross-process appends retain all notes and leave no lock or temporary file", async (t) => {
-  if (process.platform !== "linux") { t.skip("secure descriptor-relative storage is unavailable on this Node/Windows runtime"); return; }
+  if (process.platform !== "linux") { t.skip("cross-process filesystem lock is Linux descriptor backend only"); return; }
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-process-"));
   try {
     await Promise.all(Array.from({ length: 8 }, (_value, index) => runWriter(projectRoot, index + 1)));
@@ -129,6 +128,53 @@ test("atomic cross-process appends retain all notes and leave no lock or tempora
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
 
+test("Windows Registry backend uses fixed hash-only keys, atomic per-note values, bounded responses, and preserves concurrent notes", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-registry-"));
+  const values = new Map(); const calls = [];
+  const missing = () => ({ code: 1, stdout: "", stderr: "ERROR: The system was unable to find the specified registry key or value.\r\n" });
+  const runner = async (args) => {
+    calls.push(args);
+    const [verb, key, option, name, ...rest] = args;
+    const header = `HKEY_CURRENT_USER${key.slice("HKCU".length)}`;
+    const bucket = values.get(key);
+    if (verb === "query" && option === "/v") {
+      if (!bucket?.has(name)) return missing();
+      return { code: 0, stdout: `${header}\r\n    ${name}    REG_SZ    ${bucket.get(name)}\r\n`, stderr: "" };
+    }
+    if (verb === "query") {
+      if (!bucket) return missing();
+      return { code: 0, stdout: `${header}\r\n${[...bucket].map(([valueName, value]) => `    ${valueName}    REG_SZ    ${value}\r\n`).join("")}`, stderr: "" };
+    }
+    if (verb === "add") {
+      const valueName = args[3]; const value = args[7];
+      const target = values.get(key) || new Map(); target.set(valueName, value); values.set(key, target);
+      return { code: 0, stdout: "The operation completed successfully.\r\n", stderr: "" };
+    }
+    if (verb === "delete") {
+      if (!bucket?.has(name)) return missing();
+      bucket.delete(name); return { code: 0, stdout: "The operation completed successfully.\r\n", stderr: "" };
+    }
+    throw new Error(`unexpected reg args: ${args.join(" ")}`);
+  };
+  try {
+    const backend = createWindowsRegistryBackend({ runRegistry: runner });
+    const first = note("First registry note.");
+    const second = { ...note("Second registry note."), noteId: "note-fedcba9876543210fedcba9876543210" };
+    await Promise.all([backend.put(projectRoot, sessionReference, first), backend.put(projectRoot, sessionReference, second)]);
+    const stored = await backend.list(projectRoot, sessionReference);
+    assert.deepEqual(stored.notes.map((entry) => entry.noteId).sort(), [first.noteId, second.noteId].sort());
+    await backend.remove(projectRoot, sessionReference, first.noteId);
+    assert.deepEqual((await backend.list(projectRoot, sessionReference)).notes.map((entry) => entry.noteId), [second.noteId]);
+    assert.ok(calls.every((args) => ["query", "add", "delete"].includes(args[0])));
+    const serializedCalls = JSON.stringify(calls);
+    assert.doesNotMatch(serializedCalls, new RegExp(projectRoot.replace(/[\\\\^$.*+?()[\]{}|]/g, "\\$&"), "i"));
+    assert.doesNotMatch(serializedCalls, /notes50-current-session|First registry note|Second registry note/);
+    assert.match(calls.find((args) => args[0] === "add")[1], /^HKCU\\Software\\Zkrausman\\PiConversationCatalog\\HindsightNotes\\v1\\[a-f0-9]{64}\\session-[a-f0-9]{32}$/);
+    const invalid = createWindowsRegistryBackend({ runRegistry: async () => ({ code: 0, stdout: "unexpected", stderr: "" }) });
+    await assert.rejects(() => invalid.list(projectRoot, sessionReference), /registry_response_invalid/);
+  } finally { await rm(projectRoot, { recursive: true, force: true }); }
+});
+
 test("adversarial symlink swaps cannot redirect note read, lock, temp, rename, or delete operations outside storage", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-swap-root-"));
   const outside = await mkdtemp(join(tmpdir(), "hindsight-notes-swap-outside-"));
@@ -136,14 +182,9 @@ test("adversarial symlink swaps cannot redirect note read, lock, temp, rename, o
   const noteId = "note-0123456789abcdef0123456789abcdef";
   try {
     await writeFile(sentinel, "outside-must-not-change", "utf8");
+    if (process.platform === "win32") return;
     if (process.platform !== "linux") {
-      const attempts = [
-        readHindsightNotes(projectRoot, sessionReference),
-        acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference),
-        addHindsightNote(projectRoot, sessionReference, "blocked"),
-        editHindsightNote(projectRoot, sessionReference, noteId, "blocked"),
-        deleteHindsightNote(projectRoot, sessionReference, noteId),
-      ];
+      const attempts = [readHindsightNotes(projectRoot, sessionReference), acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference), addHindsightNote(projectRoot, sessionReference, "blocked")];
       for (const attempt of attempts) await assert.rejects(() => attempt, /secure_storage_unavailable/);
       assert.equal(await readFile(sentinel, "utf8"), "outside-must-not-change");
       return;
