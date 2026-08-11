@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { buildHindsightDocument, buildSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
+import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "../extensions/conversation-catalog/src/hindsight-tools.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -27,7 +27,7 @@ const SessionManager = {
   ],
   open: async () => ({ getEntries: () => [] }),
 };
-const Type = { Object: (value) => value, Optional: (value) => value, String: () => ({}), Array: () => ({}), Union: () => ({}), Literal: () => ({}) };
+const Type = { Object: (value) => value, Optional: (value) => value, String: () => ({}), Integer: () => ({}), Array: () => ({}), Union: () => ({}), Literal: () => ({}) };
 const generateCatalogHtml = () => "";
 const groupSessions = (value) => value;
 const generateConversationFlowHtml = () => "";
@@ -36,6 +36,7 @@ const attachEvidenceReferences = (_reference, value) => value;
 const createEvidenceManifest = () => ({ schemaVersion: 1, citations: [] });
 const generateRelationshipMapHtml = () => "";
 const projectRelationshipMap = (value) => value;
+const buildClaimSupportValidationPrompt = () => "Validate cited claim support";
 const buildHindsightDocument = () => "<html></html>";
 const buildSynthesisPrompt = () => "Synthesize";
 const restrictToolsForHindsightSynthesis = (pi) => {
@@ -72,6 +73,17 @@ test("an excluded selected conversation retains a pseudonymous navigable fallbac
   assert.match(html, /id="citation-1"/);
   assert.match(html, /Source context was excluded during redaction review/);
   assert.doesNotMatch(html, /Hidden|hidden:event-1/);
+});
+
+test("opt-in validation writes an excluded fallback without assessing unavailable fallback claims", () => {
+  const html = buildHindsightDocument(
+    [{ reference: "session-excluded", excluded: true, events: [{ summary: "Hidden", evidence: { reference: "hidden:event-1" } }] }],
+    { claims: [], recommendations: [] },
+    { source: "model-validation", userDisposition: "not-user-confirmed", assessments: [] },
+  );
+  assert.match(html, /href="#citation-1">session-excluded:excluded<\/a>/);
+  assert.match(html, /No material generated claims were available for claim-support validation/);
+  assert.doesNotMatch(html, /Claim 1:|Hidden|hidden:event-1/);
 });
 
 test("model claims and structured recommendations are escaped, cited, and rendered in an accessible table", () => {
@@ -122,6 +134,69 @@ test("safe hindsight recommendations reject missing, malformed, unconfirmed, or 
   }), /outside the selected redacted source bundle/);
   const fallback = buildHindsightDocument(sources, { claims: [], recommendations: [] });
   assert.match(fallback, /No structured recommendations were supplied/);
+});
+
+test("opt-in claim-support validation requires a complete, evidence-scoped model assessment", () => {
+  const sources = [{
+    events: [
+      { id: "one-event-1", category: "user", timestamp: "2025-01-01", summary: "Customer reported a timeout.", evidence: { reference: "one:event-0001" } },
+      { id: "one-event-2", category: "assistant", timestamp: "2025-01-02", summary: "An engineer restarted the service.", evidence: { reference: "one:event-0002" } },
+    ],
+  }];
+  const model = {
+    claims: [{ statement: "The customer reported a timeout.", classification: "direct evidence", evidenceReferences: ["one:event-0001"] }],
+    recommendations: [],
+  };
+  const validation = {
+    source: "model-validation",
+    userDisposition: "not-user-confirmed",
+    assessments: [{ claimNumber: 1, support: "supported", rationale: "The cited excerpt explicitly reports the timeout.", evidenceReferences: ["one:event-0001"] }],
+  };
+  const html = buildHindsightDocument(sources, model, validation);
+  assert.match(html, /Claim-support validation/);
+  assert.match(html, /Model-generated validation only; it is not a user-confirmed disposition/);
+  assert.match(html, /Claim 1:<\/strong> <span class="provenance">supported/);
+  assert.match(html, /Rationale:<\/span> The cited excerpt explicitly reports the timeout/);
+  assert.match(html, /Evidence evaluated:<\/span> <span class="citations"><a href="#citation-1">one:event-0001/);
+  assert.throws(() => buildHindsightDocument(sources, model, {
+    ...validation,
+    source: "user-confirmed",
+  }), /model-generated and not user-confirmed/);
+  assert.throws(() => buildHindsightDocument(sources, model, {
+    ...validation,
+    assessments: [],
+  }), /assess every material claim exactly once/);
+  assert.throws(() => buildHindsightDocument(sources, model, {
+    ...validation,
+    assessments: [{ ...validation.assessments[0], support: "<img src=x>" }],
+  }), /support must be supported/);
+  assert.throws(() => buildHindsightDocument(sources, model, {
+    ...validation,
+    assessments: [{ ...validation.assessments[0], rationale: "" }],
+  }), /rationale must not be blank/);
+});
+
+test("claim-support validation cannot cite another included excerpt or omit a claim citation", () => {
+  const sources = [{
+    events: [
+      { id: "one-event-1", summary: "First redacted excerpt", evidence: { reference: "one:event-0001" } },
+      { id: "one-event-2", summary: "Second redacted excerpt", evidence: { reference: "one:event-0002" } },
+    ],
+  }];
+  const model = {
+    claims: [{ statement: "A claim", classification: "inference", evidenceReferences: ["one:event-0001"] }],
+    recommendations: [],
+  };
+  const validation = {
+    source: "model-validation", userDisposition: "not-user-confirmed",
+    assessments: [{ claimNumber: 1, support: "unverifiable", rationale: "The cited excerpt cannot establish the claim.", evidenceReferences: ["one:event-0002"] }],
+  };
+  assert.throws(() => buildHindsightDocument(sources, model, validation), /outside the selected redacted source bundle/);
+  assert.match(buildClaimSupportValidationPrompt(sources, model), /Customer|First redacted excerpt/);
+  const prompt = buildClaimSupportValidationPrompt(sources, model);
+  assert.match(prompt, /one:event-0001/);
+  assert.match(prompt, /bounded rationale explaining why the cited excerpts support/);
+  assert.doesNotMatch(prompt, /Second redacted excerpt|one:event-0002/);
 });
 
 test("synthesis prompt includes redacted flow and relationship-map context", () => {
@@ -213,4 +288,41 @@ test("successful safe hindsight write remains restricted until agent settlement 
   handlers.get("agent_settled")();
   assert.deepEqual(activeTools, normalTools);
   assert.deepEqual(toolChanges, [["hindsight_document_write"], normalTools]);
+});
+
+test("opt-in claim-support pass switches from the safe writer to the safe validator", async () => {
+  const { default: conversationCatalog } = await loadConversationCatalogExtension();
+  const normalTools = ["read", "write", "edit", "bash", "hindsight_document_write", "hindsight_claim_support_validate"];
+  let activeTools = normalTools;
+  const tools = [];
+  const commands = [];
+  const handlers = new Map();
+  const toolChanges = [];
+  const pi = {
+    on: (event, handler) => handlers.set(event, handler),
+    registerTool: (tool) => tools.push(tool),
+    registerCommand: (name, command) => commands.push({ name, ...command }),
+    getActiveTools: () => activeTools,
+    setActiveTools: (nextTools) => { activeTools = nextTools; toolChanges.push(nextTools); },
+    sendUserMessage: () => {},
+  };
+  conversationCatalog(pi);
+  const hindsight = commands.find((command) => command.name === "hindsight-document");
+  await hindsight.handler("--validate-claim-support reviewed/report.html", {
+    cwd: "/test", hasUI: true,
+    ui: { select: async (_title, options) => options[1], confirm: async () => true, notify: () => {} },
+  });
+  const writer = tools.find((tool) => tool.name === "hindsight_document_write");
+  const validator = tools.find((tool) => tool.name === "hindsight_claim_support_validate");
+  assert.deepEqual(activeTools, ["hindsight_document_write"]);
+  const draftResult = await writer.execute("draft", { claims: [], recommendations: [] });
+  assert.match(draftResult.content[0].text, /Validate cited claim support/);
+  assert.deepEqual(activeTools, ["hindsight_claim_support_validate"]);
+  const validationResult = await validator.execute("validation", {
+    source: "model-validation", userDisposition: "not-user-confirmed", assessments: [],
+  });
+  assert.match(validationResult.content[0].text, /with claim-support validation written/);
+  handlers.get("agent_settled")();
+  assert.deepEqual(activeTools, normalTools);
+  assert.deepEqual(toolChanges, [["hindsight_document_write"], ["hindsight_claim_support_validate"], normalTools]);
 });
