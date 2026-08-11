@@ -2,6 +2,11 @@ node_modules/
 dist/
 coverage/
 /.pi/
+!/.pi/
+/.pi/*
+!/.pi/agents/
+/.pi/agents/*
+!/.pi/agents/pi-development.md
 /.pi-subagents/
 *.log
 .env

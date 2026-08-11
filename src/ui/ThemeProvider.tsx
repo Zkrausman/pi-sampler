@@ -1,8 +1,34 @@
-import { createContext, type ReactNode } from "react";
+import {
+  createContext,
+  type ComponentPropsWithoutRef,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 type ThemeProviderProps = {
   children: ReactNode;
 };
+
+type LayoutProps = ComponentPropsWithoutRef<"div">;
+
+function withLayoutStyle(display: CSSProperties["display"], style?: CSSProperties): CSSProperties {
+  return { display, ...style };
+}
+
+/** Minimal local Stitch UI Box compatibility primitive. */
+export function Box({ children, ...props }: LayoutProps) {
+  return <div {...props}>{children}</div>;
+}
+
+/** Minimal local Stitch UI Flex compatibility primitive. */
+export function Flex({ children, style, ...props }: LayoutProps) {
+  return <div {...props} style={withLayoutStyle("flex", style)}>{children}</div>;
+}
+
+/** Minimal local Stitch UI Grid compatibility primitive. */
+export function Grid({ children, style, ...props }: LayoutProps) {
+  return <div {...props} style={withLayoutStyle("grid", style)}>{children}</div>;
+}
 
 export const StitchUIThemeContext = createContext("light");
 

@@ -1,0 +1,59 @@
+.color-palette {
+  max-width: 64rem;
+  margin: 2rem auto;
+  padding: 1.5rem;
+  color: #17212b;
+}
+
+.color-palette__heading h1 {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.color-palette__heading p {
+  margin: 0.5rem 0 1.5rem;
+  color: #52606d;
+}
+
+.color-palette__grid {
+  gap: 1rem;
+}
+
+.color-palette__button {
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: #fff;
+  border: 1px solid #d6dde5;
+  border-radius: 0.5rem;
+  transition: box-shadow 120ms ease, transform 120ms ease;
+}
+
+.color-palette__button:hover {
+  box-shadow: 0 0.25rem 0.75rem rgb(23 33 43 / 16%);
+  transform: translateY(-1px);
+}
+
+.color-palette__button:focus-visible {
+  outline: 3px solid #355070;
+  outline-offset: 3px;
+}
+
+.color-palette__color {
+  height: 6rem;
+}
+
+.color-palette__label {
+  gap: 0.75rem;
+  padding: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875rem;
+}
+
+.color-palette__button--copy-failed .color-palette__feedback {
+  color: #b42318;
+  font-weight: 700;
+}
