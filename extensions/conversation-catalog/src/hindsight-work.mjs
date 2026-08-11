@@ -9,6 +9,10 @@ const ISSUE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const CITATION = /^session-[a-z0-9]+:event-[0-9]{4}$/;
 const OFFICIAL_LINEAR_ENDPOINT = "https://api.linear.app/graphql";
 const PRIORITIES = new Set(["critical", "high", "medium", "low"]);
+// Commands execute in one Pi process. This per-recommendation FIFO prevents
+// concurrent command invocations from racing the duplicate check, mutation,
+// and local backlink write. Entries are deleted in finally, including errors.
+const workLinkLocks = new Map();
 
 export const HINDSIGHT_WORK_CONFIG_PATH = ".pi/hindsight-linear.json";
 
@@ -173,6 +177,23 @@ export function digestHindsightWorkPayload(payload) {
 
 export function workLinkKey(reportId, recommendationNumber) {
   return `${reportId}:recommendation-${recommendationNumber}`;
+}
+
+/** Serializes the complete side-effect transaction for one report recommendation. */
+export async function withHindsightWorkLinkLock(reportId, recommendationNumber, operation) {
+  const key = workLinkKey(reportId, recommendationNumber);
+  const previous = workLinkLocks.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  workLinkLocks.set(key, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    // Do not remove a successor that queued while this operation was running.
+    if (workLinkLocks.get(key) === current) workLinkLocks.delete(key);
+  }
 }
 
 export function workLinksPathForDispositionPath(dispositionPath) {

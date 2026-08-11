@@ -13,10 +13,11 @@ import {
   requireFinalHindsightWorkConfirmation,
   validateHindsightLinearConfig,
   validateHindsightWorkContext,
+  withHindsightWorkLinkLock,
   workLinkKey,
   writeHindsightWorkLink,
 } from "../extensions/conversation-catalog/src/hindsight-work.mjs";
-import { HindsightLinearAdapter, ISSUE_CREATE_MUTATION, ISSUE_LOOKUP_QUERY } from "../extensions/conversation-catalog/src/hindsight-linear-adapter.mjs";
+import { HindsightLinearAdapter, ISSUE_CREATE_MUTATION, ISSUE_LOOKUP_QUERY, MAX_LINEAR_RESPONSE_BYTES } from "../extensions/conversation-catalog/src/hindsight-linear-adapter.mjs";
 
 const recommendation = {
   recommendationNumber: 1,
@@ -41,8 +42,22 @@ function metadata(overrides = {}) {
   };
 }
 
-function response(body, ok = true) {
-  return { ok, json: async () => body };
+function response(value, ok = true, { chunks, contentLength } = {}) {
+  const bytes = chunks || [new TextEncoder().encode(JSON.stringify(value))];
+  let index = 0;
+  let cancelled = false;
+  return {
+    ok,
+    headers: { get: (name) => name === "content-length" ? contentLength : null },
+    body: {
+      getReader: () => ({
+        read: async () => index < bytes.length ? { value: bytes[index++], done: false } : { done: true },
+        cancel: async () => { cancelled = true; },
+        releaseLock: () => {},
+      }),
+    },
+    wasCancelled: () => cancelled,
+  };
 }
 
 test("strict accepted disposition metadata produces an excerpt-free create payload", () => {
@@ -116,6 +131,39 @@ test("narrow adapter sends the documented create contract and accepts only the c
   await assert.rejects(() => mismatch.resolveIssue("issue_2", "team_1"), (error) => error instanceof HindsightWorkError && error.code === "team_mismatch");
 });
 
+test("every post-dispatch create failure is unknown and non-retryable", async () => {
+  const input = { teamId: "team_1", title: "Title", description: "Text", priority: 2 };
+  const cases = [
+    { name: "HTTP status", response: () => ({ ok: false }) },
+    { name: "malformed JSON", response: () => response(undefined, true, { chunks: [new TextEncoder().encode("not-json")] }) },
+    { name: "GraphQL error", response: () => response({ errors: [{ message: "private body" }] }) },
+    { name: "create rejection", response: () => response({ data: { issueCreate: { success: false } } }) },
+    { name: "malformed issue response", response: () => response({ data: { issueCreate: { success: true, issue: { id: "issue_1" } } } }) },
+  ];
+  for (const scenario of cases) {
+    let calls = 0;
+    const adapter = new HindsightLinearAdapter({
+      endpoint: "https://api.linear.app/graphql", token: "secret",
+      fetchImpl: async () => { calls += 1; return scenario.response(); },
+    });
+    await assert.rejects(() => adapter.createIssue(input, "team_1"), (error) => error instanceof HindsightWorkError && error.code === "unknown_create_outcome", scenario.name);
+    assert.equal(calls, 1, `${scenario.name} is not retried`);
+  }
+});
+
+test("response reading is bounded before JSON decoding", async () => {
+  const oversized = response(undefined, true, { chunks: [new Uint8Array(MAX_LINEAR_RESPONSE_BYTES + 1)] });
+  const adapter = new HindsightLinearAdapter({
+    endpoint: "https://api.linear.app/graphql", token: "secret", fetchImpl: async () => oversized,
+  });
+  await assert.rejects(() => adapter.resolveIssue("issue_3", "team_1"), (error) => error instanceof HindsightWorkError && error.code === "linear_response_too_large");
+  assert.equal(oversized.wasCancelled(), true);
+  const create = new HindsightLinearAdapter({
+    endpoint: "https://api.linear.app/graphql", token: "secret", fetchImpl: async () => response(undefined, true, { contentLength: String(MAX_LINEAR_RESPONSE_BYTES + 1) }),
+  });
+  await assert.rejects(() => create.createIssue({ teamId: "team_1", title: "Title", description: "Text", priority: 2 }, "team_1"), (error) => error instanceof HindsightWorkError && error.code === "unknown_create_outcome");
+});
+
 test("GraphQL and HTTP failures are opaque and never expose response bodies or credentials", async () => {
   const http = new HindsightLinearAdapter({
     endpoint: "https://api.linear.app/graphql", token: "credential-not-for-output",
@@ -154,6 +202,32 @@ test("link lookup has a bounded contract and create timeout remains unknown with
   });
   await assert.rejects(() => timeout.createIssue({ teamId: "team_1", title: "Title", description: "Text", priority: 2 }, "team_1"), (error) => error instanceof HindsightWorkError && error.code === "unknown_create_outcome");
   assert.equal(calls, 1);
+});
+
+test("concurrent work transactions serialize duplicate check, mutation, and backlink write", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "hindsight-work-lock-"));
+  const path = join(directory, "report.work-links.json");
+  const reportId = "hindsight-1234abcd";
+  const payload = { teamId: "team_1", title: "Title", description: "Text", priority: 2 };
+  const link = { issueId: "issue_5", issueUrl: "https://linear.app/acme/issue/ABC-5", status: "Todo", timestamp: "2026-08-11T12:04:00.000Z", payloadDigest: digestHindsightWorkPayload(payload), action: "created" };
+  let remoteMutations = 0;
+  const transaction = () => withHindsightWorkLinkLock(reportId, 1, async () => {
+    const existing = await readHindsightWorkLinks(path);
+    if (existing.links[workLinkKey(reportId, 1)]) return "duplicate";
+    remoteMutations += 1;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await writeHindsightWorkLink(path, reportId, 1, link);
+    return "created";
+  });
+  try {
+    assert.deepEqual(await Promise.all([transaction(), transaction()]), ["created", "duplicate"]);
+    assert.equal(remoteMutations, 1);
+    assert.deepEqual((await readHindsightWorkLinks(path)).links[workLinkKey(reportId, 1)], link);
+    await assert.rejects(() => withHindsightWorkLinkLock(reportId, 2, async () => { throw new Error("simulated failure"); }), /simulated failure/);
+    assert.equal(await withHindsightWorkLinkLock(reportId, 2, async () => "recovered"), "recovered");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("successful links are atomically recorded once and duplicate links are rejected", async () => {
