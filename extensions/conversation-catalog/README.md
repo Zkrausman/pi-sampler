@@ -61,16 +61,22 @@ export, it presents every detected sensitive finding and lets you **redact**,
 
 The command writes a companion `pi-conversation-flow-session-<local-reference>.redaction.json`
 file beside the HTML. It records a local pseudonymous session reference, excluded
-state, finding locations/pattern names, and redact/retain choices, but never
-matched sensitive text or a raw session ID/name. An excluded export is an HTML notice with no conversation content.
+state, finding locations/pattern names, redact/retain choices, and the stable
+direct-evidence reference/anchor index, but never matched sensitive text, source
+context, or a raw session ID/name. An excluded export is an HTML notice with no conversation content.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,
-skill, and unsupported activity. Visible arrow links connect entry parents,
-matched tool calls to results, and a result to the next chronological assistant
-entry. The latter is labeled as a chronological inference and can cross a
-branch. Missing correlations, malformed entries, images, thinking, and unknown
-content are kept compact or marked unsupported rather than preventing output.
+skill, and unsupported activity. Each rendered event has a deterministic,
+pseudonymous **direct-evidence** citation (for example
+`session-abc:event-0001`); the cited card is the inspectable source context.
+The companion decision metadata preserves the citation reference and event
+anchor without source text or raw Pi entry IDs. Visible arrow links connect
+entry parents, matched tool calls to results, and a result to the next
+chronological assistant entry. The latter is labeled as a chronological
+inference and can cross a branch. Missing correlations, malformed entries,
+images, thinking, and unknown content are kept compact or marked unsupported
+rather than preventing output.
 
 ## Privacy and behavior
 

@@ -3,6 +3,7 @@ import { dirname, extname, resolve } from "node:path";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
+import { attachEvidenceReferences, createEvidenceManifest } from "./evidence.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
 const DEFAULT_FILENAME = "pi-conversation-catalog.html";
@@ -136,10 +137,16 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd));
         const review = await reviewRedactionChoices(ctx, findings);
         const exportSession = { id: pseudonymizeSession(selected), name: "Selected conversation" };
-        const metadata = createRedactionMetadata(exportSession.id, findings, review.decisions, review.excluded);
+        const citedProjection = review.excluded
+          ? undefined
+          : attachEvidenceReferences(exportSession.id, redactProjection(projection, findings, review.decisions));
+        const metadata = {
+          ...createRedactionMetadata(exportSession.id, findings, review.decisions, review.excluded),
+          evidence: citedProjection ? createEvidenceManifest(citedProjection) : { schemaVersion: 1, citations: [] },
+        };
         const html = review.excluded
           ? generateExcludedConversationHtml(exportSession)
-          : generateConversationFlowHtml(exportSession, redactProjection(projection, findings, review.decisions));
+          : generateConversationFlowHtml(exportSession, citedProjection);
         const decisionPath = metadataPath(outputPath);
         await mkdir(dirname(outputPath), { recursive: true });
         // A metadata write must succeed before content is created; remove it if the
