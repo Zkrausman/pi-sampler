@@ -117,7 +117,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         await mkdir(dirname(pendingHindsight.outputPath), { recursive: true });
         await writeFile(pendingHindsight.outputPath, html, "utf8");
         const outputPath = pendingHindsight.outputPath;
-        pendingHindsight = undefined;
+        // Keep the pending state until agent_settled restores the original tool set.
         return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}.` }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? `Unable to write hindsight document: ${error.message}` : "Unable to write hindsight document." }] };
