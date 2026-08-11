@@ -191,7 +191,9 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const sessions = await SessionManager.listAll();
         const selected: any[] = [];
         while (true) {
-          const options = sessions.map((session) => `${selected.some((item) => item.id === session.id) ? "✓ " : ""}${pickerLabel(session)}`).concat(["Generate document", "Remove selected conversation", "Cancel"]);
+          const sessionOptions = sessions.map((session) => `${selected.some((item) => item.id === session.id) ? "✓ " : ""}${pickerLabel(session)}`);
+          // Keep actions visible in a small terminal even when many sessions exist.
+          const options = ["Generate document", "Remove selected conversation", "Cancel", ...sessionOptions];
           const choice = await ctx.ui.select(`Hindsight selection (${selected.length} selected)`, options);
           if (!choice || choice === "Cancel") throw new Error("Hindsight generation canceled.");
           if (choice === "Generate document") break;
@@ -201,7 +203,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
             if (index >= 0) selected.splice(index, 1);
             continue;
           }
-          const session = sessions[options.indexOf(choice)];
+          const session = sessions[sessionOptions.indexOf(choice)];
           if (session && !selected.some((item) => item.id === session.id)) selected.push(session);
         }
         if (selected.length < 2) throw new Error("Select at least two conversations before generation.");
