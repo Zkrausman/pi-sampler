@@ -338,7 +338,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
   pi.registerTool({
     name: "hindsight_document_write",
     label: "Write safe hindsight document",
-    description: "Writes the requested hindsight report through its safe HTML citation contract. Use this instead of writing hindsight HTML directly.",
+    description: "Writes structured claims, optional evidence-first story steps, and recommendations through the safe HTML citation contract. Use this instead of writing hindsight HTML directly.",
     parameters: Type.Object({
       title: Type.Optional(Type.String({ minLength: 1, maxLength: 160 })),
       claims: Type.Array(Type.Object({
@@ -346,6 +346,12 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         classification: Type.Union([Type.Literal("direct evidence"), Type.Literal("inference")]),
         evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 20 }),
       }, { additionalProperties: false }), { maxItems: 80 }),
+      storySteps: Type.Optional(Type.Array(Type.Object({
+        title: Type.String({ minLength: 1, maxLength: 160 }),
+        body: Type.String({ minLength: 1, maxLength: 2000 }),
+        classification: Type.Union([Type.Literal("direct evidence"), Type.Literal("inference")]),
+        evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 3 }),
+      }, { additionalProperties: false }), { maxItems: 30 })),
       recommendations: Type.Array(Type.Object({
         recommendation: Type.String({ minLength: 1, maxLength: 1000 }),
         priority: Type.Union([Type.Literal("critical"), Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
