@@ -103,6 +103,59 @@ function normalizedReportIdentityClaims(document) {
   });
 }
 
+function requiredStoryText(value, field, maxLength) {
+  if (typeof value !== "string") throw new Error(`${field} must be a string.`);
+  const normalized = value.trim();
+  const length = Array.from(normalized).length;
+  if (length === 0 || length > maxLength) throw new Error(`${field} must be between 1 and ${maxLength} characters.`);
+  return normalized;
+}
+
+// Story steps have a stricter runtime contract than generic claims: they are
+// model-proposed navigation through the supplied redacted bundle, never a
+// channel for unavailable fallbacks or separately supplied user context.
+function normalizedStorySteps(document, evidenceByReference) {
+  if (document?.storySteps === undefined) return [];
+  if (!Array.isArray(document.storySteps) || document.storySteps.length > 30) {
+    throw new Error("storySteps must be an array containing at most 30 steps.");
+  }
+  const identities = new Set();
+  return document.storySteps.map((step, index) => {
+    const label = `Story step ${index + 1}`;
+    if (!step || typeof step !== "object" || Array.isArray(step)) throw new Error(`${label} must be an object.`);
+    const keys = Object.keys(step);
+    if (keys.length !== 4 || keys.some((key) => !["title", "body", "classification", "evidenceReferences"].includes(key))) {
+      throw new Error(`${label} is malformed.`);
+    }
+    const classification = requiredStoryText(step.classification, `${label} classification`, 32);
+    if (classification !== "direct evidence" && classification !== "inference") {
+      throw new Error(`${label} must be explicitly classified as direct evidence or inference.`);
+    }
+    if (!Array.isArray(step.evidenceReferences) || step.evidenceReferences.length < 1 || step.evidenceReferences.length > 3) {
+      throw new Error(`${label} must cite between 1 and 3 evidence references.`);
+    }
+    const references = step.evidenceReferences.map((reference, referenceIndex) => requiredStoryText(reference, `${label} evidenceReferences[${referenceIndex + 1}]`, 100));
+    if (new Set(references).size !== references.length) throw new Error(`${label} evidenceReferences must not contain duplicate references.`);
+    for (const reference of references) {
+      const evidence = evidenceByReference.get(reference);
+      const availability = text(evidence?.availability);
+      if (!evidence || availability === "excluded" || availability === "missing") {
+        throw new Error(`${label} cites evidence outside the included redacted source bundle.`);
+      }
+    }
+    const normalized = {
+      title: requiredStoryText(step.title, `${label} title`, 160),
+      body: requiredStoryText(step.body, `${label} body`, 2000),
+      classification,
+      references,
+    };
+    const identity = JSON.stringify({ ...normalized, references: [...references].sort() });
+    if (identities.has(identity)) throw new Error(`${label} duplicates an earlier story step.`);
+    identities.add(identity);
+    return normalized;
+  });
+}
+
 function dispositionReportId(recommendations, claims) {
   // This opaque, deterministic identifier stays local to the report. Its scope
   // includes every current material claim and recommendation, so a report with
@@ -222,6 +275,7 @@ export function generateCitedHindsightDocumentHtml(document) {
     }
     return { statement, classification, references, validationExcluded: claim?.validationExcluded === true };
   });
+  const storySteps = normalizedStorySteps(document, evidenceByReference);
   const recommendations = normalizedRecommendations(document);
   const recommendationDispositionMetadata = dispositionMetadata(recommendations, normalizedClaims);
   // Feedback identities are hashes of the stable rendered claim/recommendation
@@ -253,6 +307,7 @@ export function generateCitedHindsightDocumentHtml(document) {
   // Missing references retain a navigable, explicit fallback rather than a dead link.
   const referenced = [...new Set([
     ...normalizedClaims.flatMap((claim) => claim.references),
+    ...storySteps.flatMap((step) => step.references),
     ...recommendations.flatMap((recommendation) => recommendation.references),
   ])];
   const evidence = referenced.map((reference) => {
@@ -272,6 +327,10 @@ export function generateCitedHindsightDocumentHtml(document) {
     return links.join(" · ");
   }).join(", ");
 
+  const storyCitationChips = (references) => references.map((reference) => `<a class="evidence-chip" href="#${citationAnchors.get(reference)}">${escapeHtml(reference)}</a>`).join(" ");
+  const storyHtml = storySteps.length === 0
+    ? '<p class="empty" role="status">No model-suggested story steps were supplied. Read the cited claims and evidence in document order.</p>'
+    : `<p class="story-provenance">Model-suggested evidence-first reading guide; story steps are not user-confirmed facts.</p><div class="story-filter"><button type="button" id="story-direct-evidence-filter" aria-pressed="false" aria-controls="story-reading-order">Show direct evidence only</button><p id="story-filter-status" class="empty" role="status">All evidence classifications are shown.</p></div><ol id="story-reading-order" class="story-reading-order">${storySteps.map((step) => `<li class="story-step story-${step.classification.replace(/\s+/g, "-")}" data-story-classification="${step.classification}"><article><h3>${escapeHtml(step.title)}</h3><p class="classification">${step.classification === "inference" ? "Inference · model-suggested interpretation" : "Direct evidence · model-suggested reading step"}</p><p>${escapeHtml(step.body)}</p><p class="citations"><span class="empty">Cited evidence:</span> ${storyCitationChips(step.references)}</p></article></li>`).join("\n")}</ol>`;
   const claimHtml = normalizedClaims.length === 0
     ? '<p class="empty">No material claims were supplied.</p>'
     : normalizedClaims.map((claim) => `<article class="claim claim-${claim.classification.replace(/\s+/g, "-")}">
@@ -318,6 +377,20 @@ export function generateCitedHindsightDocumentHtml(document) {
         <section id="${anchor}-map" class="context-panel"><h4>Relationship-map context</h4><p class="context">${escapeHtml(mapContext ? bounded(mapContext) : "No relationship-map context was supplied.")}</p></section>
       </article>`;
     }).join("\n");
+  const storyFilterScript = storySteps.length === 0 ? "" : `<script>(() => {
+    const button = document.getElementById("story-direct-evidence-filter");
+    const status = document.getElementById("story-filter-status");
+    const steps = Array.from(document.querySelectorAll("[data-story-classification]"));
+    if (!button || !status) return;
+    let directOnly = false;
+    button.addEventListener("click", () => {
+      directOnly = !directOnly;
+      for (const step of steps) step.hidden = directOnly && step.dataset.storyClassification !== "direct evidence";
+      button.setAttribute("aria-pressed", String(directOnly));
+      button.textContent = directOnly ? "Show all story steps" : "Show direct evidence only";
+      status.textContent = directOnly ? "Showing direct-evidence story steps only." : "All evidence classifications are shown.";
+    });
+  })();</script>`;
   const dispositionScript = `<script type="application/json" id="disposition-seed">${scriptJson(recommendationDispositionMetadata)}</script><script>(() => {
     const seedElement = document.getElementById("disposition-seed");
     const exportButton = document.getElementById("export-dispositions");
@@ -369,5 +442,5 @@ export function generateCitedHindsightDocumentHtml(document) {
       exportStatus.textContent = "Disposition metadata exported locally.";
     });
   })();</script>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Pi hindsight document</title><style>:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#1a1b26;color:#c0caf5}body{margin:0 auto;max-width:80rem;padding:2rem;line-height:1.45}.claim,.evidence,.claim-support-list li,.disposition-panel,.disposition-export{background:#24283b;border:1px solid #414868;border-radius:.5rem;margin:1rem 0;padding:1rem}.claim-inference{border-left:.5rem solid #a66b12}.claim-direct-evidence{border-left:.5rem solid #2c78c4}.classification,.provenance{font-size:.85rem;font-weight:700;text-transform:capitalize}.citations a{font-weight:700}.context{white-space:pre-wrap;overflow-wrap:anywhere}.context-panel{border-top:1px dashed #414868;margin-top:.9rem;padding-top:.2rem;scroll-margin-top:1rem}.context-panel h4,.evidence h4{margin-bottom:.25rem}.evidence-unavailable{border-left:.5rem solid #a66b12}.context-fallback,.empty{color:#a9b1d6}.claim-support-list{list-style-position:inside;padding:0}.table-scroll{overflow-x:auto;margin:1rem 0}.table-scroll:focus,.disposition-form :focus-visible,button:focus-visible{outline:2px solid #7aa2f7;outline-offset:2px}table{border-collapse:collapse;min-width:72rem;width:100%;background:#24283b}caption{text-align:left;font-weight:700;padding:.5rem 0}th,td{border:1px solid #414868;padding:.7rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}thead th{background:#2f354d}tbody th{min-width:14rem}td ul{margin:.1rem 0;padding-left:1.2rem}.disposition-form{border-top:1px solid #414868;margin-top:1rem;padding-top:1rem}.disposition-form:first-of-type{border-top:0;margin-top:0}.disposition-form fieldset{border:0;margin:0;padding:0}.disposition-options{display:flex;flex-wrap:wrap;gap:1rem}.disposition-options label{font-weight:700}.disposition-form textarea{box-sizing:border-box;display:block;min-height:5rem;max-width:48rem;width:100%}.disposition-actions{align-items:center;display:flex;flex-wrap:wrap;gap:.75rem;margin-top:.75rem}.disposition-status{font-weight:700}.model-provenance{color:#a9b1d6}</style></head><body><h1>${escapeHtml(bounded(document?.title, "Pi hindsight document", 160))}</h1><p>Claims label direct evidence separately from model-generated inference. Every material claim and recommendation links to embedded redacted source context, with flow and relationship-map context where available.</p><main><section aria-labelledby="claims-heading"><h2 id="claims-heading">Claims</h2>${claimHtml}</section><section aria-labelledby="claim-support-heading"><h2 id="claim-support-heading">Claim-support validation</h2>${claimSupportHtml}</section><section aria-labelledby="recommendations-heading"><h2 id="recommendations-heading">Recommendations</h2>${recommendationHtml}</section>${outcomeHistoryPlaceholder}${feedbackPlaceholder}${priorOutcomeHtml}${userAuthoredNotesHtml}</main><section><h2>Evidence</h2>${evidenceHtml}</section>${recommendations.length === 0 ? "" : dispositionScript}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Pi hindsight document</title><style>:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#1a1b26;color:#c0caf5}body{margin:0 auto;max-width:80rem;padding:2rem;line-height:1.45}.claim,.evidence,.story-step article,.claim-support-list li,.disposition-panel,.disposition-export{background:#24283b;border:1px solid #414868;border-radius:.5rem;margin:1rem 0;padding:1rem}.claim-inference{border-left:.5rem solid #a66b12}.claim-direct-evidence{border-left:.5rem solid #2c78c4}.classification,.provenance,.story-provenance{font-size:.85rem;font-weight:700;text-transform:capitalize}.story-provenance{color:#a9b1d6}.story-reading-order{padding-left:1.5rem}.story-step{margin:1rem 0;padding-left:.25rem}.story-inference article{border-left:.5rem solid #a66b12}.story-direct-evidence article{border-left:.5rem solid #2c78c4}.story-filter{align-items:center;display:flex;flex-wrap:wrap;gap:.75rem}.story-filter p{margin:.25rem 0}.citations a{font-weight:700}.evidence-chip{background:#2f354d;border:1px solid #414868;border-radius:1rem;display:inline-block;margin:.15rem .2rem .15rem 0;padding:.12rem .5rem;text-decoration:none}.context{white-space:pre-wrap;overflow-wrap:anywhere}.context-panel{border-top:1px dashed #414868;margin-top:.9rem;padding-top:.2rem;scroll-margin-top:1rem}.context-panel h4,.evidence h4{margin-bottom:.25rem}.evidence-unavailable{border-left:.5rem solid #a66b12}.context-fallback,.empty{color:#a9b1d6}.claim-support-list{list-style-position:inside;padding:0}.table-scroll{overflow-x:auto;margin:1rem 0}.table-scroll:focus,.disposition-form :focus-visible,button:focus-visible{outline:2px solid #7aa2f7;outline-offset:2px}table{border-collapse:collapse;min-width:72rem;width:100%;background:#24283b}caption{text-align:left;font-weight:700;padding:.5rem 0}th,td{border:1px solid #414868;padding:.7rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}thead th{background:#2f354d}tbody th{min-width:14rem}td ul{margin:.1rem 0;padding-left:1.2rem}.disposition-form{border-top:1px solid #414868;margin-top:1rem;padding-top:1rem}.disposition-form:first-of-type{border-top:0;margin-top:0}.disposition-form fieldset{border:0;margin:0;padding:0}.disposition-options{display:flex;flex-wrap:wrap;gap:1rem}.disposition-options label{font-weight:700}.disposition-form textarea{box-sizing:border-box;display:block;min-height:5rem;max-width:48rem;width:100%}.disposition-actions{align-items:center;display:flex;flex-wrap:wrap;gap:.75rem;margin-top:.75rem}.disposition-status{font-weight:700}.model-provenance{color:#a9b1d6}</style></head><body><h1>${escapeHtml(bounded(document?.title, "Pi hindsight document", 160))}</h1><p>Claims label direct evidence separately from model-generated inference. Every material claim and recommendation links to embedded redacted source context, with flow and relationship-map context where available.</p><main><section aria-labelledby="story-heading"><h2 id="story-heading">Evidence-first story reading order</h2>${storyHtml}</section><section aria-labelledby="claims-heading"><h2 id="claims-heading">Claims</h2>${claimHtml}</section><section aria-labelledby="claim-support-heading"><h2 id="claim-support-heading">Claim-support validation</h2>${claimSupportHtml}</section><section aria-labelledby="recommendations-heading"><h2 id="recommendations-heading">Recommendations</h2>${recommendationHtml}</section>${outcomeHistoryPlaceholder}${feedbackPlaceholder}${priorOutcomeHtml}${userAuthoredNotesHtml}</main><section><h2>Evidence</h2>${evidenceHtml}</section>${storyFilterScript}${recommendations.length === 0 ? "" : dispositionScript}</body></html>`;
 }

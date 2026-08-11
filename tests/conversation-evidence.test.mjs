@@ -55,6 +55,62 @@ test("cited hindsight documents link claims to embedded redacted source, flow, a
   assert.throws(() => generateCitedHindsightDocumentHtml({ claims: [{ statement: "Model statement", classification: "model inference", evidenceReferences: ["event-1"] }], evidence: [{ reference: "event-1", context: "Context" }] }), /explicitly classified/);
 });
 
+test("evidence-first story steps render escaped chronological reading chips, keep a no-JS order, and locally filter inference", () => {
+  const html = generateCitedHindsightDocumentHtml({
+    title: "Story review",
+    claims: [],
+    storySteps: [
+      { title: "<img src=x onerror=alert(1)>", body: "Direct <script>alert(1)</script>", classification: "direct evidence", evidenceReferences: ["a/b"] },
+      { title: "Pivotal inference", body: "A follow-up may help.", classification: "inference", evidenceReferences: ["a?b"] },
+    ],
+    recommendations: [],
+    evidence: [{ reference: "a/b", context: "First redacted context" }, { reference: "a?b", context: "Second redacted context" }],
+  });
+  assert.match(html, /Evidence-first story reading order/);
+  assert.match(html, /Model-suggested evidence-first reading guide; story steps are not user-confirmed facts/);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(html, /Direct &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<img src=x onerror=alert\(1\)>|<script>alert\(1\)<\/script>/);
+  assert.match(html, /class="evidence-chip" href="#citation-1">a\/b<\/a>/);
+  assert.match(html, /class="evidence-chip" href="#citation-2">a\?b<\/a>/);
+  assert.match(html, /Inference · model-suggested interpretation/);
+  assert.match(html, /id="story-direct-evidence-filter" aria-pressed="false" aria-controls="story-reading-order"/);
+  assert.doesNotMatch(html, /<li[^>]*\shidden(?:[=>\s])/);
+  assert.ok(html.indexOf("&lt;img src=x") < html.indexOf("Pivotal inference"), "no-JS markup retains model reading order");
+  assert.match(html, /default-src 'none'/);
+
+  const script = html.match(/<script>(\(\(\) => \{[\s\S]*?\}\)\(\);)<\/script>/)?.[1];
+  assert.ok(script, "story filter is local inline behavior under the fixed CSP");
+  const button = { setAttribute(name, value) { this[name] = value; }, addEventListener(_event, listener) { this.listener = listener; } };
+  const status = {};
+  const steps = [{ dataset: { storyClassification: "direct evidence" } }, { dataset: { storyClassification: "inference" } }];
+  new Function("document", script)({
+    getElementById: (id) => id === "story-direct-evidence-filter" ? button : id === "story-filter-status" ? status : undefined,
+    querySelectorAll: () => steps,
+  });
+  button.listener();
+  assert.equal(button["aria-pressed"], "true");
+  assert.equal(steps[0].hidden, false);
+  assert.equal(steps[1].hidden, true);
+  assert.match(status.textContent, /direct-evidence story steps only/);
+  button.listener();
+  assert.equal(button["aria-pressed"], "false");
+  assert.equal(steps[1].hidden, false);
+});
+
+test("story-step runtime validation rejects malformed, uncited, duplicate, unavailable, and excluded citations", () => {
+  const base = { title: "Step", body: "Body", classification: "direct evidence", evidenceReferences: ["included"] };
+  const document = { claims: [], recommendations: [], evidence: [{ reference: "included", context: "Redacted" }] };
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, storySteps: [{ title: "Only a title" }] }), /Story step 1 is malformed/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, storySteps: [{ ...base, evidenceReferences: [] }] }), /cite between 1 and 3/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, storySteps: [{ ...base, evidenceReferences: ["included", "included"] }] }), /duplicate references/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, storySteps: [{ ...base, evidenceReferences: ["other"] }] }), /outside the included redacted source bundle/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({
+    ...document, evidence: [{ reference: "included", availability: "excluded", context: "Must not render" }], storySteps: [base],
+  }), /outside the included redacted source bundle/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, storySteps: [base, { ...base }] }), /duplicates an earlier story step/);
+});
+
 test("missing and excluded citations stay navigable with redaction-safe fallbacks", () => {
   const html = generateCitedHindsightDocumentHtml({
     claims: [

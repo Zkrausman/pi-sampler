@@ -238,6 +238,31 @@ test("safe hindsight recommendations reject missing, malformed, unconfirmed, or 
   assert.match(fallback, /No structured recommendations were supplied/);
 });
 
+test("optional story steps have a closed tool schema and reject unsafe citations before rendering", () => {
+  const writerSource = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
+  assert.match(writerSource, /storySteps: Type\.Optional\(Type\.Array\(Type\.Object\(\{[\s\S]*?title: Type\.String\(\{ minLength: 1, maxLength: 160 \}\),[\s\S]*?body: Type\.String\(\{ minLength: 1, maxLength: 2000 \}\),[\s\S]*?maxItems: 3 \}[\s\S]*?additionalProperties: false/s);
+  const sources = [{
+    events: [
+      { id: "one-event-1", summary: "First redacted excerpt", evidence: { reference: "one:event-0001" } },
+      { id: "one-event-2", summary: "Second redacted excerpt", evidence: { reference: "one:event-0002" } },
+    ],
+  }];
+  const validStep = { title: "Opening", body: "The first event starts the reviewed sequence.", classification: "direct evidence", evidenceReferences: ["one:event-0001"] };
+  const model = { claims: [], recommendations: [], storySteps: [validStep] };
+  const html = buildHindsightDocument(sources, model);
+  assert.match(html, /Evidence-first story reading order/);
+  assert.match(html, /Opening/);
+  assert.throws(() => buildHindsightDocument(sources, { ...model, storySteps: [{ ...validStep, evidenceReferences: [] }] }), /contain between 1 and 3 items/);
+  assert.throws(() => buildHindsightDocument(sources, { ...model, storySteps: [{ ...validStep, evidenceReferences: ["one:event-0001", "one:event-0001"] }] }), /duplicate references/);
+  assert.throws(() => buildHindsightDocument(sources, { ...model, storySteps: [{ ...validStep, evidenceReferences: ["one:event-0002", "one:event-0001", "one:event-0002", "one:event-0001"] }] }), /contain between 1 and 3 items/);
+  assert.throws(() => buildHindsightDocument(sources, { ...model, storySteps: [{ ...validStep, evidenceReferences: ["not-in-bundle"] }] }), /outside the selected redacted source bundle/);
+  assert.throws(() => buildHindsightDocument([{ reference: "excluded", excluded: true }], {
+    claims: [], recommendations: [], storySteps: [{ ...validStep, evidenceReferences: ["excluded:excluded"] }],
+  }), /outside the selected redacted source bundle/);
+  assert.throws(() => buildHindsightDocument(sources, { ...model, storySteps: [{ ...validStep, source: "user-confirmed" }] }), /Story step 1 is malformed/);
+  assert.throws(() => buildHindsightDocument(sources, { ...model, storySteps: [validStep, { ...validStep }] }), /duplicates an earlier story step/);
+});
+
 test("opt-in claim-support validation requires a complete, evidence-scoped model assessment", () => {
   const sources = [{
     events: [
@@ -312,6 +337,8 @@ test("synthesis prompt includes redacted flow and relationship-map context", () 
   const prompt = buildSynthesisPrompt([linked]);
   assert.match(prompt, /Do NOT write HTML/);
   assert.match(prompt, /hindsight_document_write/);
+  assert.match(prompt, /optional structured storySteps/);
+  assert.match(prompt, /notes, prior outcomes, feedback, or any other context as citations/);
   assert.match(prompt, /one:event-0001/);
   assert.match(prompt, /"flowContext":"user · 2025-01-01 · First"/);
   assert.match(prompt, /"mapContext":"parent entry → one:event-0002"/);
