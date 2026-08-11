@@ -1,5 +1,6 @@
 import { escapeHtml } from "./catalog.mjs";
 import { renderHindsightOutcomeHistoryHtml } from "./hindsight-outcomes.mjs";
+import { createHindsightFeedbackMetadata, renderHindsightFeedbackHtml } from "./hindsight-feedback.mjs";
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -89,20 +90,32 @@ function normalizedRecommendations(document) {
   });
 }
 
-function dispositionReportId(recommendations) {
-  // This opaque, deterministic identifier stays local to the report. It is
-  // derived from already-approved report content but never exposes it in a key.
+function normalizedReportIdentityClaims(document) {
+  const claims = Array.isArray(document?.claims) ? document.claims : [];
+  return claims.map((claim, index) => {
+    const statement = bounded(claim?.statement, "", 2000);
+    const classification = text(claim?.classification);
+    const references = [...new Set((Array.isArray(claim?.evidenceReferences) ? claim.evidenceReferences : claim?.references || []).map(text))];
+    if (!statement || !["direct evidence", "inference"].includes(classification) || references.length === 0 || references.some((reference) => !reference)) {
+      throw new Error(`Claim ${index + 1} does not meet the report identity contract.`);
+    }
+    return { statement, classification, references, validationExcluded: claim?.validationExcluded === true };
+  });
+}
+
+function dispositionReportId(recommendations, claims) {
+  // This opaque, deterministic identifier stays local to the report. Its scope
+  // includes every current material claim and recommendation, so a report with
+  // no recommendations cannot collapse into a shared constant identity.
   let hash = 2166136261;
-  // Include the complete normalized recommendation so a material model update
-  // receives a fresh local-storage namespace rather than inherited decisions.
-  for (const character of JSON.stringify(recommendations)) {
+  for (const character of JSON.stringify({ claims, recommendations })) {
     hash ^= character.codePointAt(0);
     hash = Math.imul(hash, 16777619);
   }
   return `hindsight-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-function dispositionMetadata(recommendations) {
+function dispositionMetadata(recommendations, claims = []) {
   return {
     // Version 2 keeps the immutable, already-validated model work fields with
     // the local user decision. This makes an exported decision self-contained
@@ -110,7 +123,7 @@ function dispositionMetadata(recommendations) {
     // capability to this report.
     schemaVersion: 2,
     kind: "pi-hindsight-recommendation-dispositions",
-    reportId: dispositionReportId(recommendations),
+    reportId: dispositionReportId(recommendations, claims),
     provenance: {
       modelSuggestions: "model-suggestion",
       userDispositions: "not-user-confirmed",
@@ -138,7 +151,7 @@ function dispositionMetadata(recommendations) {
  * the safe recommendation validation so callers cannot persist arbitrary data.
  */
 export function createHindsightRecommendationDispositionMetadata(document) {
-  return dispositionMetadata(normalizedRecommendations(document));
+  return dispositionMetadata(normalizedRecommendations(document), normalizedReportIdentityClaims(document));
 }
 
 function scriptJson(value) {
@@ -210,7 +223,22 @@ export function generateCitedHindsightDocumentHtml(document) {
     return { statement, classification, references, validationExcluded: claim?.validationExcluded === true };
   });
   const recommendations = normalizedRecommendations(document);
-  const recommendationDispositionMetadata = dispositionMetadata(recommendations);
+  const recommendationDispositionMetadata = dispositionMetadata(recommendations, normalizedClaims);
+  // Feedback identities are hashes of the stable rendered claim/recommendation
+  // contract plus pseudonymous citations, never source excerpts or raw sessions.
+  // Generic renderer callers may use synthetic citations outside the durable
+  // feedback contract. Real synthesis accepts only pseudonymous citations; a
+  // generic preview remains renderable but deliberately has no feedback seed.
+  let feedbackMetadata;
+  try {
+    feedbackMetadata = createHindsightFeedbackMetadata({
+      reportId: recommendationDispositionMetadata.reportId,
+      claims: normalizedClaims.map((claim) => ({ ...claim, evidenceReferences: claim.references })),
+      recommendations: recommendations.map((recommendation) => ({ ...recommendation, evidenceReferences: recommendation.references })),
+    });
+  } catch {
+    feedbackMetadata = undefined;
+  }
   const claimSupportValidation = normalizedClaimSupportValidation(document, normalizedClaims);
   // Prior outcomes enter only through an explicit, separately validated caller
   // path. They are rendered as user context and never join the evidence index.
@@ -258,6 +286,7 @@ export function generateCitedHindsightDocumentHtml(document) {
   // workflow. It keeps history inspectable in this report without giving the
   // browser or the model filesystem/network access.
   const outcomeHistoryPlaceholder = '<!-- pi-hindsight-outcomes:start --><section class="hindsight-outcomes" aria-labelledby="hindsight-outcomes-heading"><h2 id="hindsight-outcomes-heading">User-observed outcome history</h2><p class="empty" role="status">No local outcome history has been recorded for this report.</p></section><!-- pi-hindsight-outcomes:end -->';
+  const feedbackPlaceholder = `<!-- pi-hindsight-feedback:start -->${feedbackMetadata ? renderHindsightFeedbackHtml(feedbackMetadata) : '<section class="hindsight-feedback" aria-labelledby="hindsight-feedback-heading"><h2 id="hindsight-feedback-heading">Local feedback and calibration signals</h2><p class="empty" role="status">Local feedback is unavailable because this preview has no durable pseudonymous feedback identity.</p></section>'}<!-- pi-hindsight-feedback:end -->`;
   const claimSupportHtml = !claimSupportValidation
     ? '<p class="empty" role="status">Claim-support validation was not requested.</p>'
     : claimSupportValidation.length === 0
@@ -336,5 +365,5 @@ export function generateCitedHindsightDocumentHtml(document) {
       exportStatus.textContent = "Disposition metadata exported locally.";
     });
   })();</script>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Pi hindsight document</title><style>:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#1a1b26;color:#c0caf5}body{margin:0 auto;max-width:80rem;padding:2rem;line-height:1.45}.claim,.evidence,.claim-support-list li,.disposition-panel,.disposition-export{background:#24283b;border:1px solid #414868;border-radius:.5rem;margin:1rem 0;padding:1rem}.claim-inference{border-left:.5rem solid #a66b12}.claim-direct-evidence{border-left:.5rem solid #2c78c4}.classification,.provenance{font-size:.85rem;font-weight:700;text-transform:capitalize}.citations a{font-weight:700}.context{white-space:pre-wrap;overflow-wrap:anywhere}.context-panel{border-top:1px dashed #414868;margin-top:.9rem;padding-top:.2rem;scroll-margin-top:1rem}.context-panel h4,.evidence h4{margin-bottom:.25rem}.evidence-unavailable{border-left:.5rem solid #a66b12}.context-fallback,.empty{color:#a9b1d6}.claim-support-list{list-style-position:inside;padding:0}.table-scroll{overflow-x:auto;margin:1rem 0}.table-scroll:focus,.disposition-form :focus-visible,button:focus-visible{outline:2px solid #7aa2f7;outline-offset:2px}table{border-collapse:collapse;min-width:72rem;width:100%;background:#24283b}caption{text-align:left;font-weight:700;padding:.5rem 0}th,td{border:1px solid #414868;padding:.7rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}thead th{background:#2f354d}tbody th{min-width:14rem}td ul{margin:.1rem 0;padding-left:1.2rem}.disposition-form{border-top:1px solid #414868;margin-top:1rem;padding-top:1rem}.disposition-form:first-of-type{border-top:0;margin-top:0}.disposition-form fieldset{border:0;margin:0;padding:0}.disposition-options{display:flex;flex-wrap:wrap;gap:1rem}.disposition-options label{font-weight:700}.disposition-form textarea{box-sizing:border-box;display:block;min-height:5rem;max-width:48rem;width:100%}.disposition-actions{align-items:center;display:flex;flex-wrap:wrap;gap:.75rem;margin-top:.75rem}.disposition-status{font-weight:700}.model-provenance{color:#a9b1d6}</style></head><body><h1>${escapeHtml(bounded(document?.title, "Pi hindsight document", 160))}</h1><p>Claims label direct evidence separately from model-generated inference. Every material claim and recommendation links to embedded redacted source context, with flow and relationship-map context where available.</p><main><section aria-labelledby="claims-heading"><h2 id="claims-heading">Claims</h2>${claimHtml}</section><section aria-labelledby="claim-support-heading"><h2 id="claim-support-heading">Claim-support validation</h2>${claimSupportHtml}</section><section aria-labelledby="recommendations-heading"><h2 id="recommendations-heading">Recommendations</h2>${recommendationHtml}</section>${outcomeHistoryPlaceholder}${priorOutcomeHtml}</main><section><h2>Evidence</h2>${evidenceHtml}</section>${recommendations.length === 0 ? "" : dispositionScript}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Pi hindsight document</title><style>:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#1a1b26;color:#c0caf5}body{margin:0 auto;max-width:80rem;padding:2rem;line-height:1.45}.claim,.evidence,.claim-support-list li,.disposition-panel,.disposition-export{background:#24283b;border:1px solid #414868;border-radius:.5rem;margin:1rem 0;padding:1rem}.claim-inference{border-left:.5rem solid #a66b12}.claim-direct-evidence{border-left:.5rem solid #2c78c4}.classification,.provenance{font-size:.85rem;font-weight:700;text-transform:capitalize}.citations a{font-weight:700}.context{white-space:pre-wrap;overflow-wrap:anywhere}.context-panel{border-top:1px dashed #414868;margin-top:.9rem;padding-top:.2rem;scroll-margin-top:1rem}.context-panel h4,.evidence h4{margin-bottom:.25rem}.evidence-unavailable{border-left:.5rem solid #a66b12}.context-fallback,.empty{color:#a9b1d6}.claim-support-list{list-style-position:inside;padding:0}.table-scroll{overflow-x:auto;margin:1rem 0}.table-scroll:focus,.disposition-form :focus-visible,button:focus-visible{outline:2px solid #7aa2f7;outline-offset:2px}table{border-collapse:collapse;min-width:72rem;width:100%;background:#24283b}caption{text-align:left;font-weight:700;padding:.5rem 0}th,td{border:1px solid #414868;padding:.7rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}thead th{background:#2f354d}tbody th{min-width:14rem}td ul{margin:.1rem 0;padding-left:1.2rem}.disposition-form{border-top:1px solid #414868;margin-top:1rem;padding-top:1rem}.disposition-form:first-of-type{border-top:0;margin-top:0}.disposition-form fieldset{border:0;margin:0;padding:0}.disposition-options{display:flex;flex-wrap:wrap;gap:1rem}.disposition-options label{font-weight:700}.disposition-form textarea{box-sizing:border-box;display:block;min-height:5rem;max-width:48rem;width:100%}.disposition-actions{align-items:center;display:flex;flex-wrap:wrap;gap:.75rem;margin-top:.75rem}.disposition-status{font-weight:700}.model-provenance{color:#a9b1d6}</style></head><body><h1>${escapeHtml(bounded(document?.title, "Pi hindsight document", 160))}</h1><p>Claims label direct evidence separately from model-generated inference. Every material claim and recommendation links to embedded redacted source context, with flow and relationship-map context where available.</p><main><section aria-labelledby="claims-heading"><h2 id="claims-heading">Claims</h2>${claimHtml}</section><section aria-labelledby="claim-support-heading"><h2 id="claim-support-heading">Claim-support validation</h2>${claimSupportHtml}</section><section aria-labelledby="recommendations-heading"><h2 id="recommendations-heading">Recommendations</h2>${recommendationHtml}</section>${outcomeHistoryPlaceholder}${feedbackPlaceholder}${priorOutcomeHtml}</main><section><h2>Evidence</h2>${evidenceHtml}</section>${recommendations.length === 0 ? "" : dispositionScript}</body></html>`;
 }

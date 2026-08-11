@@ -11,6 +11,7 @@ import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthes
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkBacklinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
 import { HindsightOutcomeError, createHindsightOutcomeOrigin, hindsightReportPathForDispositionPath, outcomeHistoryPathForDispositionPath, outcomeHistoryReportPathForDispositionPath, readHindsightOutcomeHistory, recordHindsightOutcomeUpdate } from "./hindsight-outcomes.mjs";
+import { HindsightFeedbackError, createHindsightFeedbackMetadata, feedbackPathForDispositionPath, feedbackReportPathForDispositionPath, readHindsightFeedback, recordHindsightFeedback, refreshHindsightFeedbackViews, writeHindsightFeedbackSeed } from "./hindsight-feedback.mjs";
 import { HindsightLinearAdapter, createRequestPreview, linkLookupRequestPreview } from "./hindsight-linear-adapter.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
@@ -63,23 +64,34 @@ function hindsightDispositionMetadataPath(outputPath: string) {
   return outputPath.replace(/\.html$/i, ".dispositions.json");
 }
 
-async function writeHindsightReport(outputPath: string, html: string, recommendationDocument: { recommendations: unknown[] }) {
+async function writeHindsightReport(outputPath: string, html: string, reportDocument: { claims: unknown[]; recommendations: unknown[] }) {
   const dispositionPath = hindsightDispositionMetadataPath(outputPath);
+  const feedbackPath = feedbackPathForDispositionPath(dispositionPath);
   const temporaryDispositionPath = `${dispositionPath}.${randomUUID()}.tmp`;
-  const metadata = createHindsightRecommendationDispositionMetadata(recommendationDocument);
+  const metadata = createHindsightRecommendationDispositionMetadata(reportDocument);
+  const feedbackSeed = createHindsightFeedbackMetadata({ reportId: metadata.reportId, ...reportDocument });
   await mkdir(dirname(outputPath), { recursive: true });
-  // Stage the replacement seed first, but do not replace an existing seed until
+  // Stage the disposition seed first, but do not replace an existing seed until
   // the report itself has written. A failed HTML write therefore leaves the
-  // prior local disposition record intact.
+  // prior local disposition and feedback records intact.
   await writeFile(temporaryDispositionPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
   try {
     await writeFile(outputPath, html, "utf8");
     await rename(temporaryDispositionPath, dispositionPath);
+    // Matching report identities retain prior entries by immutable target hash;
+    // unrelated report edits cannot detach local feedback from its target.
+    await writeHindsightFeedbackSeed(feedbackPath, feedbackSeed);
+    await refreshHindsightFeedbackViews(feedbackPath, {
+      reportPath: outputPath,
+      feedbackReportPath: feedbackReportPathForDispositionPath(dispositionPath),
+      dispositionPath,
+      outcomePath: outcomeHistoryPathForDispositionPath(dispositionPath),
+    });
   } catch (error) {
     await rm(temporaryDispositionPath, { force: true }).catch(() => undefined);
     throw error;
   }
-  return dispositionPath;
+  return { dispositionPath, feedbackPath };
 }
 
 function pickerDescription(value: unknown) {
@@ -153,6 +165,25 @@ function hindsightOutcomeErrorMessage(error: unknown) {
     confirmation_required: "Hindsight outcome update canceled.",
   };
   return messages[code] || "Unable to record the local hindsight outcome update.";
+}
+
+function hindsightFeedbackErrorMessage(error: unknown) {
+  const code = error instanceof HindsightFeedbackError ? error.code : "operation_failed";
+  const messages: Record<string, string> = {
+    ui_required: "Hindsight feedback requires Pi's interactive UI.",
+    invalid_feedback_path: "Use a report companion path ending in .dispositions.json.",
+    feedback_missing: "The local feedback metadata is missing. Regenerate the report before recording feedback.",
+    malformed_feedback: "The local feedback metadata is malformed, unsupported, or too old; it was not changed.",
+    invalid_feedback_target: "The report does not expose a valid claim or recommendation feedback target.",
+    unsafe_feedback_text: "Corrected framing must not include raw session identifiers or credentials; it was not saved.",
+    aggregate_metadata_malformed: "Associated local disposition or outcome metadata is malformed or unsupported; feedback was not changed.",
+    aggregate_metadata_mismatch: "Associated local aggregate metadata belongs to a different report; feedback was not changed.",
+    feedback_report_marker_missing: "The generated hindsight report has no safe feedback placeholder; feedback was not changed.",
+    feedback_report_refresh_failed: "The local feedback JSON was recorded, but its inspectable calibration views could not be refreshed. Do not retry solely for rendering.",
+    feedback_lock_timeout: "Another local feedback update is still in progress; no change was made.",
+    confirmation_required: "Hindsight feedback canceled.",
+  };
+  return messages[code] || "Unable to record local hindsight feedback.";
 }
 
 function isTrustedProject(ctx: any) {
@@ -262,10 +293,10 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           return { content: [{ type: "text", text: validationPrompt }] };
         }
         const html = buildHindsightDocument(pendingHindsight.sources, params, undefined, pendingHindsight.priorOutcomes);
-        const dispositionPath = await writeHindsightReport(pendingHindsight.outputPath, html, { recommendations: params.recommendations });
+        const paths = await writeHindsightReport(pendingHindsight.outputPath, html, { claims: params.claims, recommendations: params.recommendations });
         const outputPath = pendingHindsight.outputPath;
         // Keep the pending state until agent_settled restores the original tool set.
-        return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}. Model-suggestion disposition seed written locally to ${dispositionPath}.` }] };
+        return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}. Model-suggestion disposition seed written locally to ${paths.dispositionPath}. Local feedback seed written to ${paths.feedbackPath}.` }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? `Unable to write hindsight document: ${error.message}` : "Unable to write hindsight document." }] };
       }
@@ -297,9 +328,9 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       }
       try {
         const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params, pendingHindsight.priorOutcomes);
-        const dispositionPath = await writeHindsightReport(pendingHindsight.outputPath, html, { recommendations: pendingHindsight.modelOutput.recommendations });
+        const paths = await writeHindsightReport(pendingHindsight.outputPath, html, { claims: pendingHindsight.modelOutput.claims, recommendations: pendingHindsight.modelOutput.recommendations });
         const outputPath = pendingHindsight.outputPath;
-        return { content: [{ type: "text", text: `Hindsight document with claim-support validation written to ${outputPath}. Model-suggestion disposition seed written locally to ${dispositionPath}.` }] };
+        return { content: [{ type: "text", text: `Hindsight document with claim-support validation written to ${outputPath}. Model-suggestion disposition seed written locally to ${paths.dispositionPath}. Local feedback seed written to ${paths.feedbackPath}.` }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? `Unable to validate hindsight claim support: ${error.message}` : "Unable to validate hindsight claim support." }] };
       }
@@ -513,6 +544,43 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         ctx.ui.notify(`Local outcome update recorded in ${outcomesPath}. Inspectable history refreshed in ${reportPath} and ${outcomeReportPath}.`, "info");
       } catch (error: any) {
         ctx.ui.notify(error?.message === "Hindsight outcome update canceled." ? "Hindsight outcome update canceled." : hindsightOutcomeErrorMessage(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("hindsight-feedback", {
+    description: "Record local user feedback on one stable hindsight claim or recommendation",
+    async handler(args, ctx) {
+      try {
+        if (!ctx.hasUI || typeof ctx.ui.input !== "function") throw new HindsightFeedbackError("ui_required");
+        const input = args.trim();
+        if (!input || input.includes("\0")) throw new HindsightFeedbackError("invalid_feedback_path");
+        const dispositionPath = resolve(ctx.cwd, input);
+        const feedbackPath = feedbackPathForDispositionPath(dispositionPath);
+        const feedbackReportPath = feedbackReportPathForDispositionPath(dispositionPath);
+        const reportPath = hindsightReportPathForDispositionPath(dispositionPath);
+        const outcomePath = outcomeHistoryPathForDispositionPath(dispositionPath);
+        const store = await readHindsightFeedback(feedbackPath);
+        if (!store) throw new HindsightFeedbackError("feedback_missing");
+        const options = ["Cancel", ...store.targets.map((target) => `${target.type === "claim" ? "Claim" : "Recommendation"} ${target.targetId.slice(target.type.length + 1)} · ${target.evidenceReferences.join(", ")}`)];
+        const selectedLabel = await ctx.ui.select("Select one stable report claim or recommendation", options);
+        if (!selectedLabel || selectedLabel === "Cancel") throw new HindsightFeedbackError("confirmation_required");
+        const target = store.targets[options.indexOf(selectedLabel) - 1];
+        if (!target) throw new HindsightFeedbackError("invalid_feedback_target");
+        const classification = await ctx.ui.select("How was this report item for you?", ["helpful", "incorrect", "overstated", "incomplete", "not-actionable", "Cancel"]);
+        if (!classification || classification === "Cancel") throw new HindsightFeedbackError("confirmation_required");
+        const correctedFraming = await ctx.ui.input("Optional corrected framing", "Optional: describe a correction or what would make this actionable. Do not paste session logs or credentials; leave blank to skip.");
+        if (correctedFraming === undefined) throw new HindsightFeedbackError("confirmation_required");
+        const confirmed = await ctx.ui.confirm("Final confirmation: save local feedback", "This records user-provided local feedback against only this report identity and its pseudonymous citations. It makes no network request, does not read or modify session logs, and is never model evidence or prompt input. Save this feedback?");
+        if (confirmed !== true) throw new HindsightFeedbackError("confirmation_required");
+        await recordHindsightFeedback(feedbackPath, target.targetId, {
+          classification,
+          correctedFraming,
+          provenance: { source: "user-feedback", confirmation: "user-confirmed", recordedAt: new Date().toISOString() },
+        }, { reportPath, feedbackReportPath, dispositionPath, outcomePath });
+        ctx.ui.notify(`Local feedback recorded in ${feedbackPath}. User-provided calibration signals refreshed in ${reportPath} and ${feedbackReportPath}.`, "info");
+      } catch (error) {
+        ctx.ui.notify(hindsightFeedbackErrorMessage(error), "error");
       }
     },
   });

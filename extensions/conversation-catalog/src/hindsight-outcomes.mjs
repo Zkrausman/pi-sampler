@@ -274,6 +274,15 @@ export async function withHindsightOutcomeLock(path, operation) {
   }
 }
 
+/**
+ * Coordinates in-place updates to either bounded report panel. Feedback and
+ * outcomes have independent JSON stores, but both read/replace the same HTML.
+ */
+export async function withHindsightReportRefreshLock(reportPath, operation) {
+  if (typeof reportPath !== "string" || !reportPath || reportPath.includes("\0")) throw new HindsightOutcomeError("invalid_disposition_path");
+  return withHindsightOutcomeLock(reportPath, operation);
+}
+
 async function appendHindsightOutcomeUpdateUnlocked(path, origin, update) {
   const expectedOrigin = normalizeOrigin(origin, "accepted_recommendation_required");
   const existing = await readHindsightOutcomeHistory(path);
@@ -355,7 +364,7 @@ export async function recordHindsightOutcomeUpdate(path, origin, update, { repor
     const store = await appendHindsightOutcomeUpdateUnlocked(path, origin, update);
     try {
       await writeHindsightOutcomeHistoryReport(outcomeReportPath, store);
-      await refreshHindsightReportOutcomeHistory(reportPath, store);
+      await withHindsightReportRefreshLock(reportPath, () => refreshHindsightReportOutcomeHistory(reportPath, store));
     } catch {
       // JSON is the durable source of truth after the append; never imply a
       // retry is safe merely because an inspectable HTML refresh failed.

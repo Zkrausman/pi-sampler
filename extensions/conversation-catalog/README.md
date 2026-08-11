@@ -43,6 +43,7 @@ In Pi, run:
 /conversation-flow <session-id> [output-path]
 /hindsight-document [--validate-claim-support] [--prior-outcomes <report.outcomes.json>] [output-path]
 /hindsight-outcome <report.dispositions.json>
+/hindsight-feedback <report.dispositions.json>
 /hindsight-work <report.dispositions.json>
 ```
 
@@ -113,6 +114,42 @@ immutable validated model work fields (priority, impact, owner text,
 dependencies, and acceptance criteria) beside its model provenance and
 pseudonymous citations. Older exports lack those fields and cannot be used for
 external work creation; the extension will reject rather than infer them.
+
+### Local feedback and calibration signals
+
+`/hindsight-feedback <report.dispositions.json>` is an interactive, local-only
+review workflow for one stable generated **claim** or **recommendation**. It
+records exactly one user classification (`helpful`, `incorrect`, `overstated`,
+`incomplete`, or `not-actionable`) and an optional corrected framing after a
+final confirmation. The command accepts only the generated report companion
+path, then binds the record to the report identity, a stable digest-backed item
+identity, and the item's available pseudonymous citations. It never accepts
+raw session IDs, source excerpts, or credentials, and it does not read or
+modify a Pi session log.
+
+The append-only, schema-version-1 `<report>.feedback.json` store is the durable
+local export. It persists model-item provenance separately from
+`user-feedback · user-confirmed` records, contains no claim/recommendation
+source text, and uses a cross-process lock plus atomic replacement. A matching
+report scope retains feedback by stable target identity; changing or removing a
+claim or recommendation produces a new report identity, so stale targets are
+not selectable. The workflow refreshes the originating
+report's bounded calibration panel and an escaped, CSP-restricted
+`<report>.feedback.html` inspection companion. If a view refresh fails after
+the JSON append, the JSON remains the source of truth and Pi reports that
+limited failure.
+
+Those panels show only **user-provided/local operational signals**: feedback
+classification and corrected-framing rates (with explicit count/denominator);
+valid local user disposition acceptance/defer/reject rates when an exported
+disposition file is present; recorded outcome status rates when a valid local
+outcome store is present; and current accepted-recommendation-origin outcome
+coverage (only current accepted origins are in both numerator and denominator).
+Zero denominators render as `0/0 (0%)` rather
+than implying a model-derived result.
+They are not model evidence, citations, or automatic prompt input. Feedback
+and aggregates are never sent to the model or added to generated claims or
+citations, and the workflow makes no network request.
 
 ### Create or link accepted hindsight work
 
