@@ -13,8 +13,8 @@ async function loadExtensionCore() {
   let extension = readFileSync(join(root, "src/extensions/pi-excalidraw/index.ts"), "utf8");
   extension = extension.replace(/import type \{ ExtensionAPI \}[^\n]+\n/, "type ExtensionAPI = { registerTool: (tool: unknown) => void };\n");
   extension = extension.replace(/import \{ withFileMutationQueue \}[^\n]+\n/, "const withFileMutationQueue = async (_path, fn) => fn();\n");
-  extension = extension.replace(/import \{ Type \} from "typebox";\n/, "const Type = { Object: (x) => x, String: () => ({}), Optional: (x) => x };\n");
-  extension = extension.replace(/import \{ type Diagram, writeExcalidrawScene \} from "\.\.\/excalidraw\/generator";\n/, "");
+  extension = extension.replace(/import \{ Type \} from "typebox";\r?\n/, "const Type = { Object: (x) => x, String: () => ({}), Optional: (x) => x };\n");
+  extension = extension.replace(/import[^\n]+from "\.\.\/excalidraw\/generator";\r?\n/, "");
   const source = `${generator}\n${extension}`;
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 }, fileName: "pi-excalidraw.ts" }).outputText;
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
