@@ -83,6 +83,15 @@ const validateHindsightWorkContext = ({ hasUI, trusted }) => { if (!hasUI) throw
 const workLinkKey = () => "key";
 const workLinksPathForDispositionPath = (path) => path.replace(".dispositions.json", ".work-links.json");
 const writeHindsightWorkLink = async () => { globalThis.__hindsightWriteCalls = (globalThis.__hindsightWriteCalls || 0) + 1; };
+class HindsightFeedbackError extends Error { constructor(code) { super(code); this.code = code; } }
+const createHindsightFeedbackMetadata = () => ({ schemaVersion: 1, reportId: "hindsight-1234abcd", targets: [], feedback: [] });
+const feedbackPathForDispositionPath = (path) => path.replace(".dispositions.json", ".feedback.json");
+const feedbackReportPathForDispositionPath = (path) => path.replace(".dispositions.json", ".feedback.html");
+const readHindsightFeedback = async () => undefined;
+const writeHindsightFeedbackSeed = async (path, seed) => { globalThis.__hindsightFiles.set(path, JSON.stringify(seed)); };
+const refreshHindsightFeedbackViews = async () => {};
+const recordHindsightFeedback = async () => {};
+const outcomeHistoryPathForDispositionPath = (path) => path.replace(".dispositions.json", ".outcomes.json");
 class HindsightLinearAdapter {
   async createIssue() { globalThis.__hindsightCreateCalls = (globalThis.__hindsightCreateCalls || 0) + 1; return { id: "issue_1", url: "https://linear.app/acme/issue/ABC-1", status: "Todo" }; }
   async resolveIssue() { globalThis.__hindsightResolveCalls = (globalThis.__hindsightResolveCalls || 0) + 1; return { id: "issue_1", url: "https://linear.app/acme/issue/ABC-1", status: "Todo" }; }
