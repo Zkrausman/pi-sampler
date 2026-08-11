@@ -1,11 +1,13 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
 import { attachEvidenceReferences, createEvidenceManifest } from "./evidence.mjs";
 import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
-import { buildSynthesisPrompt } from "./synthesis.mjs";
+import { buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
+import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
 const DEFAULT_FILENAME = "pi-conversation-catalog.html";
@@ -83,6 +85,46 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
 
 /** A read-only catalog of Pi session metadata and an opt-in historical flow viewer. */
 export default function conversationCatalog(pi: ExtensionAPI) {
+  let pendingHindsight: { sources: any[]; outputPath: string; restoreTools: () => void } | undefined;
+
+  // Keep every direct write-capable session tool disabled until the model run
+  // settles, including any follow-up turn after the safe tool returns.
+  pi.on("agent_settled", () => {
+    const pending = pendingHindsight;
+    if (!pending) return;
+    pendingHindsight = undefined;
+    pending.restoreTools();
+  });
+
+  pi.registerTool({
+    name: "hindsight_document_write",
+    label: "Write safe hindsight document",
+    description: "Writes the requested hindsight report through its safe HTML citation contract. Use this instead of writing hindsight HTML directly.",
+    parameters: Type.Object({
+      title: Type.Optional(Type.String({ maxLength: 160 })),
+      claims: Type.Array(Type.Object({
+        statement: Type.String({ maxLength: 2000 }),
+        classification: Type.Union([Type.Literal("direct evidence"), Type.Literal("inference")]),
+        evidenceReferences: Type.Array(Type.String({ maxLength: 100 }), { minItems: 1, maxItems: 20 }),
+      }), { maxItems: 80 }),
+    }),
+    async execute(_toolCallId, params) {
+      if (!pendingHindsight) {
+        return { content: [{ type: "text", text: "No hindsight document is awaiting generation." }] };
+      }
+      try {
+        const html = buildHindsightDocument(pendingHindsight.sources, params);
+        await mkdir(dirname(pendingHindsight.outputPath), { recursive: true });
+        await writeFile(pendingHindsight.outputPath, html, "utf8");
+        const outputPath = pendingHindsight.outputPath;
+        // Keep the pending state until agent_settled restores the original tool set.
+        return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}.` }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: error instanceof Error ? `Unable to write hindsight document: ${error.message}` : "Unable to write hindsight document." }] };
+      }
+    },
+  });
+
   pi.registerCommand("conversation-catalog", {
     description: "Write a standalone HTML catalog of saved Pi sessions",
     async handler(args, ctx) {
@@ -211,15 +253,29 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const sources = [];
         for (const session of selected) {
           const projection = projectConversation((await SessionManager.open(session.path)).getEntries());
-          const review = await reviewRedactionChoices(ctx, findSensitiveContent(projection, patterns));
-          if (review.excluded) continue;
+          const findings = findSensitiveContent(projection, patterns);
+          const review = await reviewRedactionChoices(ctx, findings);
           const reference = pseudonymizeSession(session);
-          sources.push({ events: attachEvidenceReferences(reference, redactProjection(projection, findSensitiveContent(projection, patterns), review.decisions)).events });
+          if (review.excluded) {
+            // Keep a local pseudonym so the generated report can link to an explicit
+            // redaction-review fallback without retaining any conversation content.
+            sources.push({ reference, excluded: true });
+            continue;
+          }
+          const cited = attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions));
+          sources.push({ reference, events: cited.events, edges: cited.edges });
         }
         const outputPath = resolveOutputPath(args, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
-        await mkdir(dirname(outputPath), { recursive: true });
-        pi.sendUserMessage(buildSynthesisPrompt(sources, outputPath));
-        ctx.ui.notify(`Redacted evidence submitted to the active model. It will write the hindsight document to ${outputPath}.`, "info");
+        const restoreTools = restrictToolsForHindsightSynthesis(pi);
+        try {
+          pendingHindsight = { sources, outputPath, restoreTools };
+          pi.sendUserMessage(buildSynthesisPrompt(sources));
+        } catch (error) {
+          pendingHindsight = undefined;
+          restoreTools();
+          throw error;
+        }
+        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.`, "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
     },
   });
