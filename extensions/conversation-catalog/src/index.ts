@@ -10,7 +10,7 @@ import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
 import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkBacklinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
-import { HindsightOutcomeError, appendHindsightOutcomeUpdate, createHindsightOutcomeOrigin, hindsightReportPathForDispositionPath, outcomeHistoryPathForDispositionPath, outcomeHistoryReportPathForDispositionPath, readHindsightOutcomeHistory, refreshHindsightReportOutcomeHistory, withHindsightOutcomeLock, writeHindsightOutcomeHistoryReport } from "./hindsight-outcomes.mjs";
+import { HindsightOutcomeError, createHindsightOutcomeOrigin, hindsightReportPathForDispositionPath, outcomeHistoryPathForDispositionPath, outcomeHistoryReportPathForDispositionPath, readHindsightOutcomeHistory, recordHindsightOutcomeUpdate } from "./hindsight-outcomes.mjs";
 import { HindsightLinearAdapter, createRequestPreview, linkLookupRequestPreview } from "./hindsight-linear-adapter.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
@@ -148,6 +148,8 @@ function hindsightOutcomeErrorMessage(error: unknown) {
     outcome_origin_mismatch: "The outcome history belongs to a different immutable recommendation; it was not changed.",
     outcome_history_missing: "No outcome history exists at the supplied path.",
     outcome_report_marker_missing: "The generated hindsight report has no safe outcome-history placeholder; the JSON record was not changed.",
+    outcome_report_refresh_failed: "The local outcome JSON was recorded, but its inspectable HTML history could not be fully refreshed. Do not retry solely for the report refresh.",
+    outcome_lock_timeout: "Another local outcome update is still in progress; no change was made.",
     confirmation_required: "Hindsight outcome update canceled.",
   };
   return messages[code] || "Unable to record the local hindsight outcome update.";
@@ -446,7 +448,9 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
         try {
           pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, priorOutcomes, phase: "draft" };
-          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport, priorOutcomes }));
+          // Prior outcomes remain in pending state for safe post-model rendering;
+          // they are deliberately never placed in a model synthesis prompt.
+          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport }));
         } catch (error) {
           pendingHindsight = undefined;
           restoreTools();
@@ -505,16 +509,8 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         };
         const confirmed = await ctx.ui.confirm("Final confirmation: save local outcome update", "This appends a user-observed/user-confirmed local outcome record. It makes no network request, does not read or modify session logs, and labels the text as context rather than source evidence. Save this update?");
         if (confirmed !== true) throw new HindsightOutcomeError("confirmation_required");
-        const history = await withHindsightOutcomeLock(outcomesPath, () => appendHindsightOutcomeUpdate(outcomesPath, origin, update));
-        try {
-          await Promise.all([
-            writeHindsightOutcomeHistoryReport(outcomeReportPath, history),
-            refreshHindsightReportOutcomeHistory(reportPath, history),
-          ]);
-          ctx.ui.notify(`Local outcome update recorded in ${outcomesPath}. Inspectable history refreshed in ${reportPath} and ${outcomeReportPath}.`, "info");
-        } catch {
-          ctx.ui.notify(`Local outcome update recorded in ${outcomesPath}, but its inspectable HTML history could not be fully refreshed. The JSON record remains intact.`, "error");
-        }
+        await recordHindsightOutcomeUpdate(outcomesPath, origin, update, { reportPath, outcomeReportPath });
+        ctx.ui.notify(`Local outcome update recorded in ${outcomesPath}. Inspectable history refreshed in ${reportPath} and ${outcomeReportPath}.`, "info");
       } catch (error: any) {
         ctx.ui.notify(error?.message === "Hindsight outcome update canceled." ? "Hindsight outcome update canceled." : hindsightOutcomeErrorMessage(error), "error");
       }

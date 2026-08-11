@@ -163,15 +163,17 @@ decision. The final confirmation fixes provenance as
 `user-observed · user-confirmed`; the workflow never treats the text as model
 inference.
 
-Each append-only, schema-version-1 `<report>.outcomes.json` record carries an
-immutable origin (report ID, recommendation number, SHA-256 digest of the
-validated model suggestion, and its pseudonymous citations). If the existing
-local `<report>.work-links.json` has the same origin key, the outcome update
-copies that validated work-link snapshot. It makes no network request, does not
+Each append-only, schema-version-2 `<report>.outcomes.json` store indexes every
+accepted recommendation by its immutable origin (report ID, recommendation
+number, SHA-256 digest of the validated model suggestion, and its pseudonymous
+citations). Distinct accepted recommendations retain separate histories in the
+same report store. If the existing local `<report>.work-links.json` has the
+same report/recommendation key, the outcome update copies that validated work-link snapshot. It makes no network request, does not
 read or modify a Pi session log, and does not accept arbitrary source IDs,
 recognizable raw-session identifiers, credentials, or source excerpts. JSON
-persistence is an atomic replacement; the safe outcome-history section in the
-originating report and an accessible, safely escaped `<report>.outcomes.html`
+persistence and report refresh use a cross-process local lock plus atomic
+replacements; the safe outcome-history section in the originating report and an
+accessible, safely escaped `<report>.outcomes.html`
 history companion are then refreshed for inspection. If either HTML refresh
 fails, the confirmed JSON record remains the source of truth and Pi reports the
 limited failure.
@@ -179,9 +181,10 @@ limited failure.
 To deliberately carry one prior outcome history into a later hindsight report,
 pass `--prior-outcomes <report.outcomes.json>` to `/hindsight-document`. The
 safe renderer labels it **prior user-observed outcome context** and explicitly
-states that it is not source evidence; it never enters the citation/evidence
-index and generated claims or recommendations cannot cite it. Without that
-explicit flag, no outcome history is supplied to a later report flow.
+states that it is not source evidence; it is never sent to the model, never
+enters the citation/evidence index, and generated claims or recommendations
+cannot cite it. Without that explicit flag, no outcome history is supplied to a
+later report flow.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,

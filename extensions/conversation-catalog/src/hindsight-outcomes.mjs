@@ -8,6 +8,7 @@ const CITATION = /^session-[a-z0-9]+:event-[0-9]{4}$/;
 const ISSUE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const OUTCOME_STATUSES = new Set(["not-started", "in-progress", "completed", "paused", "stopped"]);
 const FOLLOW_UP_DECISIONS = new Set(["continue", "adjust", "monitor", "stop", "no-follow-up"]);
+const OUTCOME_LOCK_TIMEOUT_MS = 10_000;
 const outcomeLocks = new Map();
 
 export class HindsightOutcomeError extends Error {
@@ -35,7 +36,7 @@ function boundedText(value, maxLength, code = "malformed_outcome") {
 // Outcome fields are user input, not a channel for session transcripts or credentials.
 // Reject recognizable raw-session identifiers and common secret forms rather than
 // copying them into durable JSON or the inspectable HTML companion.
-const UNSAFE_OUTCOME_TEXT = /\b(?:raw[- ]?session(?:[- ]?id)?|session[_-]?id|pi_session_file|bearer\s+|api[_-]?key|authorization\s*:|gh[pousr]_[A-Za-z0-9_]{20,})\b/i;
+const UNSAFE_OUTCOME_TEXT = /\b(?:raw[- ]?session(?:[- ]?id)?|session[_-]?id|pi_session_file|bearer\s+|api[_-]?key|authorization\s*:|gh[pousr]_[A-Za-z0-9_]{20,}|(?:akia|asia|aida|aroa)[a-z0-9]{16}|(?:aws_)?(?:secret_access_key|access_key_id)\s*[:=])\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
 
 function safeOutcomeText(value) {
   const result = boundedText(value, 2000, "malformed_outcome");
@@ -108,11 +109,9 @@ function normalizeOrigin(origin, code = "malformed_outcome") {
   };
 }
 
-function sameOrigin(first, second) {
-  return first.reportId === second.reportId && first.recommendationNumber === second.recommendationNumber
-    && first.modelSuggestionDigest === second.modelSuggestionDigest
-    && first.evidenceReferences.length === second.evidenceReferences.length
-    && first.evidenceReferences.every((reference, index) => reference === second.evidenceReferences[index]);
+export function hindsightOutcomeOriginKey(origin) {
+  const normalized = normalizeOrigin(origin);
+  return `${normalized.reportId}:recommendation-${normalized.recommendationNumber}:${normalized.modelSuggestionDigest}`;
 }
 
 function normalizeWorkLink(value) {
@@ -150,6 +149,13 @@ function normalizeUpdate(value, expectedNumber) {
   return update;
 }
 
+function normalizeHistory(value) {
+  if (!exactKeys(value, ["origin", "updates"]) || !Array.isArray(value.updates) || value.updates.length > 200) {
+    throw new HindsightOutcomeError("malformed_outcome");
+  }
+  return { origin: normalizeOrigin(value.origin), updates: value.updates.map((update, index) => normalizeUpdate(update, index + 1)) };
+}
+
 export function outcomeHistoryPathForDispositionPath(dispositionPath) {
   if (typeof dispositionPath !== "string" || dispositionPath.includes("\0") || !dispositionPath.endsWith(".dispositions.json")) {
     throw new HindsightOutcomeError("invalid_disposition_path");
@@ -171,20 +177,37 @@ export function hindsightReportPathForDispositionPath(dispositionPath) {
   return dispositionPath.replace(/\.dispositions\.json$/, ".html");
 }
 
+/** Creates the schema-version-2 indexed store for one accepted recommendation. */
 export function emptyHindsightOutcomeHistory(origin) {
   const normalized = normalizeOrigin(origin, "accepted_recommendation_required");
-  return { schemaVersion: 1, kind: "pi-hindsight-recommendation-outcomes", origin: normalized, updates: [] };
+  return {
+    schemaVersion: 2,
+    kind: "pi-hindsight-recommendation-outcomes",
+    reportId: normalized.reportId,
+    histories: { [hindsightOutcomeOriginKey(normalized)]: { origin: normalized, updates: [] } },
+  };
 }
 
-/** Strictly parses persisted outcome history without accepting source text or arbitrary identities. */
+/** Strictly parses a report-scoped, indexed outcome store. */
 export function parseHindsightOutcomeHistory(value) {
-  if (!exactKeys(value, ["schemaVersion", "kind", "origin", "updates"])
-    || value.schemaVersion !== 1 || value.kind !== "pi-hindsight-recommendation-outcomes" || !Array.isArray(value.updates)
-    || value.updates.length > 200) {
+  if (!exactKeys(value, ["schemaVersion", "kind", "reportId", "histories"])
+    || value.schemaVersion !== 2 || value.kind !== "pi-hindsight-recommendation-outcomes"
+    || typeof value.reportId !== "string" || !REPORT_ID.test(value.reportId) || !ownObject(value.histories)
+    || Object.keys(value.histories).length < 1 || Object.keys(value.histories).length > 40) {
     throw new HindsightOutcomeError("malformed_outcome");
   }
-  const origin = normalizeOrigin(value.origin);
-  return { schemaVersion: 1, kind: "pi-hindsight-recommendation-outcomes", origin, updates: value.updates.map((update, index) => normalizeUpdate(update, index + 1)) };
+  const histories = {};
+  const recommendationNumbers = new Set();
+  for (const [key, valueHistory] of Object.entries(value.histories)) {
+    const history = normalizeHistory(valueHistory);
+    if (history.origin.reportId !== value.reportId || key !== hindsightOutcomeOriginKey(history.origin)
+      || recommendationNumbers.has(history.origin.recommendationNumber)) {
+      throw new HindsightOutcomeError("malformed_outcome");
+    }
+    recommendationNumbers.add(history.origin.recommendationNumber);
+    histories[key] = history;
+  }
+  return { schemaVersion: 2, kind: "pi-hindsight-recommendation-outcomes", reportId: value.reportId, histories };
 }
 
 export async function readHindsightOutcomeHistory(path) {
@@ -197,40 +220,61 @@ export async function readHindsightOutcomeHistory(path) {
   }
 }
 
-/** Serializes append-only updates for one outcome file within a Pi process. */
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function acquireCrossProcessOutcomeLock(path) {
+  const lockPath = `${path}.lock`;
+  await mkdir(dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + OUTCOME_LOCK_TIMEOUT_MS;
+  let wait = 5;
+  while (true) {
+    try {
+      await mkdir(lockPath);
+      return lockPath;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      if (Date.now() >= deadline) throw new HindsightOutcomeError("outcome_lock_timeout");
+      await delay(wait);
+      wait = Math.min(wait * 2, 100);
+    }
+  }
+}
+
+/** Serializes a complete read/mutate/write/render transaction across Pi processes. */
 export async function withHindsightOutcomeLock(path, operation) {
-  if (typeof path !== "string" || !path) throw new HindsightOutcomeError("invalid_disposition_path");
+  if (typeof path !== "string" || !path || path.includes("\0")) throw new HindsightOutcomeError("invalid_disposition_path");
   const previous = outcomeLocks.get(path) || Promise.resolve();
-  let release;
-  const current = new Promise((resolve) => { release = resolve; });
+  let releaseLocal;
+  const current = new Promise((resolve) => { releaseLocal = resolve; });
   outcomeLocks.set(path, current);
   await previous;
+  let lockPath;
   try {
+    lockPath = await acquireCrossProcessOutcomeLock(path);
     return await operation();
   } finally {
-    release();
+    if (lockPath) await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    releaseLocal();
     if (outcomeLocks.get(path) === current) outcomeLocks.delete(path);
   }
 }
 
-/** Atomically appends one user-observed/user-confirmed update for its exact immutable origin. */
-export async function appendHindsightOutcomeUpdate(path, origin, update) {
+async function appendHindsightOutcomeUpdateUnlocked(path, origin, update) {
   const expectedOrigin = normalizeOrigin(origin, "accepted_recommendation_required");
   const existing = await readHindsightOutcomeHistory(path);
-  const history = existing || emptyHindsightOutcomeHistory(expectedOrigin);
-  if (!sameOrigin(history.origin, expectedOrigin)) throw new HindsightOutcomeError("outcome_origin_mismatch");
+  const store = existing || emptyHindsightOutcomeHistory(expectedOrigin);
+  if (store.reportId !== expectedOrigin.reportId) throw new HindsightOutcomeError("outcome_origin_mismatch");
+  const key = hindsightOutcomeOriginKey(expectedOrigin);
+  const history = store.histories[key] || { origin: expectedOrigin, updates: [] };
   const normalized = normalizeUpdate({ ...update, updateNumber: history.updates.length + 1 }, history.updates.length + 1);
-  const replacement = { ...history, updates: [...history.updates, normalized] };
-  const temporaryPath = `${path}.${randomUUID()}.tmp`;
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(temporaryPath, `${JSON.stringify(replacement, null, 2)}\n`, "utf8");
-  try {
-    await rename(temporaryPath, path);
-  } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  const replacement = { ...store, histories: { ...store.histories, [key]: { origin: expectedOrigin, updates: [...history.updates, normalized] } } };
+  await atomicWrite(path, `${JSON.stringify(replacement, null, 2)}\n`);
   return replacement;
+}
+
+/** Atomically appends one user-observed/user-confirmed update under its immutable origin key. */
+export async function appendHindsightOutcomeUpdate(path, origin, update) {
+  return withHindsightOutcomeLock(path, () => appendHindsightOutcomeUpdateUnlocked(path, origin, update));
 }
 
 function outcomeRows(history) {
@@ -238,25 +282,31 @@ function outcomeRows(history) {
   const workLink = (update) => update.workLink
     ? `<p><strong>Existing work link at confirmation:</strong> <a href="${escapeHtml(update.workLink.issueUrl)}" rel="noreferrer">${escapeHtml(update.workLink.issueId)}</a> · ${escapeHtml(update.workLink.status)} · ${escapeHtml(update.workLink.action)}</p>`
     : '<p class="empty">No existing work link was present when this update was confirmed.</p>';
-  return `<ol class="outcome-history">${history.updates.map((update) => `<li><h3>Update ${update.updateNumber}</h3><p><strong>Status:</strong> ${escapeHtml(update.status)} · <strong>Follow-up decision:</strong> ${escapeHtml(update.followUpDecision)}</p><dl><dt>Observed result</dt><dd>${escapeHtml(update.observedResult)}</dd><dt>Measurement or user-supplied evidence</dt><dd>${escapeHtml(update.measurementEvidence)}</dd><dt>Unexpected effects</dt><dd>${escapeHtml(update.unexpectedEffects)}</dd></dl>${workLink(update)}<p class="provenance">${escapeHtml(update.provenance.source)} · ${escapeHtml(update.provenance.confirmation)} · ${escapeHtml(update.provenance.confirmedAt)}</p></li>`).join("")}</ol>`;
+  return `<ol class="outcome-history">${history.updates.map((update) => `<li><h4>Update ${update.updateNumber}</h4><p><strong>Status:</strong> ${escapeHtml(update.status)} · <strong>Follow-up decision:</strong> ${escapeHtml(update.followUpDecision)}</p><dl><dt>Observed result</dt><dd>${escapeHtml(update.observedResult)}</dd><dt>Measurement or user-supplied evidence</dt><dd>${escapeHtml(update.measurementEvidence)}</dd><dt>Unexpected effects</dt><dd>${escapeHtml(update.unexpectedEffects)}</dd></dl>${workLink(update)}<p class="provenance">${escapeHtml(update.provenance.source)} · ${escapeHtml(update.provenance.confirmation)} · ${escapeHtml(update.provenance.confirmedAt)}</p></li>`).join("")}</ol>`;
+}
+
+function outcomeHistorySections(store) {
+  return Object.values(store.histories)
+    .sort((first, second) => first.origin.recommendationNumber - second.origin.recommendationNumber)
+    .map((history) => `<article class="outcome-origin"><h3>Recommendation ${history.origin.recommendationNumber}</h3><p>Originating pseudonymous citations (not outcome evidence): ${history.origin.evidenceReferences.map(escapeHtml).join(", ")}.</p>${outcomeRows(history)}</article>`)
+    .join("");
 }
 
 /** Safe rendering labels outcome text as user context, never source evidence for claims. */
 export function renderHindsightOutcomeHistoryHtml(history, { heading = "User-observed outcome history", priorContext = false } = {}) {
-  const parsed = parseHindsightOutcomeHistory(history);
-  const origin = parsed.origin;
+  const store = parseHindsightOutcomeHistory(history);
   const context = priorContext
     ? "Deliberately supplied prior-outcome context. It is user-observed/user-confirmed context, not source evidence and must not support unrelated claims."
     : "User-observed/user-confirmed local outcome history. It is not model inference or source evidence for unrelated claims.";
-  return `<section class="hindsight-outcomes" aria-labelledby="hindsight-outcomes-heading"><h2 id="hindsight-outcomes-heading">${escapeHtml(heading)}</h2><p class="outcome-notice">${context}</p><p class="outcome-origin">Origin: report ${escapeHtml(origin.reportId)}, recommendation ${origin.recommendationNumber}. Originating pseudonymous citations (not outcome evidence): ${origin.evidenceReferences.map(escapeHtml).join(", ")}.</p>${outcomeRows(parsed)}</section>`;
+  return `<section class="hindsight-outcomes" aria-labelledby="hindsight-outcomes-heading"><h2 id="hindsight-outcomes-heading">${escapeHtml(heading)}</h2><p class="outcome-notice">${context}</p><p class="outcome-origin">Report: ${escapeHtml(store.reportId)}.</p>${outcomeHistorySections(store)}</section>`;
 }
 
 export function renderHindsightOutcomeHistoryDocumentHtml(history) {
   const body = renderHindsightOutcomeHistoryHtml(history, { heading: "Hindsight recommendation outcome history" });
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Pi hindsight outcome history</title><style>:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#1a1b26;color:#c0caf5}body{margin:0 auto;max-width:64rem;padding:2rem;line-height:1.45}.hindsight-outcomes,.outcome-history li{background:#24283b;border:1px solid #414868;border-radius:.5rem;margin:1rem 0;padding:1rem}.outcome-history{padding-left:1.5rem}.outcome-history li{margin:.75rem 0}.outcome-history h3{margin-top:0}.outcome-history dt{font-weight:700;margin-top:.75rem}.outcome-history dd{margin-left:0;white-space:pre-wrap;overflow-wrap:anywhere}.empty,.outcome-notice{color:#a9b1d6}.provenance{font-size:.9rem;font-weight:700}.outcome-origin{overflow-wrap:anywhere}a:focus-visible{outline:2px solid #7aa2f7;outline-offset:2px}</style></head><body><main>${body}</main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Pi hindsight outcome history</title><style>:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#1a1b26;color:#c0caf5}body{margin:0 auto;max-width:64rem;padding:2rem;line-height:1.45}.hindsight-outcomes,.outcome-history li,.outcome-origin{background:#24283b;border:1px solid #414868;border-radius:.5rem;margin:1rem 0;padding:1rem}.outcome-history{padding-left:1.5rem}.outcome-history li{margin:.75rem 0}.outcome-history h4{margin-top:0}.outcome-history dt{font-weight:700;margin-top:.75rem}.outcome-history dd{margin-left:0;white-space:pre-wrap;overflow-wrap:anywhere}.empty,.outcome-notice{color:#a9b1d6}.provenance{font-size:.9rem;font-weight:700}.outcome-origin{overflow-wrap:anywhere}a:focus-visible{outline:2px solid #7aa2f7;outline-offset:2px}</style></head><body><main>${body}</main></body></html>`;
 }
 
-/** Rewrites the inspectable local outcome-history companion through an atomic replacement. */
+/** Atomic replacement used only while a report-scoped outcome lock is held. */
 async function atomicWrite(path, content) {
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   await mkdir(dirname(path), { recursive: true });
@@ -281,4 +331,21 @@ export async function refreshHindsightReportOutcomeHistory(path, history) {
   if (!matches || matches.length !== 1) throw new HindsightOutcomeError("outcome_report_marker_missing");
   const replacement = `<!-- pi-hindsight-outcomes:start -->${renderHindsightOutcomeHistoryHtml(history)}<!-- pi-hindsight-outcomes:end -->`;
   await atomicWrite(path, source.replace(marker, replacement));
+}
+
+/** Appends and refreshes both inspectable reports inside one cross-process transaction. */
+export async function recordHindsightOutcomeUpdate(path, origin, update, { reportPath, outcomeReportPath }) {
+  if (typeof reportPath !== "string" || typeof outcomeReportPath !== "string") throw new HindsightOutcomeError("invalid_disposition_path");
+  return withHindsightOutcomeLock(path, async () => {
+    const store = await appendHindsightOutcomeUpdateUnlocked(path, origin, update);
+    try {
+      await writeHindsightOutcomeHistoryReport(outcomeReportPath, store);
+      await refreshHindsightReportOutcomeHistory(reportPath, store);
+    } catch {
+      // JSON is the durable source of truth after the append; never imply a
+      // retry is safe merely because an inspectable HTML refresh failed.
+      throw new HindsightOutcomeError("outcome_report_refresh_failed");
+    }
+    return store;
+  });
 }

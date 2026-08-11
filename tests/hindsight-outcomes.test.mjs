@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { buildHindsightDocument, buildSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
 import {
@@ -9,15 +11,16 @@ import {
   appendHindsightOutcomeUpdate,
   createHindsightOutcomeOrigin,
   emptyHindsightOutcomeHistory,
+  hindsightOutcomeOriginKey,
   hindsightReportPathForDispositionPath,
   outcomeHistoryPathForDispositionPath,
   outcomeHistoryReportPathForDispositionPath,
   parseHindsightOutcomeHistory,
   readHindsightOutcomeHistory,
+  recordHindsightOutcomeUpdate,
   refreshHindsightReportOutcomeHistory,
   renderHindsightOutcomeHistoryDocumentHtml,
   renderHindsightOutcomeHistoryHtml,
-  withHindsightOutcomeLock,
 } from "../extensions/conversation-catalog/src/hindsight-outcomes.mjs";
 
 const accepted = {
@@ -31,7 +34,13 @@ const accepted = {
   evidenceReferences: ["session-ab12:event-0001"],
   userDisposition: { status: "accepted", source: "user-confirmed" },
 };
-
+const acceptedTwo = {
+  ...accepted,
+  recommendationNumber: 2,
+  recommendation: "Record retry observations",
+  expectedImpact: "Retain independent outcome histories",
+  evidenceReferences: ["session-ab12:event-0002"],
+};
 const link = {
   issueId: "issue_1", issueUrl: "https://linear.app/acme/issue/ABC-1", status: "Todo",
   timestamp: "2026-08-11T12:03:00.000Z", payloadDigest: "a".repeat(64), action: "linked",
@@ -49,35 +58,71 @@ function update(overrides = {}) {
   };
 }
 
-test("outcomes append atomically with immutable accepted origin and an existing work association", async () => {
+function historyFor(store, origin) {
+  return store.histories[hindsightOutcomeOriginKey(origin)];
+}
+
+function generatedReportStub() {
+  return "<!doctype html><main><!-- pi-hindsight-outcomes:start -->empty<!-- pi-hindsight-outcomes:end --></main>";
+}
+
+function runWriter(args) {
+  const fixture = fileURLToPath(new URL("./fixtures/hindsight-outcome-process-writer.mjs", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [fixture, ...args], { stdio: "pipe" });
+    let stderr = "";
+    child.stderr.on("data", (data) => { stderr += data; });
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`worker ${code}: ${stderr}`)));
+  });
+}
+
+test("one report outcome store retains append-only histories for every accepted recommendation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "hindsight-outcomes-"));
   const path = join(directory, "report.outcomes.json");
-  const origin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
+  const firstOrigin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
+  const secondOrigin = createHindsightOutcomeOrigin("hindsight-1234abcd", acceptedTwo);
   try {
-    const first = await appendHindsightOutcomeUpdate(path, origin, update({ workLink: link }));
-    const second = await appendHindsightOutcomeUpdate(path, origin, update({ status: "in-progress", followUpDecision: "continue", provenance: { source: "user-observed", confirmation: "user-confirmed", confirmedAt: "2026-08-13T12:00:00.000Z" } }));
-    assert.equal(first.updates[0].updateNumber, 1);
-    assert.equal(second.updates.length, 2);
-    assert.deepEqual(second.updates[0].workLink, link);
-    assert.equal(second.updates[1].workLink, undefined);
-    assert.deepEqual(await readHindsightOutcomeHistory(path), second);
-    assert.match(await readFile(path, "utf8"), /"pi-hindsight-recommendation-outcomes"/);
+    const first = await appendHindsightOutcomeUpdate(path, firstOrigin, update({ workLink: link }));
+    const second = await appendHindsightOutcomeUpdate(path, secondOrigin, update({ status: "in-progress", followUpDecision: "continue", provenance: { source: "user-observed", confirmation: "user-confirmed", confirmedAt: "2026-08-13T12:00:00.000Z" } }));
+    const third = await appendHindsightOutcomeUpdate(path, firstOrigin, update({ status: "paused", followUpDecision: "adjust", provenance: { source: "user-observed", confirmation: "user-confirmed", confirmedAt: "2026-08-14T12:00:00.000Z" } }));
+    assert.equal(first.schemaVersion, 2);
+    assert.equal(Object.keys(second.histories).length, 2);
+    assert.equal(historyFor(third, firstOrigin).updates.length, 2);
+    assert.equal(historyFor(third, secondOrigin).updates.length, 1);
+    assert.deepEqual(historyFor(third, firstOrigin).updates[0].workLink, link);
+    assert.deepEqual(await readHindsightOutcomeHistory(path), third);
+    assert.match(await readFile(path, "utf8"), /"schemaVersion": 2/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("schema rejects inference, tampered origin, raw citation, untrusted link fields, and unexpected fields", () => {
-  const origin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
-  const record = { ...emptyHindsightOutcomeHistory(origin), updates: [{ updateNumber: 1, ...update({ workLink: link }) }] };
+test("schema rejects inference, bad indexes, raw citations, AWS credentials, UUID sessions, and unexpected fields", () => {
+  const firstOrigin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
+  const secondOrigin = createHindsightOutcomeOrigin("hindsight-1234abcd", acceptedTwo);
+  const record = {
+    ...emptyHindsightOutcomeHistory(firstOrigin),
+    histories: {
+      [hindsightOutcomeOriginKey(firstOrigin)]: { origin: firstOrigin, updates: [{ updateNumber: 1, ...update({ workLink: link }) }] },
+      [hindsightOutcomeOriginKey(secondOrigin)]: { origin: secondOrigin, updates: [] },
+    },
+  };
   assert.deepEqual(parseHindsightOutcomeHistory(record), record);
-  assert.throws(() => parseHindsightOutcomeHistory({ ...record, schemaVersion: 2 }), /malformed_outcome/);
-  assert.throws(() => parseHindsightOutcomeHistory({ ...record, origin: { ...origin, evidenceReferences: ["RAW-SESSION-ID"] } }), /malformed_outcome/);
-  assert.throws(() => parseHindsightOutcomeHistory({ ...record, updates: [{ ...record.updates[0], provenance: { ...record.updates[0].provenance, source: "model-inference" } }] }), /malformed_outcome/);
-  assert.throws(() => parseHindsightOutcomeHistory({ ...record, updates: [{ ...record.updates[0], observedResult: "raw session id: secret" }] }), /unsafe_outcome_text/);
-  assert.throws(() => parseHindsightOutcomeHistory({ ...record, updates: [{ ...record.updates[0], measurementEvidence: "Bearer credential-not-for-output" }] }), /unsafe_outcome_text/);
-  assert.throws(() => parseHindsightOutcomeHistory({ ...record, updates: [{ ...record.updates[0], workLink: { ...link, issueUrl: "http://linear.app/private" } }] }), /malformed_outcome/);
-  assert.throws(() => parseHindsightOutcomeHistory({ ...record, unexpected: true }), /malformed_outcome/);
+  assert.throws(() => parseHindsightOutcomeHistory({ ...record, schemaVersion: 1 }), /malformed_outcome/);
+  assert.throws(() => parseHindsightOutcomeHistory({ ...record, histories: { wrong: record.histories[hindsightOutcomeOriginKey(firstOrigin)] } }), /malformed_outcome/);
+  assert.throws(() => parseHindsightOutcomeHistory({ ...record, histories: { ...record.histories, duplicate: { origin: { ...secondOrigin, modelSuggestionDigest: "b".repeat(64) }, updates: [] } } }), /malformed_outcome/);
+  assert.throws(() => parseHindsightOutcomeHistory({ ...record, histories: { [hindsightOutcomeOriginKey(firstOrigin)]: { origin: { ...firstOrigin, evidenceReferences: ["RAW-SESSION-ID"] }, updates: [] } } }), /malformed_outcome/);
+  const unsafe = (field, text) => assert.throws(() => parseHindsightOutcomeHistory({ ...emptyHindsightOutcomeHistory(firstOrigin), histories: { [hindsightOutcomeOriginKey(firstOrigin)]: { origin: firstOrigin, updates: [{ updateNumber: 1, ...update({ [field]: text }) }] } } }), /unsafe_outcome_text/);
+  unsafe("observedResult", "raw session id: secret");
+  unsafe("measurementEvidence", "Bearer credential-not-for-output");
+  unsafe("observedResult", "AWS key AKIAIOSFODNN7EXAMPLE was observed");
+  unsafe("measurementEvidence", "aws_secret_access_key=very-secret-value");
+  unsafe("unexpectedEffects", "raw session 019fedfb-fe61-7431-b0b6-07033b14d64c was copied");
+  const invalidWorkLink = { ...emptyHindsightOutcomeHistory(firstOrigin), histories: {
+    [hindsightOutcomeOriginKey(firstOrigin)]: { origin: firstOrigin, updates: [{ updateNumber: 1, ...update({ workLink: { ...link, issueUrl: "http://linear.app/private" } }) }] },
+  } };
+  assert.throws(() => parseHindsightOutcomeHistory(invalidWorkLink), /malformed_outcome/);
   assert.throws(() => createHindsightOutcomeOrigin("hindsight-1234abcd", { ...accepted, userDisposition: { status: "deferred", source: "user-confirmed" } }), /accepted_recommendation_required/);
 });
 
@@ -100,57 +145,56 @@ test("paths are bounded to disposition companions and atomic failure leaves no t
   }
 });
 
-test("origin changes cannot append to another immutable recommendation history and locks retain concurrent updates", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "hindsight-outcome-origin-"));
-  const path = join(directory, "report.outcomes.json");
-  const origin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
-  const changedOrigin = createHindsightOutcomeOrigin("hindsight-1234abcd", { ...accepted, expectedImpact: "Eliminate transient failures" });
+test("cross-process record transactions retain every update and refresh the latest histories", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "hindsight-outcome-process-"));
+  const outcomesPath = join(directory, "report.outcomes.json");
+  const reportPath = join(directory, "report.html");
+  const outcomeReportPath = join(directory, "report.outcomes.html");
   try {
-    await appendHindsightOutcomeUpdate(path, origin, update());
-    await assert.rejects(() => appendHindsightOutcomeUpdate(path, changedOrigin, update()), (error) => error instanceof HindsightOutcomeError && error.code === "outcome_origin_mismatch");
-    await Promise.all([
-      withHindsightOutcomeLock(path, () => appendHindsightOutcomeUpdate(path, origin, update({ status: "in-progress", followUpDecision: "continue", provenance: { source: "user-observed", confirmation: "user-confirmed", confirmedAt: "2026-08-13T12:00:00.000Z" } }))),
-      withHindsightOutcomeLock(path, () => appendHindsightOutcomeUpdate(path, origin, update({ status: "paused", followUpDecision: "adjust", provenance: { source: "user-observed", confirmation: "user-confirmed", confirmedAt: "2026-08-14T12:00:00.000Z" } }))),
-    ]);
-    assert.equal((await readHindsightOutcomeHistory(path)).updates.length, 3);
+    await writeFile(reportPath, generatedReportStub(), "utf8");
+    await Promise.all(Array.from({ length: 8 }, (_unused, index) => runWriter([outcomesPath, reportPath, outcomeReportPath, String(index + 1)])));
+    const store = await readHindsightOutcomeHistory(outcomesPath);
+    const origin = createHindsightOutcomeOrigin("hindsight-1234abcd", {
+      recommendationNumber: 1, recommendation: "Process-safe retry policy", priority: "high", expectedImpact: "Avoid lost updates", suggestedOwner: "Platform", dependencies: [], acceptanceCriteria: ["Every concurrent update is retained"], evidenceReferences: ["session-proc:event-0001"], userDisposition: { status: "accepted", source: "user-confirmed" },
+    });
+    assert.equal(historyFor(store, origin).updates.length, 8);
+    assert.deepEqual(historyFor(store, origin).updates.map((item) => item.updateNumber), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.match(await readFile(reportPath, "utf8"), /Process [1-8] observed the local update/);
+    assert.match(await readFile(outcomeReportPath, "utf8"), /Process [1-8] observed the local update/);
+    assert.deepEqual((await readdir(directory)).filter((name) => name.endsWith(".lock")), []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("prior outcomes reach a later report only when deliberately supplied and remain outside its evidence index", () => {
-  const history = {
-    ...emptyHindsightOutcomeHistory(createHindsightOutcomeOrigin("hindsight-1234abcd", accepted)),
-    updates: [{ updateNumber: 1, ...update({ observedResult: "Prior user observation" }) }],
-  };
+test("prior outcomes render only after explicit supply and are absent from all model prompts and citations", () => {
+  const origin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
+  const history = { ...emptyHindsightOutcomeHistory(origin), histories: { [hindsightOutcomeOriginKey(origin)]: { origin, updates: [{ updateNumber: 1, ...update({ observedResult: "PRIOR-OUTCOME-SECRET-TEXT" }) }] } } };
   const sources = [{ events: [{ id: "event-1", summary: "New redacted source", evidence: { reference: "session-next:event-0001" } }] }];
-  const model = {
-    claims: [{ statement: "New source only", classification: "direct evidence", evidenceReferences: ["session-next:event-0001"] }],
-    recommendations: [],
-  };
+  const model = { claims: [{ statement: "New source only", classification: "direct evidence", evidenceReferences: ["session-next:event-0001"] }], recommendations: [] };
   const without = buildHindsightDocument(sources, model);
   const withPrior = buildHindsightDocument(sources, model, undefined, history);
-  assert.doesNotMatch(without, /Prior user observation|Prior user-observed outcome context/);
-  assert.match(without, /pi-hindsight-outcomes:start/);
-  assert.match(withPrior, /Prior user-observed outcome context/);
-  assert.match(withPrior, /Prior user observation/);
-  assert.match(withPrior, /not source evidence/);
-  assert.match(buildSynthesisPrompt(sources), /No prior-outcome context was deliberately supplied/);
   const prompt = buildSynthesisPrompt(sources, { priorOutcomes: history });
-  assert.match(prompt, /PRIOR-OUTCOME CONTEXT \(not evidence; do not cite\)/);
-  assert.match(prompt, /Prior user observation/);
+  assert.doesNotMatch(without, /PRIOR-OUTCOME-SECRET-TEXT|Prior user-observed outcome context/);
+  assert.match(withPrior, /Prior user-observed outcome context/);
+  assert.match(withPrior, /PRIOR-OUTCOME-SECRET-TEXT/);
+  assert.match(withPrior, /not source evidence/);
+  assert.doesNotMatch(withPrior, /href="#citation-[^"]+">session-ab12:event-0001/);
+  assert.doesNotMatch(prompt, /PRIOR-OUTCOME-SECRET-TEXT|prior-outcome|session-ab12:event-0001/i);
+  assert.match(prompt, /session-next:event-0001/);
 });
 
-test("only the generated report outcome placeholder is atomically refreshed", async () => {
+test("only the generated report outcome placeholder is atomically refreshed for the indexed store", async () => {
   const directory = await mkdtemp(join(tmpdir(), "hindsight-outcome-report-"));
   const path = join(directory, "report.html");
-  const history = { ...emptyHindsightOutcomeHistory(createHindsightOutcomeOrigin("hindsight-1234abcd", accepted)), updates: [{ updateNumber: 1, ...update({ observedResult: "<img src=x>" }) }] };
+  const origin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
+  const history = { ...emptyHindsightOutcomeHistory(origin), histories: { [hindsightOutcomeOriginKey(origin)]: { origin, updates: [{ updateNumber: 1, ...update({ observedResult: "<img src=x>" }) }] } } };
   try {
-    await writeFile(path, "before<!-- pi-hindsight-outcomes:start -->old<!-- pi-hindsight-outcomes:end -->after", "utf8");
+    await writeFile(path, generatedReportStub(), "utf8");
     await refreshHindsightReportOutcomeHistory(path, history);
     const refreshed = await readFile(path, "utf8");
     assert.match(refreshed, /&lt;img src=x&gt;/);
-    assert.doesNotMatch(refreshed, /<!-- pi-hindsight-outcomes:start -->old/);
+    assert.doesNotMatch(refreshed, /<!-- pi-hindsight-outcomes:start -->empty/);
     await writeFile(path, "no marker", "utf8");
     await assert.rejects(() => refreshHindsightReportOutcomeHistory(path, history), (error) => error instanceof HindsightOutcomeError && error.code === "outcome_report_marker_missing");
   } finally {
@@ -158,18 +202,31 @@ test("only the generated report outcome placeholder is atomically refreshed", as
   }
 });
 
-test("safe history renderer escapes user text and labels deliberately supplied history as non-evidentiary context", () => {
-  const history = {
-    ...emptyHindsightOutcomeHistory(createHindsightOutcomeOrigin("hindsight-1234abcd", accepted)),
-    updates: [{ updateNumber: 1, ...update({ observedResult: "<script>session-log-secret</script>", workLink: link }) }],
-  };
+test("safe history renderer escapes user text and preserves user-observed provenance", () => {
+  const origin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
+  const history = { ...emptyHindsightOutcomeHistory(origin), histories: { [hindsightOutcomeOriginKey(origin)]: { origin, updates: [{ updateNumber: 1, ...update({ observedResult: "<script>session-log-secret</script>", workLink: link }) }] } } };
   const context = renderHindsightOutcomeHistoryHtml(history, { heading: "Prior user-observed outcome context", priorContext: true });
   const document = renderHindsightOutcomeHistoryDocumentHtml(history);
   assert.match(context, /Deliberately supplied prior-outcome context/);
-  assert.match(context, /not source evidence/);
   assert.match(context, /&lt;script&gt;session-log-secret&lt;\/script&gt;/);
   assert.doesNotMatch(context, /<script>session-log-secret<\/script>/);
   assert.match(document, /default-src 'none'/);
   assert.match(document, /user-observed.*user-confirmed/);
   assert.match(document, /session-ab12:event-0001/);
+});
+
+test("record transaction associates output histories without weakening local-only validation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "hindsight-outcome-record-"));
+  const outcomesPath = join(directory, "report.outcomes.json");
+  const reportPath = join(directory, "report.html");
+  const outcomeReportPath = join(directory, "report.outcomes.html");
+  const origin = createHindsightOutcomeOrigin("hindsight-1234abcd", accepted);
+  try {
+    await writeFile(reportPath, generatedReportStub(), "utf8");
+    const store = await recordHindsightOutcomeUpdate(outcomesPath, origin, update({ workLink: link }), { reportPath, outcomeReportPath });
+    assert.equal(historyFor(store, origin).updates.length, 1);
+    assert.match(await readFile(outcomeReportPath, "utf8"), /issue_1/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
