@@ -12,7 +12,7 @@ import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkBacklinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
 import { HindsightOutcomeError, createHindsightOutcomeOrigin, hindsightReportPathForDispositionPath, outcomeHistoryPathForDispositionPath, outcomeHistoryReportPathForDispositionPath, readHindsightOutcomeHistory, recordHindsightOutcomeUpdate } from "./hindsight-outcomes.mjs";
 import { HindsightFeedbackError, createHindsightFeedbackMetadata, feedbackPathForDispositionPath, feedbackReportPathForDispositionPath, readHindsightFeedback, recordHindsightFeedback, refreshHindsightFeedbackViews, writeHindsightFeedbackSeed } from "./hindsight-feedback.mjs";
-import { HindsightNotesError, addHindsightNote, deleteHindsightNote, editHindsightNote, hindsightNotesPath, readHindsightNotes } from "./hindsight-notes.mjs";
+import { HindsightNotesError, addHindsightNote, deleteHindsightNote, editHindsightNote, hindsightNotesPath, hindsightNotesSessionReference, readHindsightNotes } from "./hindsight-notes.mjs";
 import { HindsightLinearAdapter, createRequestPreview, linkLookupRequestPreview } from "./hindsight-linear-adapter.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
@@ -191,9 +191,11 @@ function hindsightNotesErrorMessage(error: unknown) {
   const code = error instanceof HindsightNotesError ? error.code : "operation_failed";
   const messages: Record<string, string> = {
     ui_required: "Hindsight notes require Pi's interactive UI.",
+    untrusted_project: "Hindsight notes require a trusted project root.",
     current_session_unavailable: "Pi did not expose the active session identity; no note was read or changed.",
     invalid_session_reference: "The local session reference is invalid; no note was read or changed.",
     invalid_notes_path: "The local hindsight-notes path is invalid; no note was read or changed.",
+    unsafe_notes_path: "The local hindsight-notes path is a symlink or unsafe filesystem object; no note was read or changed.",
     malformed_notes: "The local hindsight-notes store is malformed or unsupported; it was not changed.",
     session_mismatch: "The local hindsight-notes store belongs to another session; it was not read or changed.",
     unsafe_note_text: "Notes must not include raw session identifiers or credentials; nothing was saved.",
@@ -217,13 +219,12 @@ function isTrustedProject(ctx: any) {
 async function currentHindsightSessionReference(ctx: any) {
   const current = ctx?.session || ctx?.currentSession;
   const managedId = typeof ctx?.sessionManager?.getSessionId === "function" ? ctx.sessionManager.getSessionId() : undefined;
-  const managedName = typeof ctx?.sessionManager?.getSessionName === "function" ? ctx.sessionManager.getSessionName() : undefined;
   const rawId = typeof managedId === "string" ? managedId : typeof current?.id === "string" ? current.id
     : typeof ctx?.sessionId === "string" ? ctx.sessionId : "";
   if (!rawId) throw new HindsightNotesError("current_session_unavailable");
-  const sessions = await SessionManager.listAll();
-  const saved = sessions.find((session) => session.id === rawId);
-  return pseudonymizeSession(saved || { id: rawId, name: typeof managedName === "string" ? managedName : typeof current?.name === "string" ? current.name : "" });
+  // The note key intentionally derives from the actual Pi session ID only;
+  // display names and legacy 32-bit catalog pseudonyms cannot select notes.
+  return hindsightNotesSessionReference(rawId);
 }
 
 async function reviewHindsightNotes(ctx: any, notes: any[], patterns: any[]) {
@@ -512,9 +513,10 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     async handler(_args, ctx) {
       try {
         if (!ctx.hasUI || typeof ctx.ui.input !== "function") throw new HindsightNotesError("ui_required");
+        if (!isTrustedProject(ctx)) throw new HindsightNotesError("untrusted_project");
         const sessionReference = await currentHindsightSessionReference(ctx);
         const path = hindsightNotesPath(ctx.cwd, sessionReference);
-        const store = await readHindsightNotes(path, sessionReference);
+        const store = await readHindsightNotes(ctx.cwd, sessionReference);
         const notes = store?.notes || [];
         const action = await ctx.ui.select("Current-session hindsight notes", ["Add note", "View notes", "Edit note", "Delete note", "Cancel"]);
         if (!action || action === "Cancel") throw new HindsightNotesError("confirmation_required");
@@ -529,7 +531,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           if (text === undefined) throw new HindsightNotesError("confirmation_required");
           const confirmed = await ctx.ui.confirm("Final confirmation: save local hindsight note", "This writes a user-authored, current-session note under an opaque local session reference. It does not modify session logs, make a network request, or make the note evidence. Save this note?");
           if (confirmed !== true) throw new HindsightNotesError("confirmation_required");
-          await addHindsightNote(path, sessionReference, text);
+          await addHindsightNote(ctx.cwd, sessionReference, text);
           ctx.ui.notify(`Local user-authored hindsight note saved in ${path}.`, "info");
           return;
         }
@@ -544,13 +546,13 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           if (text === undefined) throw new HindsightNotesError("confirmation_required");
           const confirmed = await ctx.ui.confirm("Final confirmation: edit local hindsight note", "This replaces this local user-authored context note. It does not modify session logs, make a network request, or make the note evidence. Save the edit?");
           if (confirmed !== true) throw new HindsightNotesError("confirmation_required");
-          await editHindsightNote(path, sessionReference, note.noteId, text);
+          await editHindsightNote(ctx.cwd, sessionReference, note.noteId, text);
           ctx.ui.notify(`Local user-authored hindsight note updated in ${path}.`, "info");
           return;
         }
         const confirmed = await ctx.ui.confirm("Final confirmation: delete local hindsight note", "This permanently removes this local user-authored note. It will not be rendered, exported, or sent to hindsight synthesis. Delete it?");
         if (confirmed !== true) throw new HindsightNotesError("confirmation_required");
-        await deleteHindsightNote(path, sessionReference, note.noteId);
+        await deleteHindsightNote(ctx.cwd, sessionReference, note.noteId);
         ctx.ui.notify(`Local user-authored hindsight note deleted from ${path}.`, "info");
       } catch (error) {
         ctx.ui.notify(hindsightNotesErrorMessage(error), "error");
@@ -587,6 +589,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const findings = findSensitiveContent(projection, patterns);
         const review = await reviewRedactionChoices(ctx, findings);
         const reference = pseudonymizeSession(session);
+        const noteSessionReference = hindsightNotesSessionReference(session.id);
         // Keep a local pseudonym so an excluded source can link to an explicit
         // redaction-review fallback without retaining conversation content.
         const sources: any[] = [];
@@ -596,10 +599,11 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           const cited = attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions));
           sources.push({ reference, events: cited.events, edges: cited.edges });
         }
-        // The store path is derived solely from the selected session's opaque
-        // reference. Only that exact store is read, and excluded/deleted notes
-        // never enter this reviewed bundle.
-        const noteStore = await readHindsightNotes(hindsightNotesPath(ctx.cwd, reference), reference);
+        // The store key is derived only from the selected Pi session ID. Only
+        // that exact store is read, and excluded/deleted notes never enter this
+        // reviewed bundle.
+        // Never access a project-local note store from an untrusted project.
+        const noteStore = isTrustedProject(ctx) ? await readHindsightNotes(ctx.cwd, noteSessionReference) : undefined;
         const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, patterns) : [];
         const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
