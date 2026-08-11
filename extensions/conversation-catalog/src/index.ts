@@ -35,13 +35,15 @@ function flowArguments(args: string) {
 }
 
 function hindsightArguments(args: string) {
-  const flag = "--validate-claim-support";
   let remaining = args.trim();
-  let validateClaimSupport = false;
-  if (remaining === flag || remaining.startsWith(`${flag} `)) {
-    validateClaimSupport = true;
-    remaining = remaining.slice(flag.length).trim();
-  }
+  const consumeBooleanFlag = (flag: string) => {
+    const matches = [...remaining.matchAll(new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`, "g"))];
+    if (matches.length > 1) throw new Error(`${flag} may be supplied only once.`);
+    if (matches.length === 1) remaining = remaining.replace(new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`), " ").trim();
+    return matches.length === 1;
+  };
+  const validateClaimSupport = consumeBooleanFlag("--validate-claim-support");
+  const narrativeMapEnabled = consumeBooleanFlag("--narrative-map");
   const priorMatch = remaining.match(/(?:^|\s)--prior-outcomes\s+(\S+)/);
   let priorOutcomesPath: string | undefined;
   if (priorMatch) {
@@ -50,7 +52,7 @@ function hindsightArguments(args: string) {
   } else if (/(?:^|\s)--prior-outcomes(?:\s|$)/.test(remaining)) {
     throw new Error("--prior-outcomes requires one .outcomes.json path.");
   }
-  return { outputPath: remaining, validateClaimSupport, priorOutcomesPath };
+  return { outputPath: remaining, validateClaimSupport, narrativeMapEnabled, priorOutcomesPath };
 }
 
 function safeFilename(value: string) {
@@ -320,6 +322,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     outputPath: string;
     restoreTools: () => void;
     validateClaimSupport: boolean;
+    narrativeMapEnabled: boolean;
     priorOutcomes?: any;
     hindsightNotes: any[];
     phase: "draft" | "validation";
@@ -338,7 +341,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
   pi.registerTool({
     name: "hindsight_document_write",
     label: "Write safe hindsight document",
-    description: "Writes structured claims, optional evidence-first story steps, and recommendations through the safe HTML citation contract. Use this instead of writing hindsight HTML directly.",
+    description: "Writes structured claims, optional evidence-first story steps, opt-in cited narrative-map hints, and recommendations through the safe HTML citation contract. Use this instead of writing hindsight HTML directly.",
     parameters: Type.Object({
       title: Type.Optional(Type.String({ minLength: 1, maxLength: 160 })),
       claims: Type.Array(Type.Object({
@@ -352,6 +355,28 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         classification: Type.Union([Type.Literal("direct evidence"), Type.Literal("inference")]),
         evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 3 }),
       }, { additionalProperties: false }), { maxItems: 30 })),
+      narrativeMap: Type.Optional(Type.Object({
+        layout: Type.Literal("chronological"),
+        groups: Type.Array(Type.Object({
+          id: Type.String({ minLength: 1, maxLength: 40 }),
+          title: Type.String({ minLength: 1, maxLength: 160 }),
+        }, { additionalProperties: false }), { minItems: 1, maxItems: 12 }),
+        nodes: Type.Array(Type.Object({
+          id: Type.String({ minLength: 1, maxLength: 40 }),
+          groupId: Type.String({ minLength: 1, maxLength: 40 }),
+          title: Type.String({ minLength: 1, maxLength: 160 }),
+          body: Type.String({ minLength: 1, maxLength: 1000 }),
+          classification: Type.Union([Type.Literal("direct relationship"), Type.Literal("inference")]),
+          evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 3 }),
+        }, { additionalProperties: false }), { minItems: 1, maxItems: 30 }),
+        edges: Type.Array(Type.Object({
+          from: Type.String({ minLength: 1, maxLength: 40 }),
+          to: Type.String({ minLength: 1, maxLength: 40 }),
+          label: Type.String({ minLength: 1, maxLength: 160 }),
+          classification: Type.Union([Type.Literal("direct relationship"), Type.Literal("inference")]),
+          evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 3 }),
+        }, { additionalProperties: false }), { maxItems: 50 }),
+      }, { additionalProperties: false })),
       recommendations: Type.Array(Type.Object({
         recommendation: Type.String({ minLength: 1, maxLength: 1000 }),
         priority: Type.Union([Type.Literal("critical"), Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
@@ -370,7 +395,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       }
       try {
         if (pendingHindsight.validateClaimSupport) {
-          const validationPrompt = buildClaimSupportValidationPrompt(pendingHindsight.sources, params);
+          const validationPrompt = buildClaimSupportValidationPrompt(pendingHindsight.sources, params, { narrativeMapEnabled: pendingHindsight.narrativeMapEnabled });
           pendingHindsight.modelOutput = params;
           pendingHindsight.phase = "validation";
           // The draft writer is removed before its result asks the model for the
@@ -378,7 +403,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           pi.setActiveTools(["hindsight_claim_support_validate"]);
           return { content: [{ type: "text", text: validationPrompt }] };
         }
-        const html = buildHindsightDocument(pendingHindsight.sources, params, undefined, pendingHindsight.priorOutcomes, pendingHindsight.hindsightNotes);
+        const html = buildHindsightDocument(pendingHindsight.sources, params, undefined, pendingHindsight.priorOutcomes, pendingHindsight.hindsightNotes, pendingHindsight.narrativeMapEnabled);
         const paths = await writeHindsightReport(pendingHindsight.outputPath, html, { claims: params.claims, recommendations: params.recommendations });
         const outputPath = pendingHindsight.outputPath;
         // Keep the pending state until agent_settled restores the original tool set.
@@ -413,7 +438,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         return { content: [{ type: "text", text: "No claim-support validation is awaiting completion." }] };
       }
       try {
-        const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params, pendingHindsight.priorOutcomes, pendingHindsight.hindsightNotes);
+        const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params, pendingHindsight.priorOutcomes, pendingHindsight.hindsightNotes, pendingHindsight.narrativeMapEnabled);
         const paths = await writeHindsightReport(pendingHindsight.outputPath, html, { claims: pendingHindsight.modelOutput.claims, recommendations: pendingHindsight.modelOutput.recommendations });
         const outputPath = pendingHindsight.outputPath;
         return { content: [{ type: "text", text: `Hindsight document with claim-support validation written to ${outputPath}. Model-suggestion disposition seed written locally to ${paths.dispositionPath}. Local feedback seed written to ${paths.feedbackPath}.` }] };
@@ -576,7 +601,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("hindsight-document", {
-    description: "Interactively select one conversation and write a cited hindsight document (optional --validate-claim-support)",
+    description: "Interactively select one conversation and write a cited hindsight document (optional --validate-claim-support, --narrative-map)",
     async handler(args, ctx) {
       try {
         if (!ctx.hasUI) throw new Error("Hindsight generation requires Pi's interactive UI.");
@@ -624,16 +649,16 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
         try {
-          pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, priorOutcomes, hindsightNotes, phase: "draft" };
+          pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, narrativeMapEnabled: requested.narrativeMapEnabled, priorOutcomes, hindsightNotes, phase: "draft" };
           // Prior outcomes remain in pending state for safe post-model rendering;
           // they are deliberately never placed in a model synthesis prompt.
-          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport, hindsightNotes }));
+          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport, narrativeMapEnabled: requested.narrativeMapEnabled, hindsightNotes }));
         } catch (error) {
           pendingHindsight = undefined;
           restoreTools();
           throw error;
         }
-        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.${requested.validateClaimSupport ? " Claim-support validation will run as a separate evidence-scoped model pass." : ""}${priorOutcomes ? " Deliberately supplied prior outcomes are labeled context, not evidence." : ""}${hindsightNotes.length ? " Reviewed user-authored notes are separate context, never evidence or citations." : ""}`, "info");
+        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.${requested.validateClaimSupport ? " Claim-support validation will run as a separate evidence-scoped model pass." : ""}${requested.narrativeMapEnabled ? " A bounded cited narrative map may be supplied through the safe report contract." : ""}${priorOutcomes ? " Deliberately supplied prior outcomes are labeled context, not evidence." : ""}${hindsightNotes.length ? " Reviewed user-authored notes are separate context, never evidence or citations." : ""}`, "info");
       } catch (error) { ctx.ui.notify(error instanceof HindsightOutcomeError ? hindsightOutcomeErrorMessage(error) : error instanceof HindsightNotesError ? hindsightNotesErrorMessage(error) : error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
     },
   });

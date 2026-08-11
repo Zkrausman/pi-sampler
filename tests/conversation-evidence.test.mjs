@@ -111,6 +111,66 @@ test("story-step runtime validation rejects malformed, uncited, duplicate, unava
   assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, storySteps: [base, { ...base }] }), /duplicates an earlier story step/);
 });
 
+test("opt-in narrative maps use a fixed cited chronological no-JS renderer", () => {
+  const narrativeMap = {
+    layout: "chronological",
+    groups: [{ id: "opening", title: "Opening evidence" }, { id: "followup", title: "Follow-up" }],
+    nodes: [
+      { id: "request", groupId: "opening", title: "Initial request", body: "The request is recorded.", classification: "direct relationship", evidenceReferences: ["session-abc:event-0001"] },
+      { id: "response", groupId: "followup", title: "Response", body: "A response followed.", classification: "inference", evidenceReferences: ["session-abc:event-0002"] },
+    ],
+    edges: [{ from: "request", to: "response", label: "was followed by", classification: "inference", evidenceReferences: ["session-abc:event-0001", "session-abc:event-0002"] }],
+  };
+  const html = generateCitedHindsightDocumentHtml({
+    claims: [], recommendations: [], narrativeMapEnabled: true, narrativeMap,
+    evidence: [
+      { reference: "session-abc:event-0001", context: "First redacted context" },
+      { reference: "session-abc:event-0002", context: "Second redacted context" },
+    ],
+  });
+  assert.match(html, /Cited narrative map/);
+  assert.match(html, /fixed chronological layout/);
+  assert.match(html, /Direct relationship · model-suggested relationship/);
+  assert.match(html, /Inference · model-suggested relationship/);
+  assert.match(html, /href="#citation-1">session-abc:event-0001/);
+  assert.match(html, /href="#citation-2">session-abc:event-0002/);
+  assert.match(html, /order does not imply causation/);
+  assert.match(html, /default-src 'none'/);
+  assert.doesNotMatch(html, /<(?:svg|script\s+src|img\s+src|iframe)\b/i);
+  assert.doesNotMatch(html, /(?:src|href)=["']https?:/i);
+});
+
+test("narrative-map runtime rejects markup, directives, duplicate, unknown, and excluded citations", () => {
+  const base = {
+    layout: "chronological", groups: [{ id: "group", title: "Group" }],
+    nodes: [{ id: "node", groupId: "group", title: "Node", body: "Body", classification: "direct relationship", evidenceReferences: ["included"] }],
+    edges: [],
+  };
+  const document = { claims: [], recommendations: [], narrativeMapEnabled: true, narrativeMap: base, evidence: [{ reference: "included", context: "Redacted" }] };
+  assert.doesNotThrow(() => generateCitedHindsightDocumentHtml(document));
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, narrativeMapEnabled: false }), /explicit opt-in/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, narrativeMap: { ...base, layout: "freeform-svg" } }), /supported chronological layout/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, narrativeMap: { ...base, directive: "<script>" } }), /unsupported directive/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, narrativeMap: { ...base, nodes: [{ ...base.nodes[0], title: "<script>alert(1)<\/script>" }] } }), /must not contain markup or script/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, narrativeMap: { ...base, nodes: [{ ...base.nodes[0], evidenceReferences: ["included", "included"] }] } }), /duplicate references/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, narrativeMap: { ...base, nodes: [{ ...base.nodes[0], evidenceReferences: ["unknown"] }] } }), /unknown or excluded evidence/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({ ...document, evidence: [{ reference: "included", availability: "excluded", context: "Hidden" }] }), /unknown or excluded evidence/);
+});
+
+test("an opted-in excluded narrative map is a content-free placeholder", () => {
+  const html = generateCitedHindsightDocumentHtml({
+    claims: [], recommendations: [], narrativeMapEnabled: true, narrativeMapExcluded: true,
+    evidence: [],
+  });
+  assert.match(html, /Narrative map unavailable: the selected conversation was excluded during redaction review/);
+  assert.doesNotMatch(html, /DO-NOT-RENDER|selected:excluded/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({
+    claims: [], recommendations: [], narrativeMapEnabled: true, narrativeMapExcluded: true,
+    narrativeMap: { layout: "chronological", groups: [{ id: "group", title: "Hidden" }], nodes: [{ id: "node", groupId: "group", title: "Hidden", body: "Hidden", classification: "inference", evidenceReferences: ["selected:excluded"] }], edges: [] },
+    evidence: [{ reference: "selected:excluded", availability: "excluded" }],
+  }), /content-free narrative-map placeholder/);
+});
+
 test("missing and excluded citations stay navigable with redaction-safe fallbacks", () => {
   const html = generateCitedHindsightDocumentHtml({
     claims: [

@@ -241,6 +241,7 @@ test("safe hindsight recommendations reject missing, malformed, unconfirmed, or 
 test("optional story steps have a closed tool schema and reject unsafe citations before rendering", () => {
   const writerSource = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
   assert.match(writerSource, /storySteps: Type\.Optional\(Type\.Array\(Type\.Object\(\{[\s\S]*?title: Type\.String\(\{ minLength: 1, maxLength: 160 \}\),[\s\S]*?body: Type\.String\(\{ minLength: 1, maxLength: 2000 \}\),[\s\S]*?maxItems: 3 \}[\s\S]*?additionalProperties: false/s);
+  assert.match(writerSource, /narrativeMap: Type\.Optional\(Type\.Object\(\{[\s\S]*?layout: Type\.Literal\("chronological"\),[\s\S]*?maxItems: 12[\s\S]*?maxItems: 30[\s\S]*?maxItems: 50[\s\S]*?additionalProperties: false/s);
   const sources = [{
     events: [
       { id: "one-event-1", summary: "First redacted excerpt", evidence: { reference: "one:event-0001" } },
@@ -261,6 +262,27 @@ test("optional story steps have a closed tool schema and reject unsafe citations
   }), /outside the selected redacted source bundle/);
   assert.throws(() => buildHindsightDocument(sources, { ...model, storySteps: [{ ...validStep, source: "user-confirmed" }] }), /Story step 1 is malformed/);
   assert.throws(() => buildHindsightDocument(sources, { ...model, storySteps: [validStep, { ...validStep }] }), /duplicates an earlier story step/);
+});
+
+test("narrative maps require explicit synthesis opt-in and cannot cite notes or excluded sources", () => {
+  const sources = [source("one", "First redacted excerpt")];
+  const narrativeMap = {
+    layout: "chronological", groups: [{ id: "group", title: "Reviewed events" }],
+    nodes: [{ id: "event", groupId: "group", title: "Opening", body: "The reviewed event appears first.", classification: "direct relationship", evidenceReferences: ["one:event-0001"] }],
+    edges: [],
+  };
+  const model = { claims: [], recommendations: [], narrativeMap };
+  assert.throws(() => buildHindsightDocument(sources, model), /explicit --narrative-map opt-in/);
+  const html = buildHindsightDocument(sources, model, undefined, undefined, undefined, true);
+  assert.match(html, /Cited narrative map/);
+  assert.doesNotThrow(() => buildClaimSupportValidationPrompt(sources, model, { narrativeMapEnabled: true }));
+  assert.match(buildSynthesisPrompt(sources, { narrativeMapEnabled: true }), /optional structured narrativeMap/);
+  assert.match(buildSynthesisPrompt(sources), /Do not provide narrativeMap unless/);
+  assert.throws(() => buildHindsightDocument(sources, {
+    ...model,
+    narrativeMap: { ...narrativeMap, nodes: [{ ...narrativeMap.nodes[0], evidenceReferences: ["note-0123456789abcdef0123456789abcdef"] }] },
+  }, undefined, undefined, undefined, true), /unknown or excluded evidence/);
+  assert.throws(() => buildHindsightDocument([{ reference: "excluded", excluded: true }], model, undefined, undefined, undefined, true), /unknown or excluded evidence/);
 });
 
 test("opt-in claim-support validation requires a complete, evidence-scoped model assessment", () => {
