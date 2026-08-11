@@ -4,6 +4,7 @@ import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-age
 import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
 import { attachEvidenceReferences, createEvidenceManifest } from "./evidence.mjs";
+import { buildHindsightDocument } from "./synthesis.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
 const DEFAULT_FILENAME = "pi-conversation-catalog.html";
@@ -167,6 +168,45 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : "Unable to write the conversation flow.", "error");
       }
+    },
+  });
+
+  pi.registerCommand("hindsight-document", {
+    description: "Interactively select conversations and write a cited hindsight document",
+    async handler(args, ctx) {
+      try {
+        if (!ctx.hasUI) throw new Error("Hindsight generation requires Pi's interactive UI.");
+        const sessions = await SessionManager.listAll();
+        const selected: any[] = [];
+        while (true) {
+          const options = sessions.map((session) => `${selected.some((item) => item.id === session.id) ? "✓ " : ""}${session.cwd || "Unknown location"} — ${session.name || session.firstMessage || session.id}`).concat(["Generate document", "Remove selected conversation", "Cancel"]);
+          const choice = await ctx.ui.select(`Hindsight selection (${selected.length} selected)`, options);
+          if (!choice || choice === "Cancel") throw new Error("Hindsight generation canceled.");
+          if (choice === "Generate document") break;
+          if (choice === "Remove selected conversation") {
+            const remove = await ctx.ui.select("Remove conversation", selected.map((session) => session.name || session.id));
+            const index = selected.findIndex((session) => (session.name || session.id) === remove);
+            if (index >= 0) selected.splice(index, 1);
+            continue;
+          }
+          const session = sessions[options.indexOf(choice)];
+          if (session && !selected.some((item) => item.id === session.id)) selected.push(session);
+        }
+        if (selected.length < 2) throw new Error("Select at least two conversations before generation.");
+        const patterns = await configuredPatterns(ctx.cwd);
+        const sources = [];
+        for (const session of selected) {
+          const projection = projectConversation((await SessionManager.open(session.path)).getEntries());
+          const review = await reviewRedactionChoices(ctx, findSensitiveContent(projection, patterns));
+          if (review.excluded) continue;
+          const reference = pseudonymizeSession(session);
+          sources.push({ events: attachEvidenceReferences(reference, redactProjection(projection, findSensitiveContent(projection, patterns), review.decisions)).events });
+        }
+        const outputPath = resolveOutputPath(args, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
+        await mkdir(dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, buildHindsightDocument(sources), "utf8");
+        ctx.ui.notify(`Hindsight document written to ${outputPath}.`, "info");
+      } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
     },
   });
 }

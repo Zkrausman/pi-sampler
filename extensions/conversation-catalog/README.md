@@ -41,6 +41,7 @@ In Pi, run:
 ```text
 /conversation-catalog [output-path]
 /conversation-flow <session-id> [output-path]
+/hindsight-document [output-path]
 ```
 
 With no argument, `/conversation-catalog` writes
@@ -64,6 +65,8 @@ file beside the HTML. It records a local pseudonymous session reference, exclude
 state, finding locations/pattern names, redact/retain choices, and the stable
 direct-evidence reference/anchor index, but never matched sensitive text, source
 context, or a raw session ID/name. An excluded export is an HTML notice with no conversation content.
+
+`/hindsight-document` provides a multi-select workflow across recorded location groups. Select at least two conversations, remove selections if needed, review each conversation's redactions or exclude it, then generate a standalone cited document from the included source set.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,
