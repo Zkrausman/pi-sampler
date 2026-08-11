@@ -16,6 +16,7 @@ and governance policy.
 | [Delivery controller](extensions/delivery-controller/README.md) | Dispatch one explicitly supplied work item to a configured provider. It does not select work, merge code, or update a tracker. | [Install and use](extensions/delivery-controller/README.md) |
 | [Conversation catalog](extensions/conversation-catalog/README.md) | Writes a standalone, metadata-only HTML catalog of saved Pi sessions grouped by run location. | [Install and use](extensions/conversation-catalog/README.md) |
 | [Wiki delivery](extensions/wiki-delivery/README.md) | Coordinates a fail-closed LLM Wiki delivery lifecycle and validates its manifest. | [Install and use](extensions/wiki-delivery/README.md) |
+| Pi Excalidraw (project-local) | Creates and reads local `.excalidraw` architecture diagrams with deterministic parsing; it makes no cloud/API calls. | [Load locally](#pi-excalidraw-project-local-extension) |
 
 ## Install an extension
 
@@ -33,6 +34,30 @@ version when a reproducible deployment is required.
 
 For local development, add an extension's `src/index.ts` path to Pi's
 `extensions` setting or run it for one session.
+
+> **Output optimization:** `@zkrausman/pi-output-optimizer` has been withdrawn
+> from GitHub Packages. Use Pith and install its Pi hook with `pith install --pi` instead.
+
+### Pi Excalidraw project-local extension
+
+To enable the local Excalidraw tools through Pi's auto-discovered project
+extension location, create `.pi/extensions/pi-excalidraw/index.ts` containing:
+
+```ts
+export { default } from "../../../src/extensions/pi-excalidraw/index.ts";
+```
+
+Then start Pi in this trusted project (or use `/reload`). The extension registers
+`generate_diagram` and `read_diagram`. Both accept only project-relative
+`.excalidraw` paths, parse/write only the local filesystem, and never use a
+network service or subprocess. `generate_diagram` accepts constrained statements
+such as `nodes: Client, API; Client -> API`; `read_diagram` returns JSON-formatted
+nodes and arrow connections. Inputs are bounded (description, scene, nesting,
+elements, labels, and summary output) and reads reject non-regular files before
+opening them. The reader opens and verifies one file descriptor to reduce
+path/symlink TOCTOU exposure; portable Node APIs cannot atomically guarantee a
+resolved pathname remains inside the project if an attacker can replace it
+between path validation and open, so run only in a trusted local project.
 
 > **Output optimization:** `@zkrausman/pi-output-optimizer` has been withdrawn
 > from GitHub Packages. Use Pith and install its Pi hook with `pith install --pi` instead.

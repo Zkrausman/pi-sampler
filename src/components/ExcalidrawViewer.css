@@ -1,0 +1,15 @@
+.excalidraw-viewer {
+  height: min(75vh, 720px);
+  min-height: 360px;
+  border: 1px solid #c9c9c9;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.excalidraw-viewer .excalidraw {
+  height: 100%;
+}
+
+.excalidraw-viewer__message {
+  padding: 1rem;
+}
