@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
+import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
 const DEFAULT_FILENAME = "pi-conversation-catalog.html";
 
@@ -24,6 +25,46 @@ function flowArguments(args: string) {
 
 function safeFilename(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80) || "session";
+}
+
+function metadataPath(outputPath: string) {
+  return outputPath.replace(/\.html$/i, ".redaction.json");
+}
+
+async function configuredPatterns(cwd: string) {
+  try {
+    const configPath = resolve(cwd, ".pi", "conversation-redaction-patterns.json");
+    const parsed = JSON.parse(await readFile(configPath, "utf8"));
+    return compileSensitivePatterns(parsed?.patterns);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return compileSensitivePatterns();
+    throw new Error("Unable to read .pi/conversation-redaction-patterns.json.");
+  }
+}
+
+async function reviewRedactionChoices(ctx: any, findings: any[]) {
+  if (!ctx.hasUI) throw new Error("Conversation export requires an interactive Pi UI so redaction choices can be reviewed.");
+  if (findings.length === 0) {
+    const approved = await ctx.ui.confirm("No sensitive content detected", "Export this conversation flow without redactions?");
+    if (!approved) throw new Error("Conversation export canceled.");
+    return { excluded: false, decisions: {} };
+  }
+
+  const begin = await ctx.ui.select("Conversation redaction preview", ["Review findings", "Exclude this conversation"]);
+  if (!begin) throw new Error("Conversation export canceled.");
+  if (begin === "Exclude this conversation") return { excluded: true, decisions: {} };
+
+  const decisions: Record<string, string> = {};
+  for (const [index, finding] of findings.entries()) {
+    const choice = await ctx.ui.select(
+      `Finding ${index + 1}/${findings.length}: ${finding.pattern} — ${finding.preview}`,
+      ["Redact (recommended)", "Retain", "Exclude this conversation"],
+    );
+    if (!choice) throw new Error("Conversation export canceled.");
+    if (choice === "Exclude this conversation") return { excluded: true, decisions };
+    decisions[finding.id] = choice === "Retain" ? "retain" : "redact";
+  }
+  return { excluded: false, decisions };
 }
 
 /** A read-only catalog of Pi session metadata and an opt-in historical flow viewer. */
@@ -61,7 +102,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("conversation-flow", {
-    description: "Write a standalone HTML flow view for one saved Pi session",
+    description: "Review redactions, then write a standalone HTML flow view for one saved Pi session",
     async handler(args, ctx) {
       const requested = flowArguments(args);
       if (!requested) {
@@ -87,16 +128,37 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const outputPath = resolveOutputPath(
           requested.outputPath,
           ctx.cwd,
-          `pi-conversation-flow-${safeFilename(selected.id)}.html`,
+          `pi-conversation-flow-${safeFilename(pseudonymizeSession(selected))}.html`,
           "conversation flow",
         );
         const manager = await SessionManager.open(selected.path);
-        const html = generateConversationFlowHtml(selected, projectConversation(manager.getEntries()));
+        const projection = projectConversation(manager.getEntries());
+        const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd));
+        const review = await reviewRedactionChoices(ctx, findings);
+        const exportSession = { id: pseudonymizeSession(selected), name: "Selected conversation" };
+        const metadata = createRedactionMetadata(exportSession.id, findings, review.decisions, review.excluded);
+        const html = review.excluded
+          ? generateExcludedConversationHtml(exportSession)
+          : generateConversationFlowHtml(exportSession, redactProjection(projection, findings, review.decisions));
+        const decisionPath = metadataPath(outputPath);
         await mkdir(dirname(outputPath), { recursive: true });
-        await writeFile(outputPath, html, "utf8");
-        ctx.ui.notify(`Conversation flow written to ${outputPath}. It contains selected transcript content; open this local .html file directly in your browser.`, "info");
+        // A metadata write must succeed before content is created; remove it if the
+        // content write fails so callers never receive an orphaned decision record.
+        await writeFile(decisionPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+        try {
+          await writeFile(outputPath, html, "utf8");
+        } catch (error) {
+          await rm(decisionPath, { force: true }).catch(() => undefined);
+          throw error;
+        }
+        ctx.ui.notify(
+          review.excluded
+            ? `Conversation excluded. Decision metadata written to ${metadataPath(outputPath)}.`
+            : `Conversation flow written to ${outputPath}. Redaction decisions are recorded in ${metadataPath(outputPath)}.`,
+          "info",
+        );
       } catch (error) {
-        ctx.ui.notify(error instanceof Error && error.message.includes("output path") ? error.message : "Unable to write the conversation flow.", "error");
+        ctx.ui.notify(error instanceof Error ? error.message : "Unable to write the conversation flow.", "error");
       }
     },
   });
