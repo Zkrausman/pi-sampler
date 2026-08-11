@@ -12,6 +12,7 @@ import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkBacklinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
 import { HindsightOutcomeError, createHindsightOutcomeOrigin, hindsightReportPathForDispositionPath, outcomeHistoryPathForDispositionPath, outcomeHistoryReportPathForDispositionPath, readHindsightOutcomeHistory, recordHindsightOutcomeUpdate } from "./hindsight-outcomes.mjs";
 import { HindsightFeedbackError, createHindsightFeedbackMetadata, feedbackPathForDispositionPath, feedbackReportPathForDispositionPath, readHindsightFeedback, recordHindsightFeedback, refreshHindsightFeedbackViews, writeHindsightFeedbackSeed } from "./hindsight-feedback.mjs";
+import { HindsightNotesError, addHindsightNote, deleteHindsightNote, editHindsightNote, hindsightNotesPath, hindsightNotesSessionReference, readHindsightNotes } from "./hindsight-notes.mjs";
 import { HindsightLinearAdapter, createRequestPreview, linkLookupRequestPreview } from "./hindsight-linear-adapter.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
@@ -186,8 +187,85 @@ function hindsightFeedbackErrorMessage(error: unknown) {
   return messages[code] || "Unable to record local hindsight feedback.";
 }
 
+function hindsightNotesErrorMessage(error: unknown) {
+  const code = error instanceof HindsightNotesError ? error.code : "operation_failed";
+  const messages: Record<string, string> = {
+    ui_required: "Hindsight notes require Pi's interactive UI.",
+    untrusted_project: "Hindsight notes require a trusted project root.",
+    current_session_unavailable: "Pi did not expose the active session identity; no note was read or changed.",
+    invalid_session_reference: "The local session reference is invalid; no note was read or changed.",
+    invalid_notes_path: "The local hindsight-notes path is invalid; no note was read or changed.",
+    unsafe_notes_path: "The local hindsight-notes path is a symlink or unsafe filesystem object; no note was read or changed.",
+    malformed_notes: "The local hindsight-notes store is malformed or unsupported; it was not changed.",
+    session_mismatch: "The local hindsight-notes store belongs to another session; it was not read or changed.",
+    unsafe_note_text: "Notes must not include raw session identifiers or credentials; nothing was saved.",
+    invalid_note_id: "The selected local note identity is invalid; it was not changed.",
+    note_missing: "That local note no longer exists; it was not changed.",
+    notes_missing: "No local notes exist for this session.",
+    notes_limit_reached: "This session already has the maximum number of local notes.",
+    notes_lock_timeout: "Another local hindsight-note operation is in progress; no change was made.",
+    required_redaction: "A required sensitive finding must be redacted or excluded; no note was included.",
+    confirmation_required: "Hindsight notes canceled.",
+  };
+  return messages[code] || "Unable to update local hindsight notes.";
+}
+
 function isTrustedProject(ctx: any) {
   return typeof ctx?.isProjectTrusted === "function" && ctx.isProjectTrusted() === true;
+}
+
+// Pi exposes the active session on current command contexts. The raw value is
+// held only for the add/edit validation call and opaque-reference derivation;
+// it is never persisted, rendered, exported, or sent to a model.
+async function currentHindsightSession(ctx: any) {
+  const current = ctx?.session || ctx?.currentSession;
+  const managedId = typeof ctx?.sessionManager?.getSessionId === "function" ? ctx.sessionManager.getSessionId() : undefined;
+  const actualSessionId = typeof managedId === "string" ? managedId : typeof current?.id === "string" ? current.id
+    : typeof ctx?.sessionId === "string" ? ctx.sessionId : "";
+  if (!actualSessionId) throw new HindsightNotesError("current_session_unavailable");
+  // The note key intentionally derives from the actual Pi session ID only;
+  // display names and legacy 32-bit catalog pseudonyms cannot select notes.
+  return { actualSessionId, sessionReference: hindsightNotesSessionReference(actualSessionId) };
+}
+
+function noteReviewPatterns(patterns: any[], actualSessionId: unknown) {
+  if (typeof actualSessionId !== "string" || !actualSessionId || actualSessionId.includes("\0") || Array.from(actualSessionId).length > 512) return patterns;
+  const escaped = actualSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [...patterns, { name: "active Pi session ID", regex: new RegExp(escaped, "g"), requiredRedaction: true }];
+}
+
+async function reviewHindsightNotes(ctx: any, notes: any[], patterns: any[]) {
+  const included: any[] = [];
+  for (const [index, note] of notes.entries()) {
+    const projection = { events: [{ id: note.noteId, summary: note.text, metadata: [] }], edges: [] };
+    const findings = findSensitiveContent(projection, patterns);
+    let decisions: Record<string, string> = {};
+    if (findings.length === 0) {
+      const choice = await ctx.ui.select(`Hindsight note ${index + 1}: no sensitive content detected`, ["Include as user-authored context", "Exclude this note", "Cancel"]);
+      if (!choice || choice === "Cancel") throw new HindsightNotesError("confirmation_required");
+      if (choice === "Exclude this note") continue;
+    } else {
+      const begin = await ctx.ui.select(`Hindsight note ${index + 1}: sensitive content detected`, ["Review findings", "Exclude this note", "Cancel"]);
+      if (!begin || begin === "Cancel") throw new HindsightNotesError("confirmation_required");
+      if (begin === "Exclude this note") continue;
+      let excluded = false;
+      for (const [findingIndex, finding] of findings.entries()) {
+        const choice = await ctx.ui.select(
+          `Note finding ${findingIndex + 1}/${findings.length}: ${finding.pattern} — ${finding.preview}`,
+          finding.requiredRedaction === true ? ["Redact (required)", "Exclude this note", "Cancel"] : ["Redact (recommended)", "Retain", "Exclude this note", "Cancel"],
+        );
+        if (!choice || choice === "Cancel") throw new HindsightNotesError("confirmation_required");
+        if (choice === "Exclude this note") { excluded = true; break; }
+        if (finding.requiredRedaction === true && choice !== "Redact (required)") throw new HindsightNotesError("required_redaction");
+        decisions[finding.id] = choice === "Retain" ? "retain" : "redact";
+      }
+      if (excluded) continue;
+    }
+    const redacted = redactProjection(projection, findings, decisions).events[0]?.summary;
+    // Preserve only the reviewed/redacted text and explicit user provenance.
+    included.push({ noteId: note.noteId, text: redacted, provenance: note.provenance });
+  }
+  return included;
 }
 
 function acceptedRecommendationLabel(recommendation: any) {
@@ -225,10 +303,11 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
   for (const [index, finding] of findings.entries()) {
     const choice = await ctx.ui.select(
       `Finding ${index + 1}/${findings.length}: ${finding.pattern} — ${finding.preview}`,
-      ["Redact (recommended)", "Retain", "Exclude this conversation"],
+      finding.requiredRedaction === true ? ["Redact (required)", "Exclude this conversation"] : ["Redact (recommended)", "Retain", "Exclude this conversation"],
     );
     if (!choice) throw new Error("Conversation export canceled.");
     if (choice === "Exclude this conversation") return { excluded: true, decisions };
+    if (finding.requiredRedaction === true && choice !== "Redact (required)") throw new Error("Required sensitive finding must be redacted or the conversation excluded.");
     decisions[finding.id] = choice === "Retain" ? "retain" : "redact";
   }
   return { excluded: false, decisions };
@@ -242,6 +321,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     restoreTools: () => void;
     validateClaimSupport: boolean;
     priorOutcomes?: any;
+    hindsightNotes: any[];
     phase: "draft" | "validation";
     modelOutput?: any;
   } | undefined;
@@ -292,7 +372,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           pi.setActiveTools(["hindsight_claim_support_validate"]);
           return { content: [{ type: "text", text: validationPrompt }] };
         }
-        const html = buildHindsightDocument(pendingHindsight.sources, params, undefined, pendingHindsight.priorOutcomes);
+        const html = buildHindsightDocument(pendingHindsight.sources, params, undefined, pendingHindsight.priorOutcomes, pendingHindsight.hindsightNotes);
         const paths = await writeHindsightReport(pendingHindsight.outputPath, html, { claims: params.claims, recommendations: params.recommendations });
         const outputPath = pendingHindsight.outputPath;
         // Keep the pending state until agent_settled restores the original tool set.
@@ -327,7 +407,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         return { content: [{ type: "text", text: "No claim-support validation is awaiting completion." }] };
       }
       try {
-        const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params, pendingHindsight.priorOutcomes);
+        const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params, pendingHindsight.priorOutcomes, pendingHindsight.hindsightNotes);
         const paths = await writeHindsightReport(pendingHindsight.outputPath, html, { claims: pendingHindsight.modelOutput.claims, recommendations: pendingHindsight.modelOutput.recommendations });
         const outputPath = pendingHindsight.outputPath;
         return { content: [{ type: "text", text: `Hindsight document with claim-support validation written to ${outputPath}. Model-suggestion disposition seed written locally to ${paths.dispositionPath}. Local feedback seed written to ${paths.feedbackPath}.` }] };
@@ -437,6 +517,58 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("hindsight-notes", {
+    description: "Add, view, edit, or delete local user-authored notes for the current Pi session",
+    async handler(_args, ctx) {
+      try {
+        if (!ctx.hasUI || typeof ctx.ui.input !== "function") throw new HindsightNotesError("ui_required");
+        if (!isTrustedProject(ctx)) throw new HindsightNotesError("untrusted_project");
+        const { actualSessionId, sessionReference } = await currentHindsightSession(ctx);
+        const path = hindsightNotesPath(ctx.cwd, sessionReference);
+        const store = await readHindsightNotes(ctx.cwd, sessionReference);
+        const notes = store?.notes || [];
+        const action = await ctx.ui.select("Current-session hindsight notes", ["Add note", "View notes", "Edit note", "Delete note", "Cancel"]);
+        if (!action || action === "Cancel") throw new HindsightNotesError("confirmation_required");
+        if (action === "View notes") {
+          if (notes.length === 0) { ctx.ui.notify("No local hindsight notes exist for this current session.", "info"); return; }
+          // This picker deliberately lists only the active session's opaque-keyed store.
+          await ctx.ui.select("Current-session hindsight notes (user-authored context)", ["Close", ...notes.map((note, index) => `${index + 1}. ${note.text.slice(0, 120)}${note.text.length > 120 ? "…" : ""}`)]);
+          return;
+        }
+        if (action === "Add note") {
+          const text = await ctx.ui.input("Add hindsight note", "User-authored context only. Do not paste session logs, session IDs, or credentials.");
+          if (text === undefined) throw new HindsightNotesError("confirmation_required");
+          const confirmed = await ctx.ui.confirm("Final confirmation: save local hindsight note", "This writes a user-authored, current-session note under an opaque local session reference. It does not modify session logs, make a network request, or make the note evidence. Save this note?");
+          if (confirmed !== true) throw new HindsightNotesError("confirmation_required");
+          await addHindsightNote(ctx.cwd, sessionReference, text, { actualSessionId });
+          ctx.ui.notify(`Local user-authored hindsight note saved in ${path}.`, "info");
+          return;
+        }
+        if (notes.length === 0) throw new HindsightNotesError("notes_missing");
+        const options = ["Cancel", ...notes.map((note, index) => `${index + 1}. ${note.text.slice(0, 120)}${note.text.length > 120 ? "…" : ""}`)];
+        const selectedLabel = await ctx.ui.select(`Select a current-session note to ${action === "Edit note" ? "edit" : "delete"}`, options);
+        if (!selectedLabel || selectedLabel === "Cancel") throw new HindsightNotesError("confirmation_required");
+        const note = notes[options.indexOf(selectedLabel) - 1];
+        if (!note) throw new HindsightNotesError("note_missing");
+        if (action === "Edit note") {
+          const text = await ctx.ui.input("Edit hindsight note", "Replace the selected note with user-authored context only. Do not paste session logs, session IDs, or credentials.");
+          if (text === undefined) throw new HindsightNotesError("confirmation_required");
+          const confirmed = await ctx.ui.confirm("Final confirmation: edit local hindsight note", "This replaces this local user-authored context note. It does not modify session logs, make a network request, or make the note evidence. Save the edit?");
+          if (confirmed !== true) throw new HindsightNotesError("confirmation_required");
+          await editHindsightNote(ctx.cwd, sessionReference, note.noteId, text, { actualSessionId });
+          ctx.ui.notify(`Local user-authored hindsight note updated in ${path}.`, "info");
+          return;
+        }
+        const confirmed = await ctx.ui.confirm("Final confirmation: delete local hindsight note", "This permanently removes this local user-authored note. It will not be rendered, exported, or sent to hindsight synthesis. Delete it?");
+        if (confirmed !== true) throw new HindsightNotesError("confirmation_required");
+        await deleteHindsightNote(ctx.cwd, sessionReference, note.noteId);
+        ctx.ui.notify(`Local user-authored hindsight note deleted from ${path}.`, "info");
+      } catch (error) {
+        ctx.ui.notify(hindsightNotesErrorMessage(error), "error");
+      }
+    },
+  });
+
   pi.registerCommand("hindsight-document", {
     description: "Interactively select one conversation and write a cited hindsight document (optional --validate-claim-support)",
     async handler(args, ctx) {
@@ -466,6 +598,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const findings = findSensitiveContent(projection, patterns);
         const review = await reviewRedactionChoices(ctx, findings);
         const reference = pseudonymizeSession(session);
+        const noteSessionReference = hindsightNotesSessionReference(session.id);
         // Keep a local pseudonym so an excluded source can link to an explicit
         // redaction-review fallback without retaining conversation content.
         const sources: any[] = [];
@@ -475,20 +608,27 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           const cited = attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions));
           sources.push({ reference, events: cited.events, edges: cited.edges });
         }
+        // The store key is derived only from the selected Pi session ID. Only
+        // that exact store is read, and excluded/deleted notes never enter this
+        // reviewed bundle.
+        // Never access a project-local note store from an untrusted project.
+        let noteStore: any;
+        if (isTrustedProject(ctx)) noteStore = await readHindsightNotes(ctx.cwd, noteSessionReference);
+        const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, noteReviewPatterns(patterns, session.id)) : [];
         const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
         try {
-          pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, priorOutcomes, phase: "draft" };
+          pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, priorOutcomes, hindsightNotes, phase: "draft" };
           // Prior outcomes remain in pending state for safe post-model rendering;
           // they are deliberately never placed in a model synthesis prompt.
-          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport }));
+          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport, hindsightNotes }));
         } catch (error) {
           pendingHindsight = undefined;
           restoreTools();
           throw error;
         }
-        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.${requested.validateClaimSupport ? " Claim-support validation will run as a separate evidence-scoped model pass." : ""}${priorOutcomes ? " Deliberately supplied prior outcomes are labeled context, not evidence." : ""}`, "info");
-      } catch (error) { ctx.ui.notify(error instanceof HindsightOutcomeError ? hindsightOutcomeErrorMessage(error) : error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
+        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.${requested.validateClaimSupport ? " Claim-support validation will run as a separate evidence-scoped model pass." : ""}${priorOutcomes ? " Deliberately supplied prior outcomes are labeled context, not evidence." : ""}${hindsightNotes.length ? " Reviewed user-authored notes are separate context, never evidence or citations." : ""}`, "info");
+      } catch (error) { ctx.ui.notify(error instanceof HindsightOutcomeError ? hindsightOutcomeErrorMessage(error) : error instanceof HindsightNotesError ? hindsightNotesErrorMessage(error) : error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
     },
   });
 

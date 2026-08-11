@@ -38,21 +38,21 @@ const SessionManager = {
     { id: "one", name: "First", cwd: "/test", path: "/one", modified: "", messageCount: 1 },
     { id: "two", name: "Second", cwd: "/test", path: "/two", modified: "", messageCount: 1 },
   ],
-  open: async () => ({ getEntries: () => [] }),
+  open: async (path) => ({ getEntries: () => globalThis.__hindsightEntries?.[path] || [] }),
 };
 const Type = { Object: (value) => value, Optional: (value) => value, String: () => ({}), Integer: () => ({}), Array: () => ({}), Union: () => ({}), Literal: () => ({}) };
 const generateCatalogHtml = () => "";
 const groupSessions = (value) => value;
 const generateConversationFlowHtml = () => "";
-const projectConversation = () => ({ events: [], edges: [] });
+const projectConversation = (entries) => entries || ({ events: [], edges: [] });
 const attachEvidenceReferences = (_reference, value) => value;
 const createEvidenceManifest = () => ({ schemaVersion: 1, citations: [] });
 const createHindsightRecommendationDispositionMetadata = (document) => ({ schemaVersion: 1, recommendations: document.recommendations });
 const generateRelationshipMapHtml = () => "";
 const projectRelationshipMap = (value) => value;
 const buildClaimSupportValidationPrompt = () => "Validate cited claim support";
-const buildHindsightDocument = () => "<html></html>";
-const buildSynthesisPrompt = () => "Synthesize";
+const buildHindsightDocument = (...args) => { globalThis.__hindsightDocumentArgs = args; return "<html></html>"; };
+const buildSynthesisPrompt = (...args) => { globalThis.__hindsightPromptArgs = args; return "Synthesize"; };
 const restrictToolsForHindsightSynthesis = (pi) => {
   const previousTools = pi.getActiveTools();
   let restored = false;
@@ -65,10 +65,16 @@ const restrictToolsForHindsightSynthesis = (pi) => {
 };
 const compileSensitivePatterns = () => [];
 const createRedactionMetadata = () => ({});
-const findSensitiveContent = () => [];
+const findSensitiveContent = (projection) => (projection?.events || []).flatMap((event) => {
+  const email = "user@example.test";
+  const slack = "xoxb-1234567890-AbCdEfGhIjKl";
+  const value = event?.summary || "";
+  const matched = value.includes(email) ? { pattern: "email address", preview: email, requiredRedaction: false } : value.includes(slack) ? { pattern: "Slack token", preview: slack, requiredRedaction: true } : undefined;
+  return matched ? [{ id: "finding-1", eventId: event.id, ...matched, start: value.indexOf(matched.preview), end: value.indexOf(matched.preview) + matched.preview.length, field: "summary" }] : [];
+});
 const generateExcludedConversationHtml = () => "";
 const pseudonymizeSession = (session) => session.id;
-const redactProjection = (value) => value;
+const redactProjection = (value, findings, decisions) => ({ ...value, events: (value?.events || []).map((event) => ({ ...event, summary: findings?.length && decisions?.[findings[0].id] === "redact" ? event.summary.replace(findings[0].preview, "[REDACTED: " + findings[0].pattern + "]") : event.summary })) });
 class HindsightWorkError extends Error { constructor(code) { super(code); this.code = code; } }
 const HINDSIGHT_WORK_CONFIG_PATH = ".pi/hindsight-linear.json";
 const acceptedHindsightRecommendations = (value) => value.recommendations || [];
@@ -91,6 +97,14 @@ const readHindsightFeedback = async () => undefined;
 const writeHindsightFeedbackSeed = async (path, seed) => { globalThis.__hindsightFiles.set(path, JSON.stringify(seed)); };
 const refreshHindsightFeedbackViews = async () => {};
 const recordHindsightFeedback = async () => {};
+class HindsightNotesError extends Error { constructor(code) { super(code); this.code = code; } }
+class HindsightOutcomeError extends Error { constructor(code) { super(code); this.code = code; } }
+const hindsightNotesPath = (_cwd, reference) => "/test/.pi/hindsight-notes/" + reference + ".json";
+const hindsightNotesSessionReference = (id) => "session-" + id.padEnd(32, "0").slice(0, 32);
+const readHindsightNotes = async (_root, reference) => globalThis.__hindsightNotesByReference?.[reference];
+const addHindsightNote = async (...args) => { globalThis.__hindsightNoteAdd = args; };
+const editHindsightNote = async (...args) => { globalThis.__hindsightNoteEdit = args; };
+const deleteHindsightNote = async (...args) => { globalThis.__hindsightNoteDelete = args; };
 const outcomeHistoryPathForDispositionPath = (path) => path.replace(".dispositions.json", ".outcomes.json");
 class HindsightLinearAdapter {
   async createIssue() { globalThis.__hindsightCreateCalls = (globalThis.__hindsightCreateCalls || 0) + 1; return { id: "issue_1", url: "https://linear.app/acme/issue/ABC-1", status: "Todo" }; }
@@ -323,6 +337,109 @@ test("hindsight synthesis disables direct file-write tools and restores the sess
   restoreTools();
   restoreTools();
   assert.deepEqual(setActiveToolsCalls, [["hindsight_document_write"], normalTools]);
+});
+
+test("hindsight-notes registers a current-session-only add workflow", async () => {
+  const { default: conversationCatalog } = await loadConversationCatalogExtension();
+  const commands = [];
+  conversationCatalog({
+    on: () => {}, registerTool: () => {}, registerCommand: (name, command) => commands.push({ name, ...command }),
+    getActiveTools: () => [], setActiveTools: () => {}, sendUserMessage: () => {},
+  });
+  const notes = commands.find((command) => command.name === "hindsight-notes");
+  const notifications = [];
+  globalThis.__hindsightNoteAdd = undefined;
+  await notes.handler("", {
+    cwd: "/test", hasUI: true, isProjectTrusted: () => true,
+    sessionManager: { getSessionId: () => "one", getSessionName: () => "First" },
+    ui: {
+      select: async () => "Add note", input: async () => "Current session note.", confirm: async () => true,
+      notify: (message, level) => notifications.push({ message, level }),
+    },
+  });
+  assert.deepEqual(globalThis.__hindsightNoteAdd, ["/test", "session-one00000000000000000000000000000", "Current session note.", { actualSessionId: "one" }]);
+  assert.match(notifications[0].message, /saved/);
+});
+
+test("single-session hindsight selection sends only selected reviewed/redacted notes and excludes absent notes", async () => {
+  const { default: conversationCatalog } = await loadConversationCatalogExtension();
+  const commands = []; const tools = []; const handlers = new Map();
+  const pi = {
+    on: (event, handler) => handlers.set(event, handler), registerTool: (tool) => tools.push(tool),
+    registerCommand: (name, command) => commands.push({ name, ...command }), getActiveTools: () => [], setActiveTools: () => {}, sendUserMessage: () => {},
+  };
+  globalThis.__hindsightEntries = { "/one": { events: [{ id: "event-one", summary: "Selected source", evidence: { reference: "one:event-0001" } }], edges: [] }, "/two": { events: [{ id: "event-two", summary: "Other source", evidence: { reference: "two:event-0001" } }], edges: [] } };
+  const selectedRef = "session-one00000000000000000000000000000";
+  const otherRef = "session-two00000000000000000000000000000";
+  const selectedNote = { noteId: "note-0123456789abcdef0123456789abcdef", text: "Contact user@example.test after the handoff.", provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: "2026-09-01T12:00:00.000Z" } };
+  const otherNote = { ...selectedNote, noteId: "note-fedcba9876543210fedcba9876543210", text: "OTHER-SESSION-NOTE" };
+  globalThis.__hindsightNotesByReference = { [selectedRef]: { notes: [selectedNote] }, [otherRef]: { notes: [otherNote] } };
+  conversationCatalog(pi);
+  const hindsight = commands.find((command) => command.name === "hindsight-document");
+  const chooseRedaction = async (title, options) => {
+    if (title === "Select one conversation for hindsight") return options[1];
+    if (title.includes("sensitive content detected")) return "Review findings";
+    if (title.startsWith("Note finding")) return "Redact (recommended)";
+    throw new Error(`unexpected picker: ${title}`);
+  };
+  await hindsight.handler("", { cwd: "/test", hasUI: true, isProjectTrusted: () => true, ui: { select: chooseRedaction, confirm: async () => true, notify: () => {} } });
+  const reviewed = globalThis.__hindsightPromptArgs[1].hindsightNotes;
+  assert.deepEqual(reviewed.map((entry) => entry.text), ["Contact [REDACTED: email address] after the handoff."]);
+  assert.doesNotMatch(JSON.stringify(globalThis.__hindsightPromptArgs), /OTHER-SESSION-NOTE|user@example\.test/);
+  await tools.find((tool) => tool.name === "hindsight_document_write").execute("draft", { claims: [], recommendations: [] });
+  assert.deepEqual(globalThis.__hindsightDocumentArgs[4].map((entry) => entry.text), ["Contact [REDACTED: email address] after the handoff."]);
+  handlers.get("agent_settled")();
+
+  // Excluding the selected note (and a deleted/empty store) gives the model and
+  // renderer no note payload at all, even though another session has one.
+  globalThis.__hindsightNotesByReference[selectedRef] = { notes: [selectedNote] };
+  const exclude = async (title, options) => title === "Select one conversation for hindsight" ? options[1]
+    : title.includes("sensitive content detected") ? "Exclude this note" : (() => { throw new Error(`unexpected picker: ${title}`); })();
+  await hindsight.handler("", { cwd: "/test", hasUI: true, isProjectTrusted: () => true, ui: { select: exclude, confirm: async () => true, notify: () => {} } });
+  assert.deepEqual(globalThis.__hindsightPromptArgs[1].hindsightNotes, []);
+  await tools.find((tool) => tool.name === "hindsight_document_write").execute("excluded", { claims: [], recommendations: [] });
+  assert.deepEqual(globalThis.__hindsightDocumentArgs[4], []);
+  handlers.get("agent_settled")();
+  globalThis.__hindsightNotesByReference = undefined;
+  globalThis.__hindsightEntries = undefined;
+});
+
+test("required Slack note redaction blocks Retain and never reaches prompt or context HTML", async () => {
+  const { default: conversationCatalog } = await loadConversationCatalogExtension();
+  const commands = []; const tools = []; const handlers = new Map(); const sent = [];
+  const pi = {
+    on: (event, handler) => handlers.set(event, handler), registerTool: (tool) => tools.push(tool),
+    registerCommand: (name, command) => commands.push({ name, ...command }), getActiveTools: () => [], setActiveTools: () => {}, sendUserMessage: (message) => sent.push(message),
+  };
+  const selectedRef = "session-one00000000000000000000000000000";
+  const slackToken = "xoxb-1234567890-AbCdEfGhIjKl";
+  const slackNote = { noteId: "note-0123456789abcdef0123456789abcdef", text: `Do not retain ${slackToken}.`, provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: "2026-09-01T12:00:00.000Z" } };
+  globalThis.__hindsightEntries = { "/one": { events: [{ id: "event-one", summary: "Selected source", evidence: { reference: "one:event-0001" } }], edges: [] } };
+  globalThis.__hindsightNotesByReference = { [selectedRef]: { notes: [slackNote] } };
+  conversationCatalog(pi);
+  const hindsight = commands.find((command) => command.name === "hindsight-document");
+  const notifications = [];
+  const chooseRequiredRedaction = async (title, options) => title === "Select one conversation for hindsight" ? options[1]
+    : title.includes("sensitive content detected") ? "Review findings"
+      : title.startsWith("Note finding") ? "Redact (required)" : (() => { throw new Error(`unexpected picker: ${title}`); })();
+  await hindsight.handler("", { cwd: "/test", hasUI: true, isProjectTrusted: () => true, ui: { select: chooseRequiredRedaction, confirm: async () => true, notify: (message, level) => notifications.push({ message, level }) } });
+  assert.doesNotMatch(JSON.stringify(globalThis.__hindsightPromptArgs), new RegExp(slackToken));
+  await tools.find((tool) => tool.name === "hindsight_document_write").execute("draft", { claims: [], recommendations: [] });
+  assert.doesNotMatch(JSON.stringify(globalThis.__hindsightDocumentArgs), new RegExp(slackToken));
+  handlers.get("agent_settled")();
+
+  globalThis.__hindsightPromptArgs = undefined;
+  globalThis.__hindsightDocumentArgs = undefined;
+  const attemptRetain = async (title, options) => title === "Select one conversation for hindsight" ? options[1]
+    : title.includes("sensitive content detected") ? "Review findings"
+      : title.startsWith("Note finding") ? "Retain" : (() => { throw new Error(`unexpected picker: ${title}`); })();
+  await hindsight.handler("", { cwd: "/test", hasUI: true, isProjectTrusted: () => true, ui: { select: attemptRetain, confirm: async () => true, notify: (message, level) => notifications.push({ message, level }) } });
+  assert.equal(globalThis.__hindsightPromptArgs, undefined);
+  assert.equal(globalThis.__hindsightDocumentArgs, undefined);
+  assert.equal(sent.length, 1);
+  assert.match(notifications.at(-1).message, /required sensitive finding/i);
+  globalThis.__hindsightNotesByReference = undefined;
+  globalThis.__hindsightEntries = undefined;
 });
 
 test("hindsight work command rejects noninteractive, untrusted, and missing-config requests before any work selection", async () => {

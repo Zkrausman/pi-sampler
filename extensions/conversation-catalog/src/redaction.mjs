@@ -6,6 +6,7 @@ export const DEFAULT_SENSITIVE_PATTERNS = Object.freeze([
   { name: "bearer token", expression: "\\bBearer\\s+[A-Z0-9._~+/-]{12,}\\b", flags: "gi" },
   { name: "API key", expression: "\\b(?:sk|pk|api)[_-][A-Z0-9_-]{12,}\\b", flags: "gi" },
   { name: "GitHub token", expression: "\\bgh[pousr]_[A-Za-z0-9_]{20,}\\b", flags: "g" },
+  { name: "Slack token", expression: "\\b(?:xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|xoxe(?:\\.xox[abprs])?-[A-Za-z0-9-]{10,})\\b", flags: "g", requiredRedaction: true },
 ]);
 
 function text(value) {
@@ -35,7 +36,7 @@ export function compileSensitivePatterns(configured = []) {
     const suppliedFlags = text(candidate?.flags).replace(/[^gimsu]/g, "");
     if (!expression || expression.length > 500) return [];
     try {
-      return [{ name: safeName(candidate?.name, index), regex: new RegExp(expression, suppliedFlags.includes("g") ? suppliedFlags : `${suppliedFlags}g`) }];
+      return [{ name: safeName(candidate?.name, index), regex: new RegExp(expression, suppliedFlags.includes("g") ? suppliedFlags : `${suppliedFlags}g`), requiredRedaction: candidate?.requiredRedaction === true }];
     } catch {
       return [];
     }
@@ -70,6 +71,7 @@ export function findSensitiveContent(projection, patterns = compileSensitivePatt
             eventIndex: eventIndex + 1,
             field: field.key,
             pattern: pattern.name,
+            requiredRedaction: pattern.requiredRedaction === true,
             start: match.index,
             end: match.index + match[0].length,
             preview: bounded(match[0]),
@@ -119,8 +121,19 @@ export function pseudonymizeSession(session) {
   return `session-${(hash >>> 0).toString(36)}`;
 }
 
+function requireRedactionDecisions(findings, decisions, { excluded = false } = {}) {
+  for (const finding of (Array.isArray(findings) ? findings : [])) {
+    if (finding?.requiredRedaction !== true) continue;
+    const action = decisions?.[finding.id];
+    // A persisted/manual retain is never a valid fallback for a mandatory
+    // finding. An excluded whole projection carries no renderable content.
+    if (action === "retain" || (!excluded && action !== "redact")) throw new Error("required_redaction");
+  }
+}
+
 /** Returns a renderer-safe copy. Only findings chosen for redaction are changed. */
 export function redactProjection(projection, findings, decisions) {
+  requireRedactionDecisions(findings, decisions);
   const redactIds = new Set((Array.isArray(findings) ? findings : [])
     .filter((finding) => decisions?.[finding.id] === "redact")
     .map((finding) => finding.id));
@@ -155,6 +168,7 @@ export function redactProjection(projection, findings, decisions) {
 /** Metadata never includes matched sensitive text or the unredacted preview. */
 export function createRedactionMetadata(sessionId, findings, decisions, excluded) {
   const safeFindings = Array.isArray(findings) ? findings : [];
+  requireRedactionDecisions(safeFindings, decisions, { excluded: Boolean(excluded) });
   return {
     schemaVersion: 1,
     sessionId: text(sessionId),
