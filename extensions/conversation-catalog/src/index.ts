@@ -34,6 +34,17 @@ function metadataPath(outputPath: string) {
   return outputPath.replace(/\.html$/i, ".redaction.json");
 }
 
+function pickerDescription(value: unknown) {
+  const words = typeof value === "string" ? value.trim().split(/\s+/).filter(Boolean) : [];
+  return words.length > 10 ? `${words.slice(0, 10).join(" ")}…` : words.join(" ");
+}
+
+function pickerLabel(session: any) {
+  const description = pickerDescription(session.name || session.firstMessage) || "Untitled session";
+  const id = typeof session.id === "string" ? session.id.slice(0, 8) : "unknown";
+  return `${session.cwd || "Unknown location"} — ${description} (${id})`;
+}
+
 async function configuredPatterns(cwd: string) {
   try {
     const configPath = resolve(cwd, ".pi", "conversation-redaction-patterns.json");
@@ -180,7 +191,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const sessions = await SessionManager.listAll();
         const selected: any[] = [];
         while (true) {
-          const options = sessions.map((session) => `${selected.some((item) => item.id === session.id) ? "✓ " : ""}${session.cwd || "Unknown location"} — ${session.name || session.firstMessage || session.id}`).concat(["Generate document", "Remove selected conversation", "Cancel"]);
+          const options = sessions.map((session) => `${selected.some((item) => item.id === session.id) ? "✓ " : ""}${pickerLabel(session)}`).concat(["Generate document", "Remove selected conversation", "Cancel"]);
           const choice = await ctx.ui.select(`Hindsight selection (${selected.length} selected)`, options);
           if (!choice || choice === "Cancel") throw new Error("Hindsight generation canceled.");
           if (choice === "Generate document") break;
