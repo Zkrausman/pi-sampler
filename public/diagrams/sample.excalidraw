@@ -1,0 +1,213 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {
+      "id": "rectangle-0",
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#a5d8ff",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "index": "a0",
+      "seed": 4168674126,
+      "version": 1,
+      "versionNonce": 1221282802,
+      "isDeleted": false,
+      "updated": 1,
+      "link": null,
+      "locked": false,
+      "type": "rectangle",
+      "x": 80,
+      "y": 120,
+      "width": 220,
+      "height": 100,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "id": "text-0",
+          "type": "text"
+        },
+        {
+          "id": "arrow-0",
+          "type": "arrow"
+        }
+      ]
+    },
+    {
+      "id": "text-0",
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "index": "a1",
+      "seed": 165809854,
+      "version": 1,
+      "versionNonce": 2404644706,
+      "isDeleted": false,
+      "updated": 1,
+      "link": null,
+      "locked": false,
+      "type": "text",
+      "x": 58,
+      "y": 157.5,
+      "width": 264,
+      "height": 25,
+      "text": "Local .excalidraw file",
+      "fontSize": 20,
+      "fontFamily": 5,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "containerId": "rectangle-0",
+      "originalText": "Local .excalidraw file",
+      "autoResize": true,
+      "lineHeight": 1.25,
+      "baseline": 20
+    },
+    {
+      "id": "rectangle-1",
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#b2f2bb",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "index": "a2",
+      "seed": 3976789599,
+      "version": 1,
+      "versionNonce": 258986745,
+      "isDeleted": false,
+      "updated": 1,
+      "link": null,
+      "locked": false,
+      "type": "rectangle",
+      "x": 420,
+      "y": 120,
+      "width": 220,
+      "height": 100,
+      "roundness": {
+        "type": 3
+      },
+      "boundElements": [
+        {
+          "id": "text-1",
+          "type": "text"
+        },
+        {
+          "id": "arrow-0",
+          "type": "arrow"
+        }
+      ]
+    },
+    {
+      "id": "text-1",
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "index": "a3",
+      "seed": 342361103,
+      "version": 1,
+      "versionNonce": 3608998377,
+      "isDeleted": false,
+      "updated": 1,
+      "link": null,
+      "locked": false,
+      "type": "text",
+      "x": 464,
+      "y": 157.5,
+      "width": 132,
+      "height": 25,
+      "text": "Vite viewer",
+      "fontSize": 20,
+      "fontFamily": 5,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "containerId": "rectangle-1",
+      "originalText": "Vite viewer",
+      "autoResize": true,
+      "lineHeight": 1.25,
+      "baseline": 20
+    },
+    {
+      "id": "arrow-0",
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "index": "b0",
+      "seed": 4115309622,
+      "version": 1,
+      "versionNonce": 3414350746,
+      "isDeleted": false,
+      "updated": 1,
+      "link": null,
+      "locked": false,
+      "type": "arrow",
+      "x": 300,
+      "y": 170,
+      "width": 120,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          120,
+          0
+        ]
+      ],
+      "lastCommittedPoint": null,
+      "startBinding": {
+        "elementId": "rectangle-0",
+        "focus": 0,
+        "gap": 1
+      },
+      "endBinding": {
+        "elementId": "rectangle-1",
+        "focus": 0,
+        "gap": 1
+      },
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "boundElements": null
+    }
+  ],
+  "appState": {
+    "gridSize": null,
+    "viewBackgroundColor": "#ffffff"
+  },
+  "files": {}
+}
