@@ -103,9 +103,10 @@ metadata JSON** downloads a local JSON record containing the original approved
 recommendation text, its pseudonymous evidence references, the model
 provenance, and the user-confirmed disposition/rationale. It makes no network
 request. At report generation, the extension also writes a sibling
-`<report-name>.dispositions.json` model-suggestion seed with no user decision;
-if the report write fails, the seed is removed. Keep exported metadata with the
-report as appropriate and do not treat the initial seed as a user decision.
+`<report-name>.dispositions.json` model-suggestion seed with no user decision.
+If a report write fails, an existing companion seed is preserved. Keep exported
+metadata with the report as appropriate and do not treat the initial seed as a
+user decision.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,
