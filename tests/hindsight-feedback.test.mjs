@@ -214,7 +214,7 @@ test("local aggregate distinguishes feedback, user dispositions, and recorded ou
     const origin = createHindsightOutcomeOrigin(seed.reportId, recommendation);
     await appendHindsightOutcomeUpdate(path, origin, { status: "completed", observedResult: "Observed success", measurementEvidence: "Measured locally", unexpectedEffects: "None observed", followUpDecision: "monitor", provenance: { source: "user-observed", confirmation: "user-confirmed", confirmedAt: "2026-08-16T12:00:00.000Z" } });
     const aggregate = aggregateHindsightFeedback(record, {
-      dispositions: { schemaVersion: 2, kind: "pi-hindsight-recommendation-dispositions", reportId: seed.reportId, provenance: {}, recommendations: [{ userDisposition: { status: "accepted", source: "user-confirmed", rationale: "Approved", confirmedAt: "2026-08-16T11:00:00.000Z" } }] },
+      dispositions: { schemaVersion: 2, kind: "pi-hindsight-recommendation-dispositions", reportId: seed.reportId, provenance: {}, recommendations: [{ recommendationNumber: 1, userDisposition: { status: "accepted", source: "user-confirmed", rationale: "Approved", confirmedAt: "2026-08-16T11:00:00.000Z" } }] },
       outcomes: JSON.parse(await readFile(path, "utf8")),
     });
     assert.deepEqual(aggregate.classifications, { helpful: 1, incorrect: 1, overstated: 0, incomplete: 0, "not-actionable": 0 });
@@ -225,12 +225,23 @@ test("local aggregate distinguishes feedback, user dispositions, and recorded ou
     assert.deepEqual(aggregate.disposition.acceptanceRate, { count: 1, denominator: 1, value: 1 });
     assert.equal(aggregate.outcome.statusCounts.completed, 1);
     assert.deepEqual(aggregate.outcome.statusRates.completed, { count: 1, denominator: 1, value: 1 });
-    assert.deepEqual(aggregate.outcome.recordedOutcomeRate, { count: 1, denominator: 1, value: 1 });
-    const ratesHtml = renderHindsightFeedbackDocumentHtml(record, { dispositions: { schemaVersion: 2, kind: "pi-hindsight-recommendation-dispositions", reportId: seed.reportId, provenance: {}, recommendations: [{ userDisposition: { status: "accepted", source: "user-confirmed", rationale: "Approved", confirmedAt: "2026-08-16T11:00:00.000Z" } }] }, outcomes: JSON.parse(await readFile(path, "utf8")) });
+    assert.deepEqual(aggregate.outcome.currentAcceptedOutcomeCoverage, { count: 1, denominator: 1, value: 1 });
+    const ratesHtml = renderHindsightFeedbackDocumentHtml(record, { dispositions: { schemaVersion: 2, kind: "pi-hindsight-recommendation-dispositions", reportId: seed.reportId, provenance: {}, recommendations: [{ recommendationNumber: 1, userDisposition: { status: "accepted", source: "user-confirmed", rationale: "Approved", confirmedAt: "2026-08-16T11:00:00.000Z" } }] }, outcomes: JSON.parse(await readFile(path, "utf8")) });
     assert.match(ratesHtml, /helpful:<\/strong> 1\/2 \(50%\)/);
     assert.match(ratesHtml, /corrected framing rate:<\/strong> 1\/2 \(50%\)/);
     assert.match(ratesHtml, /acceptance rate:<\/strong> 1\/1 \(100%\)/);
     assert.match(ratesHtml, /completed 1\/1 \(100%\)/);
+    assert.match(ratesHtml, /Current accepted recommendation origins with a recorded outcome:<\/strong> 1\/1 \(100%\)/);
+
+    for (const status of ["deferred", "rejected"]) {
+      const changedDisposition = { schemaVersion: 2, kind: "pi-hindsight-recommendation-dispositions", reportId: seed.reportId, provenance: {}, recommendations: [{ recommendationNumber: 1, userDisposition: { status, source: "user-confirmed", rationale: "Changed after the outcome was recorded", confirmedAt: "2026-08-17T11:00:00.000Z" } }] };
+      const changed = aggregateHindsightFeedback(record, { dispositions: changedDisposition, outcomes: JSON.parse(await readFile(path, "utf8")) });
+      assert.deepEqual(changed.outcome.currentAcceptedOutcomeCoverage, { count: 0, denominator: 0, value: 0 }, `accepted→${status} must exclude legacy outcome history`);
+      assert.equal(changed.outcome.statusCounts.completed, 1, "status history remains an all-recorded-updates aggregate");
+    }
+    const noAcceptedLegacy = aggregateHindsightFeedback(record, { dispositions: { schemaVersion: 2, kind: "pi-hindsight-recommendation-dispositions", reportId: seed.reportId, provenance: {}, recommendations: [{ recommendationNumber: 1, userDisposition: { status: "not-recorded", source: "not-user-confirmed", rationale: "" } }] }, outcomes: JSON.parse(await readFile(path, "utf8")) });
+    assert.deepEqual(noAcceptedLegacy.outcome.currentAcceptedOutcomeCoverage, { count: 0, denominator: 0, value: 0 });
+    assert.match(renderHindsightFeedbackDocumentHtml(record, { dispositions: { schemaVersion: 2, kind: "pi-hindsight-recommendation-dispositions", reportId: seed.reportId, provenance: {}, recommendations: [{ recommendationNumber: 1, userDisposition: { status: "not-recorded", source: "not-user-confirmed", rationale: "" } }] }, outcomes: JSON.parse(await readFile(path, "utf8")) }), /Current accepted recommendation origins with a recorded outcome:<\/strong> 0\/0 \(0%\)/);
 
     const zero = aggregateHindsightFeedback({ ...seed, feedback: [] }, { dispositions: { schemaVersion: 2, kind: "pi-hindsight-recommendation-dispositions", reportId: seed.reportId, provenance: {}, recommendations: [] } });
     assert.deepEqual(zero.classificationRates.helpful, { count: 0, denominator: 0, value: 0 });

@@ -142,8 +142,10 @@ limited failure.
 Those panels show only **user-provided/local operational signals**: feedback
 classification and corrected-framing rates (with explicit count/denominator);
 valid local user disposition acceptance/defer/reject rates when an exported
-disposition file is present; and recorded outcome status rates when a valid
-local outcome store is present. Zero denominators render as `0/0 (0%)` rather
+disposition file is present; recorded outcome status rates when a valid local
+outcome store is present; and current accepted-recommendation-origin outcome
+coverage (only current accepted origins are in both numerator and denominator).
+Zero denominators render as `0/0 (0%)` rather
 than implying a model-derived result.
 They are not model evidence, citations, or automatic prompt input. Feedback
 and aggregates are never sent to the model or added to generated claims or

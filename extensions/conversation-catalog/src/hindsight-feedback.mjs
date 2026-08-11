@@ -287,14 +287,20 @@ function localDispositionSummary(value, reportId) {
     && !exactKeys(value, ["schemaVersion", "kind", "reportId", "provenance", "recommendations"])) return undefined;
   if (value.schemaVersion !== 2 || value.kind !== "pi-hindsight-recommendation-dispositions" || value.reportId !== reportId || !Array.isArray(value.recommendations)) return undefined;
   const counts = { accepted: 0, deferred: 0, rejected: 0, notRecorded: 0 };
+  const acceptedRecommendationNumbers = new Set();
+  const recommendationNumbers = new Set();
   for (const recommendation of value.recommendations) {
-    const disposition = recommendation?.userDisposition;
+    if (!Number.isInteger(recommendation?.recommendationNumber) || recommendation.recommendationNumber < 1 || recommendationNumbers.has(recommendation.recommendationNumber)) return undefined;
+    recommendationNumbers.add(recommendation.recommendationNumber);
+    const disposition = recommendation.userDisposition;
     if (!exactKeys(disposition, ["status", "source", "rationale"]) && !exactKeys(disposition, ["status", "source", "rationale", "confirmedAt"])) return undefined;
     if (disposition.status === "not-recorded" && disposition.source === "not-user-confirmed") counts.notRecorded += 1;
-    else if (["accepted", "deferred", "rejected"].includes(disposition.status) && disposition.source === "user-confirmed") counts[disposition.status] += 1;
-    else return undefined;
+    else if (["accepted", "deferred", "rejected"].includes(disposition.status) && disposition.source === "user-confirmed") {
+      counts[disposition.status] += 1;
+      if (disposition.status === "accepted") acceptedRecommendationNumbers.add(recommendation.recommendationNumber);
+    } else return undefined;
   }
-  return counts;
+  return { ...counts, acceptedRecommendationNumbers };
 }
 
 /** Aggregates only local user records. Nothing here is model evidence or prompt input. */
@@ -314,7 +320,7 @@ export function aggregateHindsightFeedback(store, { dispositions, outcomes } = {
   if (dispositions !== undefined && !dispositionCounts) throw new HindsightFeedbackError("aggregate_metadata_malformed");
   const disposition = dispositionCounts && {
     ...dispositionCounts,
-    total: Object.values(dispositionCounts).reduce((sum, count) => sum + count, 0),
+    total: dispositionCounts.accepted + dispositionCounts.deferred + dispositionCounts.rejected + dispositionCounts.notRecorded,
   };
   if (disposition) disposition.acceptanceRate = rate(disposition.accepted, disposition.total);
   let outcome;
@@ -327,11 +333,19 @@ export function aggregateHindsightFeedback(store, { dispositions, outcomes } = {
     const updates = histories.flatMap((history) => history.updates);
     const statusCounts = { "not-started": 0, "in-progress": 0, completed: 0, paused: 0, stopped: 0 };
     for (const update of updates) statusCounts[update.status] += 1;
+    // This metric's numerator and denominator are the same current population:
+    // accepted recommendation numbers in the supplied user disposition export.
+    // Legacy/deferred/rejected histories therefore cannot inflate it above 100%.
+    const currentAcceptedHistories = disposition
+      ? histories.filter((history) => disposition.acceptedRecommendationNumbers.has(history.origin.recommendationNumber))
+      : [];
     outcome = {
       recordedUpdates: updates.length,
       statusCounts,
       statusRates: Object.fromEntries(Object.entries(statusCounts).map(([status, count]) => [status, rate(count, updates.length)])),
-      recordedOutcomeRate: disposition ? rate(histories.filter((history) => history.updates.length > 0).length, disposition.accepted) : undefined,
+      currentAcceptedOutcomeCoverage: disposition
+        ? rate(currentAcceptedHistories.filter((history) => history.updates.length > 0).length, disposition.accepted)
+        : undefined,
     };
   }
   return { classifications, classificationRates, recordedFeedback, corrected, correctionRate, disposition, outcome };
@@ -347,7 +361,7 @@ function aggregateHtml(aggregate) {
     ? `<p><strong>User disposition acceptance rate:</strong> ${displayRate(aggregate.disposition.acceptanceRate)}; deferred ${aggregate.disposition.deferred}/${aggregate.disposition.total}; rejected ${aggregate.disposition.rejected}/${aggregate.disposition.total}; not recorded ${aggregate.disposition.notRecorded}/${aggregate.disposition.total}.</p>`
     : '<p class="empty">User disposition acceptance rate is unavailable until a valid local disposition export is present.</p>';
   const outcome = aggregate.outcome
-    ? `<p><strong>Recorded outcome status rates:</strong> ${Object.entries(aggregate.outcome.statusRates).map(([status, value]) => `${escapeHtml(status)} ${displayRate(value)}`).join("; ")}.${aggregate.outcome.recordedOutcomeRate ? ` <strong>Accepted recommendations with a recorded outcome:</strong> ${displayRate(aggregate.outcome.recordedOutcomeRate)}.` : ""}</p>`
+    ? `<p><strong>Recorded outcome status rates:</strong> ${Object.entries(aggregate.outcome.statusRates).map(([status, value]) => `${escapeHtml(status)} ${displayRate(value)}`).join("; ")}.${aggregate.outcome.currentAcceptedOutcomeCoverage ? ` <strong>Current accepted recommendation origins with a recorded outcome:</strong> ${displayRate(aggregate.outcome.currentAcceptedOutcomeCoverage)}.` : ""}</p>`
     : '<p class="empty">Recorded outcome rates are unavailable until a valid local outcome store is present.</p>';
   return `<section class="hindsight-feedback" aria-labelledby="hindsight-feedback-heading"><h2 id="hindsight-feedback-heading">Local feedback and calibration signals</h2><p class="feedback-notice">These are user-provided, local operational signals. They are not model evidence, citations, or prompt input.</p><p><strong>Recorded feedback:</strong> ${aggregate.recordedFeedback}; <strong>corrected framing rate:</strong> ${displayRate(aggregate.correctionRate)}.</p><ul>${feedbackRows}</ul>${disposition}${outcome}</section>`;
 }
