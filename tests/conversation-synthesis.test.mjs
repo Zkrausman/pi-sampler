@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
+import { createHindsightRecommendationDispositionMetadata } from "../extensions/conversation-catalog/src/evidence.mjs";
 import { restrictToolsForHindsightSynthesis } from "../extensions/conversation-catalog/src/hindsight-tools.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -13,10 +14,22 @@ async function loadConversationCatalogExtension() {
   let extension = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
   extension = extension.replace(/^import[^\n]+;\r?\n/gm, "");
   const stubs = `
+const randomUUID = () => "test-uuid";
 const mkdir = async () => {};
 const readFile = async () => { const error = new Error("not found"); error.code = "ENOENT"; throw error; };
-const rm = async () => {};
-const writeFile = async () => {};
+const rm = async (path) => { globalThis.__hindsightFiles?.delete(path); };
+const writeFile = async (path, content) => {
+  (globalThis.__hindsightWrites ||= []).push({ path, content });
+  if (globalThis.__hindsightWriteFailure?.(path)) throw new Error("simulated write failure");
+  (globalThis.__hindsightFiles ||= new Map()).set(path, content);
+};
+const rename = async (from, to) => {
+  (globalThis.__hindsightRenames ||= []).push({ from, to });
+  const content = globalThis.__hindsightFiles?.get(from);
+  if (content === undefined) throw new Error("temporary file missing");
+  globalThis.__hindsightFiles.set(to, content);
+  globalThis.__hindsightFiles.delete(from);
+};
 const dirname = () => ".";
 const extname = (path) => path.slice(path.lastIndexOf("."));
 const resolve = (cwd, path) => cwd + "/" + path;
@@ -34,6 +47,7 @@ const generateConversationFlowHtml = () => "";
 const projectConversation = () => ({ events: [], edges: [] });
 const attachEvidenceReferences = (_reference, value) => value;
 const createEvidenceManifest = () => ({ schemaVersion: 1, citations: [] });
+const createHindsightRecommendationDispositionMetadata = (document) => ({ schemaVersion: 1, recommendations: document.recommendations });
 const generateRelationshipMapHtml = () => "";
 const projectRelationshipMap = (value) => value;
 const buildClaimSupportValidationPrompt = () => "Validate cited claim support";
@@ -106,12 +120,54 @@ test("model claims and structured recommendations are escaped, cited, and render
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.match(html, /&lt;script&gt;prioritize\(\)&lt;\/script&gt;/);
   assert.match(html, /&lt;img src=x onerror=alert\(2\)&gt;/);
+  assert.doesNotMatch(html, /<script>prioritize\(\)<\/script>/);
   assert.match(html, /<table>/);
   assert.match(html, /<caption>Structured recommendations proposed by the model; none are user-confirmed.<\/caption>/);
   assert.match(html, /scope="col">Measurable acceptance criteria/);
   assert.match(html, /proposed · model-suggestion/);
-  assert.match(html, /Not user-confirmed/);
+  assert.match(html, /Model suggestion; not user-confirmed/);
+  assert.match(html, /User-confirmed recommendation dispositions/);
+  assert.match(html, /value="accepted" required> Accept/);
+  assert.match(html, /value="deferred"> Defer/);
+  assert.match(html, /value="rejected"> Reject/);
+  assert.match(html, /Rationale<\/label><textarea[^>]+required maxlength="1000"/);
+  assert.match(html, /Export disposition metadata JSON/);
+  assert.match(html, /default-src 'none'/);
   assert.match(html, /href="#citation-1"/);
+});
+
+test("disposition metadata keeps original model recommendations and pseudonymous citations separate from user decisions", () => {
+  const metadata = createHindsightRecommendationDispositionMetadata({ recommendations: [{
+    recommendation: "Improve handoff", priority: "medium", expectedImpact: "Reduce delays", suggestedOwner: "Delivery team",
+    dependencies: [], acceptanceCriteria: ["A handoff completes within one business day"], status: "proposed", source: "model-suggestion",
+    evidenceReferences: ["one:event-0001"],
+  }] });
+  assert.equal(metadata.kind, "pi-hindsight-recommendation-dispositions");
+  assert.match(metadata.reportId, /^hindsight-[a-f0-9]{8}$/);
+  assert.deepEqual(metadata.recommendations[0], {
+    recommendationNumber: 1,
+    originalRecommendation: "Improve handoff",
+    evidenceReferences: ["one:event-0001"],
+    modelSuggestion: { status: "proposed", source: "model-suggestion" },
+    userDisposition: { status: "not-recorded", source: "not-user-confirmed", rationale: "" },
+  });
+  const original = {
+    recommendation: "Improve handoff", priority: "medium", expectedImpact: "Reduce delays", suggestedOwner: "Delivery team",
+    dependencies: [], acceptanceCriteria: ["A handoff completes within one business day"], status: "proposed", source: "model-suggestion",
+    evidenceReferences: ["one:event-0001"],
+  };
+  for (const [field, changed] of [
+    ["priority", { ...original, priority: "high" }],
+    ["expected impact", { ...original, expectedImpact: "Eliminate delays" }],
+    ["owner", { ...original, suggestedOwner: "Operations team" }],
+    ["dependencies", { ...original, dependencies: ["Staffing plan"] }],
+    ["acceptance criteria", { ...original, acceptanceCriteria: ["A handoff completes within four hours"] }],
+  ]) {
+    assert.notEqual(createHindsightRecommendationDispositionMetadata({ recommendations: [changed] }).reportId, metadata.reportId, `changed ${field} requires a fresh disposition identity`);
+  }
+  assert.throws(() => createHindsightRecommendationDispositionMetadata({ recommendations: [{
+    ...original, status: "accepted", source: "user-confirmed",
+  }] }), /safe structured recommendation contract/);
 });
 
 test("safe hindsight recommendations reject missing, malformed, unconfirmed, or uncited model data", () => {
@@ -237,7 +293,7 @@ test("hindsight synthesis disables direct file-write tools and restores the sess
   assert.deepEqual(setActiveToolsCalls, [["hindsight_document_write"], normalTools]);
 });
 
-test("successful safe hindsight write remains restricted until agent settlement restores normal tools", async () => {
+test("safe hindsight write preserves a prior disposition seed on failure and remains restricted until settlement", async () => {
   const { default: conversationCatalog } = await loadConversationCatalogExtension();
   const normalTools = ["read", "write", "edit", "bash", "hindsight_document_write"];
   let activeTools = normalTools;
@@ -257,9 +313,13 @@ test("successful safe hindsight write remains restricted until agent settlement 
     },
     sendUserMessage: () => {},
   };
+  globalThis.__hindsightWrites = [];
+  globalThis.__hindsightRenames = [];
+  globalThis.__hindsightFiles = new Map();
+  globalThis.__hindsightWriteFailure = undefined;
   conversationCatalog(pi);
-
   const hindsight = commands.find((command) => command.name === "hindsight-document");
+
   await hindsight.handler("", {
     cwd: "/test",
     hasUI: true,
@@ -283,6 +343,20 @@ test("successful safe hindsight write remains restricted until agent settlement 
   const writer = tools.find((tool) => tool.name === "hindsight_document_write");
   const result = await writer.execute("call", { claims: [], recommendations: [] });
   assert.match(result.content[0].text, /Hindsight document written/);
+  assert.match(result.content[0].text, /disposition seed written locally/);
+  const dispositionPath = "/test/pi-hindsight-document.dispositions.json";
+  assert.ok(globalThis.__hindsightFiles.has(dispositionPath));
+  assert.ok(globalThis.__hindsightRenames.some((operation) => operation.to === dispositionPath));
+
+  // A report write failure must leave a prior seed intact and remove only the
+  // staged replacement file.
+  globalThis.__hindsightFiles.set(dispositionPath, "prior seed");
+  globalThis.__hindsightWriteFailure = (path) => path === "/test/pi-hindsight-document.html";
+  const failedResult = await writer.execute("failed-call", { claims: [], recommendations: [] });
+  assert.match(failedResult.content[0].text, /Unable to write hindsight document: simulated write failure/);
+  assert.equal(globalThis.__hindsightFiles.get(dispositionPath), "prior seed");
+  assert.equal([...globalThis.__hindsightFiles.keys()].filter((path) => path.endsWith(".tmp")).length, 0);
+  globalThis.__hindsightWriteFailure = undefined;
   assert.deepEqual(activeTools, ["hindsight_document_write"]);
 
   handlers.get("agent_settled")();
@@ -306,6 +380,10 @@ test("opt-in claim-support pass switches from the safe writer to the safe valida
     setActiveTools: (nextTools) => { activeTools = nextTools; toolChanges.push(nextTools); },
     sendUserMessage: () => {},
   };
+  globalThis.__hindsightWrites = [];
+  globalThis.__hindsightRenames = [];
+  globalThis.__hindsightFiles = new Map();
+  globalThis.__hindsightWriteFailure = undefined;
   conversationCatalog(pi);
   const hindsight = commands.find((command) => command.name === "hindsight-document");
   await hindsight.handler("--validate-claim-support reviewed/report.html", {
@@ -322,6 +400,7 @@ test("opt-in claim-support pass switches from the safe writer to the safe valida
     source: "model-validation", userDisposition: "not-user-confirmed", assessments: [],
   });
   assert.match(validationResult.content[0].text, /with claim-support validation written/);
+  assert.ok(globalThis.__hindsightFiles.has("/test/reviewed/report.dispositions.json"));
   handlers.get("agent_settled")();
   assert.deepEqual(activeTools, normalTools);
   assert.deepEqual(toolChanges, [["hindsight_document_write"], ["hindsight_claim_support_validate"], normalTools]);
