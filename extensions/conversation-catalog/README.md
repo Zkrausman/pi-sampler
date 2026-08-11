@@ -89,6 +89,24 @@ fallback instead. Owner and dependency strings are model output derived only
 from the reviewed, redacted source bundle; they are not read from, copied to,
 or persisted outside the generated cited report.
 
+### Local recommendation dispositions
+
+For every generated recommendation, the standalone report provides native,
+keyboard-accessible **Accept**, **Defer**, and **Reject** controls plus a
+required rationale. The model suggestion (`proposed · model-suggestion`) stays
+visible and separate from the local, **user-confirmed** disposition; selecting
+one never changes the recommendation, its pseudonymous citations, or the
+source session.
+
+Saving a disposition uses browser local storage only. **Export disposition
+metadata JSON** downloads a local JSON record containing the original approved
+recommendation text, its pseudonymous evidence references, the model
+provenance, and the user-confirmed disposition/rationale. It makes no network
+request. At report generation, the extension also writes a sibling
+`<report-name>.dispositions.json` model-suggestion seed with no user decision;
+if the report write fails, the seed is removed. Keep exported metadata with the
+report as appropriate and do not treat the initial seed as a user decision.
+
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,
 skill, and unsupported activity. Each rendered event has a deterministic,

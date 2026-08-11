@@ -4,7 +4,7 @@ import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-age
 import { Type } from "typebox";
 import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
-import { attachEvidenceReferences, createEvidenceManifest } from "./evidence.mjs";
+import { attachEvidenceReferences, createEvidenceManifest, createHindsightRecommendationDispositionMetadata } from "./evidence.mjs";
 import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
 import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
@@ -42,6 +42,26 @@ function safeFilename(value: string) {
 
 function metadataPath(outputPath: string) {
   return outputPath.replace(/\.html$/i, ".redaction.json");
+}
+
+function hindsightDispositionMetadataPath(outputPath: string) {
+  return outputPath.replace(/\.html$/i, ".dispositions.json");
+}
+
+async function writeHindsightReport(outputPath: string, html: string, recommendationDocument: { recommendations: unknown[] }) {
+  const dispositionPath = hindsightDispositionMetadataPath(outputPath);
+  const metadata = createHindsightRecommendationDispositionMetadata(recommendationDocument);
+  await mkdir(dirname(outputPath), { recursive: true });
+  // Write the local, model-only seed before the report. If report creation
+  // fails, remove the companion so callers never receive an orphaned record.
+  await writeFile(dispositionPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  try {
+    await writeFile(outputPath, html, "utf8");
+  } catch (error) {
+    await rm(dispositionPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return dispositionPath;
 }
 
 function pickerDescription(value: unknown) {
@@ -149,11 +169,10 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           return { content: [{ type: "text", text: validationPrompt }] };
         }
         const html = buildHindsightDocument(pendingHindsight.sources, params);
-        await mkdir(dirname(pendingHindsight.outputPath), { recursive: true });
-        await writeFile(pendingHindsight.outputPath, html, "utf8");
+        const dispositionPath = await writeHindsightReport(pendingHindsight.outputPath, html, { recommendations: params.recommendations });
         const outputPath = pendingHindsight.outputPath;
         // Keep the pending state until agent_settled restores the original tool set.
-        return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}.` }] };
+        return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}. Model-suggestion disposition seed written locally to ${dispositionPath}.` }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? `Unable to write hindsight document: ${error.message}` : "Unable to write hindsight document." }] };
       }
@@ -185,10 +204,9 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       }
       try {
         const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params);
-        await mkdir(dirname(pendingHindsight.outputPath), { recursive: true });
-        await writeFile(pendingHindsight.outputPath, html, "utf8");
+        const dispositionPath = await writeHindsightReport(pendingHindsight.outputPath, html, { recommendations: pendingHindsight.modelOutput.recommendations });
         const outputPath = pendingHindsight.outputPath;
-        return { content: [{ type: "text", text: `Hindsight document with claim-support validation written to ${outputPath}.` }] };
+        return { content: [{ type: "text", text: `Hindsight document with claim-support validation written to ${outputPath}. Model-suggestion disposition seed written locally to ${dispositionPath}.` }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? `Unable to validate hindsight claim support: ${error.message}` : "Unable to validate hindsight claim support." }] };
       }
