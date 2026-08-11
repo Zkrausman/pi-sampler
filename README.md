@@ -14,6 +14,7 @@ and governance policy.
 | Extension | Purpose | Documentation |
 | --- | --- | --- |
 | [Delivery controller](extensions/delivery-controller/README.md) | Dispatch one explicitly supplied work item to a configured provider. It does not select work, merge code, or update a tracker. | [Install and use](extensions/delivery-controller/README.md) |
+| [Conversation catalog](extensions/conversation-catalog/README.md) | Writes a standalone, metadata-only HTML catalog of saved Pi sessions grouped by run location. | [Install and use](extensions/conversation-catalog/README.md) |
 | [Wiki delivery](extensions/wiki-delivery/README.md) | Coordinates a fail-closed LLM Wiki delivery lifecycle and validates its manifest. | [Install and use](extensions/wiki-delivery/README.md) |
 
 ## Install an extension
