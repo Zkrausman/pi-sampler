@@ -27,11 +27,11 @@ function boundedText(value, code = "malformed_notes") {
 }
 
 // Notes are user-authored context, not an alternate transcript or credential store.
-const UNSAFE_NOTE_TEXT = /\b(?:raw[- ]?session(?:[- ]?id)?|session[_-]?id|pi_session_file|bearer\s+|api[_-]?key|authorization\s*:|gh[pousr]_[A-Za-z0-9_]{20,}|(?:akia|asia|aida|aroa)[a-z0-9]{16}|(?:aws_)?(?:secret_access_key|access_key_id)\s*[:=]|(?:password|secret|token|credential)s?\s*(?:=|:)\s*\S+)\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+const UNSAFE_NOTE_TEXT = /\b(?:raw[- ]?session(?:[- ]?id)?|session[_-]?id|pi_session_file|bearer\s+|api[_-]?key|authorization\s*:|gh[pousr]_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|xoxe(?:\.xox[abprs])?-[A-Za-z0-9-]{10,}|(?:akia|asia|aida|aroa)[a-z0-9]{16}|(?:aws_)?(?:secret_access_key|access_key_id)\s*[:=]|(?:password|secret|token|credential)s?\s*(?:=|:)\s*\S+)\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
 
-export function safeHindsightNoteText(value) {
+export function safeHindsightNoteText(value, { actualSessionId } = {}) {
   const note = boundedText(value);
-  if (UNSAFE_NOTE_TEXT.test(note)) throw new HindsightNotesError("unsafe_note_text");
+  if (UNSAFE_NOTE_TEXT.test(note) || (typeof actualSessionId === "string" && actualSessionId && note.includes(actualSessionId))) throw new HindsightNotesError("unsafe_note_text");
   return note;
 }
 
@@ -261,23 +261,33 @@ async function atomicWrite(store, value) {
   }
 }
 
-function newNote(text, timestamp) {
-  if (!validTimestamp(timestamp)) throw new HindsightNotesError("malformed_notes");
-  return { noteId: `note-${randomUUID().replace(/-/g, "")}`, text: safeHindsightNoteText(text), provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: timestamp } };
+function actualSessionIdForReference(sessionReference, actualSessionId) {
+  if (typeof actualSessionId !== "string" || !actualSessionId || actualSessionId.includes("\0") || Array.from(actualSessionId).length > 512
+    || hindsightNotesSessionReference(actualSessionId) !== sessionReference) throw new HindsightNotesError("invalid_session_reference");
+  return actualSessionId;
 }
 
-export async function addHindsightNote(projectRoot, sessionReference, text, { now = () => new Date().toISOString() } = {}) {
+function newNote(text, timestamp, actualSessionId) {
+  if (!validTimestamp(timestamp)) throw new HindsightNotesError("malformed_notes");
+  return { noteId: `note-${randomUUID().replace(/-/g, "")}`, text: safeHindsightNoteText(text, { actualSessionId }), provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: timestamp } };
+}
+
+/** Add requires the active raw ID only in memory to reject it from persisted text. */
+export async function addHindsightNote(projectRoot, sessionReference, text, { now = () => new Date().toISOString(), actualSessionId } = {}) {
+  const activeSessionId = actualSessionIdForReference(sessionReference, actualSessionId);
   return withNotesLock(projectRoot, sessionReference, async (store) => {
     const current = await readStore(store, sessionReference) || emptyHindsightNotes(sessionReference);
     if (current.notes.length >= 100) throw new HindsightNotesError("notes_limit_reached");
-    const note = newNote(text, now());
+    const note = newNote(text, now(), activeSessionId);
     await atomicWrite(store, { ...current, notes: [...current.notes, note] });
     return note;
   });
 }
 
-export async function editHindsightNote(projectRoot, sessionReference, noteId, text, { now = () => new Date().toISOString() } = {}) {
+/** Edit requires the active raw ID only in memory to reject it from persisted text. */
+export async function editHindsightNote(projectRoot, sessionReference, noteId, text, { now = () => new Date().toISOString(), actualSessionId } = {}) {
   if (typeof noteId !== "string" || !NOTE_ID.test(noteId)) throw new HindsightNotesError("invalid_note_id");
+  const activeSessionId = actualSessionIdForReference(sessionReference, actualSessionId);
   return withNotesLock(projectRoot, sessionReference, async (store) => {
     const current = await readStore(store, sessionReference);
     if (!current) throw new HindsightNotesError("notes_missing");
@@ -286,7 +296,7 @@ export async function editHindsightNote(projectRoot, sessionReference, noteId, t
     const prior = current.notes[index];
     const editedAt = now();
     if (!validTimestamp(editedAt) || Date.parse(editedAt) < Date.parse(prior.provenance.createdAt)) throw new HindsightNotesError("malformed_notes");
-    const note = { ...prior, text: safeHindsightNoteText(text), provenance: { ...prior.provenance, editedAt } };
+    const note = { ...prior, text: safeHindsightNoteText(text, { actualSessionId: activeSessionId }), provenance: { ...prior.provenance, editedAt } };
     const notes = [...current.notes]; notes[index] = note;
     await atomicWrite(store, { ...current, notes });
     return note;

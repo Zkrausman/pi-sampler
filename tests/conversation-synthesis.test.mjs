@@ -350,7 +350,7 @@ test("hindsight-notes registers a current-session-only add workflow", async () =
       notify: (message, level) => notifications.push({ message, level }),
     },
   });
-  assert.deepEqual(globalThis.__hindsightNoteAdd, ["/test", "session-one00000000000000000000000000000", "Current session note."]);
+  assert.deepEqual(globalThis.__hindsightNoteAdd, ["/test", "session-one00000000000000000000000000000", "Current session note.", { actualSessionId: "one" }]);
   assert.match(notifications[0].message, /saved/);
 });
 

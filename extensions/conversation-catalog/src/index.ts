@@ -213,18 +213,24 @@ function isTrustedProject(ctx: any) {
   return typeof ctx?.isProjectTrusted === "function" && ctx.isProjectTrusted() === true;
 }
 
-// Pi exposes the active session on current command contexts. We only use the
-// raw value long enough to match its saved metadata and derive a local opaque
-// reference; it is never written, rendered, exported, or sent to a model.
-async function currentHindsightSessionReference(ctx: any) {
+// Pi exposes the active session on current command contexts. The raw value is
+// held only for the add/edit validation call and opaque-reference derivation;
+// it is never persisted, rendered, exported, or sent to a model.
+async function currentHindsightSession(ctx: any) {
   const current = ctx?.session || ctx?.currentSession;
   const managedId = typeof ctx?.sessionManager?.getSessionId === "function" ? ctx.sessionManager.getSessionId() : undefined;
-  const rawId = typeof managedId === "string" ? managedId : typeof current?.id === "string" ? current.id
+  const actualSessionId = typeof managedId === "string" ? managedId : typeof current?.id === "string" ? current.id
     : typeof ctx?.sessionId === "string" ? ctx.sessionId : "";
-  if (!rawId) throw new HindsightNotesError("current_session_unavailable");
+  if (!actualSessionId) throw new HindsightNotesError("current_session_unavailable");
   // The note key intentionally derives from the actual Pi session ID only;
   // display names and legacy 32-bit catalog pseudonyms cannot select notes.
-  return hindsightNotesSessionReference(rawId);
+  return { actualSessionId, sessionReference: hindsightNotesSessionReference(actualSessionId) };
+}
+
+function noteReviewPatterns(patterns: any[], actualSessionId: unknown) {
+  if (typeof actualSessionId !== "string" || !actualSessionId || actualSessionId.includes("\0") || Array.from(actualSessionId).length > 512) return patterns;
+  const escaped = actualSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [...patterns, { name: "active Pi session ID", regex: new RegExp(escaped, "g"), requiredRedaction: true }];
 }
 
 async function reviewHindsightNotes(ctx: any, notes: any[], patterns: any[]) {
@@ -245,11 +251,11 @@ async function reviewHindsightNotes(ctx: any, notes: any[], patterns: any[]) {
       for (const [findingIndex, finding] of findings.entries()) {
         const choice = await ctx.ui.select(
           `Note finding ${findingIndex + 1}/${findings.length}: ${finding.pattern} — ${finding.preview}`,
-          ["Redact (recommended)", "Retain", "Exclude this note", "Cancel"],
+          finding.requiredRedaction === true ? ["Redact (required)", "Exclude this note", "Cancel"] : ["Redact (recommended)", "Retain", "Exclude this note", "Cancel"],
         );
         if (!choice || choice === "Cancel") throw new HindsightNotesError("confirmation_required");
         if (choice === "Exclude this note") { excluded = true; break; }
-        decisions[finding.id] = choice === "Retain" ? "retain" : "redact";
+        decisions[finding.id] = finding.requiredRedaction === true || choice !== "Retain" ? "redact" : "retain";
       }
       if (excluded) continue;
     }
@@ -514,7 +520,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       try {
         if (!ctx.hasUI || typeof ctx.ui.input !== "function") throw new HindsightNotesError("ui_required");
         if (!isTrustedProject(ctx)) throw new HindsightNotesError("untrusted_project");
-        const sessionReference = await currentHindsightSessionReference(ctx);
+        const { actualSessionId, sessionReference } = await currentHindsightSession(ctx);
         const path = hindsightNotesPath(ctx.cwd, sessionReference);
         const store = await readHindsightNotes(ctx.cwd, sessionReference);
         const notes = store?.notes || [];
@@ -531,7 +537,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           if (text === undefined) throw new HindsightNotesError("confirmation_required");
           const confirmed = await ctx.ui.confirm("Final confirmation: save local hindsight note", "This writes a user-authored, current-session note under an opaque local session reference. It does not modify session logs, make a network request, or make the note evidence. Save this note?");
           if (confirmed !== true) throw new HindsightNotesError("confirmation_required");
-          await addHindsightNote(ctx.cwd, sessionReference, text);
+          await addHindsightNote(ctx.cwd, sessionReference, text, { actualSessionId });
           ctx.ui.notify(`Local user-authored hindsight note saved in ${path}.`, "info");
           return;
         }
@@ -546,7 +552,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           if (text === undefined) throw new HindsightNotesError("confirmation_required");
           const confirmed = await ctx.ui.confirm("Final confirmation: edit local hindsight note", "This replaces this local user-authored context note. It does not modify session logs, make a network request, or make the note evidence. Save the edit?");
           if (confirmed !== true) throw new HindsightNotesError("confirmation_required");
-          await editHindsightNote(ctx.cwd, sessionReference, note.noteId, text);
+          await editHindsightNote(ctx.cwd, sessionReference, note.noteId, text, { actualSessionId });
           ctx.ui.notify(`Local user-authored hindsight note updated in ${path}.`, "info");
           return;
         }
@@ -605,7 +611,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         // Never access a project-local note store from an untrusted project.
         let noteStore: any;
         if (isTrustedProject(ctx)) noteStore = await readHindsightNotes(ctx.cwd, noteSessionReference);
-        const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, patterns) : [];
+        const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, noteReviewPatterns(patterns, session.id)) : [];
         const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
         try {

@@ -34,7 +34,7 @@ function note(text = "User observed a delayed handoff.") {
 function runWriter(projectRoot, index) {
   const fixture = fileURLToPath(new URL("./fixtures/hindsight-notes-process-writer.mjs", import.meta.url));
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [fixture, projectRoot, sessionReference, String(index)], { stdio: "pipe" });
+    const child = spawn(process.execPath, [fixture, projectRoot, sessionReference, sessionId, String(index)], { stdio: "pipe" });
     let stderr = "";
     child.stderr.on("data", (value) => { stderr += value; });
     child.on("error", reject);
@@ -48,7 +48,7 @@ test("notes schema is pseudonymous, provenance-bound, and rejects session IDs, c
   assert.throws(() => parseHindsightNotes({ ...valid, schemaVersion: 0 }), /malformed_notes/);
   assert.throws(() => parseHindsightNotes({ ...valid, sessionReference: "raw-session-id" }), /malformed_notes/);
   assert.throws(() => parseHindsightNotes({ ...valid, rawSessionId: "019fedfb-fe61-7431-b0b6-07033b14d64c" }), /malformed_notes/);
-  for (const unsafe of ["raw session id: secret", "Authorization: Bearer local-secret-value", "AKIAIOSFODNN7EXAMPLE", "session 019fedfb-fe61-7431-b0b6-07033b14d64c", "credential: local-value"]) {
+  for (const unsafe of ["raw session id: secret", "Authorization: Bearer local-secret-value", "AKIAIOSFODNN7EXAMPLE", "xoxb-1234567890-AbCdEfGhIjKl", "session 019fedfb-fe61-7431-b0b6-07033b14d64c", "credential: local-value"]) {
     assert.throws(() => parseHindsightNotes({ ...valid, notes: [note(unsafe)] }), /unsafe_note_text/);
   }
   assert.throws(() => parseHindsightNotes({ ...valid, notes: [{ ...note(), provenance: { ...note().provenance, source: "model-generated" } }] }), /malformed_notes/);
@@ -71,16 +71,30 @@ test("Windows actual project sidecar performs add, view, edit, and delete", asyn
     const path = hindsightNotesPath(projectRoot, sessionReference);
     assert.match(path, new RegExp(`\\.pi[\\\\/]hindsight-notes[\\\\/]${sessionReference}\\.json$`));
     assert.throws(() => hindsightNotesPath(projectRoot, "../raw"), /invalid_session_reference/);
-    const added = await addHindsightNote(projectRoot, sessionReference, "Initial user-authored context.", { now: () => now });
+    const added = await addHindsightNote(projectRoot, sessionReference, "Initial user-authored context.", { actualSessionId: sessionId, now: () => now });
     assert.match(added.noteId, /^note-[a-f0-9]{32}$/);
     assert.equal((await readHindsightNotes(projectRoot, sessionReference)).notes[0].text, "Initial user-authored context.");
     assert.doesNotMatch(await readFile(path, "utf8"), new RegExp(sessionId));
-    const edited = await editHindsightNote(projectRoot, sessionReference, added.noteId, "Reviewed replacement context.", { now: () => "2026-09-01T12:01:00.000Z" });
+    const edited = await editHindsightNote(projectRoot, sessionReference, added.noteId, "Reviewed replacement context.", { actualSessionId: sessionId, now: () => "2026-09-01T12:01:00.000Z" });
     assert.equal(edited.provenance.editedAt, "2026-09-01T12:01:00.000Z");
     await deleteHindsightNote(projectRoot, sessionReference, added.noteId);
     assert.deepEqual((await readHindsightNotes(projectRoot, sessionReference)).notes, []);
     assert.equal(await readHindsightNotes(projectRoot, hindsightNotesSessionReference("other-session")), undefined, "another session cannot select this keyed file");
     assert.deepEqual((await readdir(dirname(path))).filter((name) => name.endsWith(".lock") || name.endsWith(".tmp")), []);
+  } finally { await rm(projectRoot, { recursive: true, force: true }); }
+});
+
+test("add and edit reject the active raw session ID without persisting it", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-active-id-"));
+  const path = hindsightNotesPath(projectRoot, sessionReference);
+  try {
+    const added = await addHindsightNote(projectRoot, sessionReference, "Normal user-authored context.", { actualSessionId: sessionId, now: () => now });
+    await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, `Do not persist ${sessionId}.`, { actualSessionId: sessionId, now: () => now }), /unsafe_note_text/);
+    await assert.rejects(() => editHindsightNote(projectRoot, sessionReference, added.noteId, `Do not persist ${sessionId}.`, { actualSessionId: sessionId, now: () => "2026-09-01T12:01:00.000Z" }), /unsafe_note_text/);
+    await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, "Missing active identity.", { now: () => now }), /invalid_session_reference/);
+    const stored = await readHindsightNotes(projectRoot, sessionReference);
+    assert.equal(stored.notes[0].text, "Normal user-authored context.");
+    assert.doesNotMatch(await readFile(path, "utf8"), new RegExp(sessionId));
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
 
@@ -122,7 +136,7 @@ test("current store symlinks are rejected before sidecar operations", async (t) 
     await mkdir(join(projectRoot, ".pi"));
     try { await symlink(outside, join(projectRoot, ".pi", "hindsight-notes"), "dir"); }
     catch (error) { t.skip(`symlink setup unavailable: ${error.code || error}`); return; }
-    await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, "Must not escape root."), /unsafe_notes_path/);
+    await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, "Must not escape root.", { actualSessionId: sessionId }), /unsafe_notes_path/);
     assert.deepEqual(await readdir(outside), []);
   } finally { await rm(projectRoot, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
 });
@@ -130,6 +144,21 @@ test("current store symlinks are rejected before sidecar operations", async (t) 
 test("sidecar implementation has no registry or native backend", async () => {
   const sourceText = await readFile(new URL("../extensions/conversation-catalog/src/hindsight-notes.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(sourceText, /reg\.exe|windows registry|HKCU|koffi/i);
+});
+
+test("Slack token redaction cannot reach reviewed prompt or rendered note context", () => {
+  const slackToken = "xoxb-1234567890-AbCdEfGhIjKl";
+  const slackProjection = { events: [{ id: "note-slack", summary: `Review ${slackToken} safely.`, metadata: [] }], edges: [] };
+  const findings = findSensitiveContent(slackProjection, compileSensitivePatterns());
+  assert.deepEqual(findings.map((finding) => finding.pattern), ["Slack token"]);
+  assert.equal(findings[0].requiredRedaction, true);
+  const redacted = redactProjection(slackProjection, findings, Object.fromEntries(findings.map((finding) => [finding.id, "redact"]))).events[0].summary;
+  const reviewed = [{ ...note(redacted), noteId: "note-fedcba9876543210fedcba9876543210" }];
+  const prompt = buildSynthesisPrompt(source, { hindsightNotes: reviewed });
+  const html = buildHindsightDocument(source, model, undefined, undefined, reviewed);
+  assert.match(redacted, /\[REDACTED: Slack token\]/);
+  assert.doesNotMatch(`${prompt}\n${html}`, new RegExp(slackToken));
+  assert.throws(() => buildSynthesisPrompt(source, { hindsightNotes: [{ ...note(`Review ${slackToken} safely.`), noteId: "note-fedcba9876543210fedcba9876543210" }] }), /malformed or unsafe/);
 });
 
 test("only reviewed included notes reach prompt/rendering, are distinct context, and cannot become citations", () => {

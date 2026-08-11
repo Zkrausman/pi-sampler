@@ -6,6 +6,7 @@ export const DEFAULT_SENSITIVE_PATTERNS = Object.freeze([
   { name: "bearer token", expression: "\\bBearer\\s+[A-Z0-9._~+/-]{12,}\\b", flags: "gi" },
   { name: "API key", expression: "\\b(?:sk|pk|api)[_-][A-Z0-9_-]{12,}\\b", flags: "gi" },
   { name: "GitHub token", expression: "\\bgh[pousr]_[A-Za-z0-9_]{20,}\\b", flags: "g" },
+  { name: "Slack token", expression: "\\b(?:xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|xoxe(?:\\.xox[abprs])?-[A-Za-z0-9-]{10,})\\b", flags: "g", requiredRedaction: true },
 ]);
 
 function text(value) {
@@ -35,7 +36,7 @@ export function compileSensitivePatterns(configured = []) {
     const suppliedFlags = text(candidate?.flags).replace(/[^gimsu]/g, "");
     if (!expression || expression.length > 500) return [];
     try {
-      return [{ name: safeName(candidate?.name, index), regex: new RegExp(expression, suppliedFlags.includes("g") ? suppliedFlags : `${suppliedFlags}g`) }];
+      return [{ name: safeName(candidate?.name, index), regex: new RegExp(expression, suppliedFlags.includes("g") ? suppliedFlags : `${suppliedFlags}g`), requiredRedaction: candidate?.requiredRedaction === true }];
     } catch {
       return [];
     }
@@ -70,6 +71,7 @@ export function findSensitiveContent(projection, patterns = compileSensitivePatt
             eventIndex: eventIndex + 1,
             field: field.key,
             pattern: pattern.name,
+            requiredRedaction: pattern.requiredRedaction === true,
             start: match.index,
             end: match.index + match[0].length,
             preview: bounded(match[0]),
