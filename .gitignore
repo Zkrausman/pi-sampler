@@ -6,7 +6,7 @@ coverage/
 /.pi/*
 !/.pi/agents/
 /.pi/agents/*
-!/.pi/agents/pi-development.md
+!/.pi/agents/*.md
 /.pi-subagents/
 *.log
 .env
