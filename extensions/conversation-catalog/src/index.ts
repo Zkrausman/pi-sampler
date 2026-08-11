@@ -4,6 +4,7 @@ import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-age
 import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
 import { attachEvidenceReferences, createEvidenceManifest } from "./evidence.mjs";
+import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
 import { buildHindsightDocument } from "./synthesis.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
@@ -207,6 +208,29 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         await writeFile(outputPath, buildHindsightDocument(sources), "utf8");
         ctx.ui.notify(`Hindsight document written to ${outputPath}.`, "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
+    },
+  });
+
+  pi.registerCommand("conversation-map", {
+    description: "Review redactions, then write an interactive relationship map for one saved session",
+    async handler(args, ctx) {
+      const requested = flowArguments(args);
+      if (!requested) { ctx.ui.notify("Usage: /conversation-map <session-id> [output-path]", "error"); return; }
+      try {
+        const sessions = await SessionManager.listAll();
+        const candidates = sessions.filter((s) => s.id === requested.sessionId || s.id.startsWith(requested.sessionId));
+        if (candidates.length !== 1) throw new Error(candidates.length ? "Session ID prefix is ambiguous." : "No saved session matches that ID.");
+        const selected = candidates[0];
+        const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, `pi-conversation-map-${safeFilename(pseudonymizeSession(selected))}.html`, "conversation map");
+        const projection = projectConversation((await SessionManager.open(selected.path)).getEntries());
+        const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd));
+        const review = await reviewRedactionChoices(ctx, findings);
+        if (review.excluded) throw new Error("Conversation excluded; no map was created.");
+        const cited = attachEvidenceReferences(pseudonymizeSession(selected), redactProjection(projection, findings, review.decisions));
+        await mkdir(dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, generateRelationshipMapHtml({ id: pseudonymizeSession(selected) }, projectRelationshipMap(cited)), "utf8");
+        ctx.ui.notify(`Conversation map written to ${outputPath}.`, "info");
+      } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to write conversation map.", "error"); }
     },
   });
 }
