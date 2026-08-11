@@ -1,14 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { escapeHtml } from "./catalog.mjs";
-import { parseHindsightOutcomeHistory } from "./hindsight-outcomes.mjs";
+import { parseHindsightOutcomeHistory, withHindsightReportRefreshLock } from "./hindsight-outcomes.mjs";
 
 const REPORT_ID = /^hindsight-[a-f0-9]{8}$/;
 const CITATION = /^session-[a-z0-9]+:event-[0-9]{4}$/;
 const TARGET_ID = /^(?:claim|recommendation)-[a-f0-9]{16}$/;
 const CLASSIFICATIONS = new Set(["helpful", "incorrect", "overstated", "incomplete", "not-actionable"]);
 const FEEDBACK_LOCK_TIMEOUT_MS = 10_000;
+const STALE_FEEDBACK_LOCK_MS = 60_000;
 const feedbackLocks = new Map();
 
 export class HindsightFeedbackError extends Error {
@@ -27,7 +28,7 @@ function boundedText(value, maxLength, code = "malformed_feedback") {
 }
 
 // Durable user feedback must not become a surrogate transcript or credential store.
-const UNSAFE_FEEDBACK_TEXT = /\b(?:raw[- ]?session(?:[- ]?id)?|session[_-]?id|pi_session_file|bearer\s+|api[_-]?key|authorization\s*:|gh[pousr]_[A-Za-z0-9_]{20,}|(?:akia|asia|aida|aroa)[a-z0-9]{16}|(?:aws_)?(?:secret_access_key|access_key_id)\s*[:=])\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+const UNSAFE_FEEDBACK_TEXT = /\b(?:raw[- ]?session(?:[- ]?id)?|session[_-]?id|pi_session_file|bearer\s+|api[_-]?key|authorization\s*:|gh[pousr]_[A-Za-z0-9_]{20,}|(?:akia|asia|aida|aroa)[a-z0-9]{16}|(?:aws_)?(?:secret_access_key|access_key_id)\s*[:=]|(?:password|secret|token|credential)s?\s*(?:=|:)\s*\S+)\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
 
 function safeFeedbackText(value) {
   const text = boundedText(value, 2000);
@@ -48,10 +49,10 @@ function digest(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-function targetFor(type, statement, references) {
+function targetFor(reportId, type, statement, references) {
   const normalizedStatement = boundedText(statement, type === "claim" ? 2000 : 1000, "invalid_feedback_target");
   const evidenceReferences = boundedReferences(references, "invalid_feedback_target");
-  const textDigest = digest({ type, statement: normalizedStatement, evidenceReferences });
+  const textDigest = digest({ reportId, type, statement: normalizedStatement, evidenceReferences });
   return {
     targetId: `${type}-${textDigest.slice(0, 16)}`,
     type,
@@ -68,8 +69,8 @@ export function createHindsightFeedbackMetadata(document) {
   const claims = Array.isArray(document?.claims) ? document.claims : [];
   const recommendations = Array.isArray(document?.recommendations) ? document.recommendations : [];
   const targets = [
-    ...claims.filter((claim) => claim?.validationExcluded !== true).map((claim) => targetFor("claim", claim?.statement, claim?.evidenceReferences || claim?.references)),
-    ...recommendations.map((recommendation) => targetFor("recommendation", recommendation?.recommendation, recommendation?.evidenceReferences || recommendation?.references)),
+    ...claims.filter((claim) => claim?.validationExcluded !== true).map((claim) => targetFor(reportId, "claim", claim?.statement, claim?.evidenceReferences || claim?.references)),
+    ...recommendations.map((recommendation) => targetFor(reportId, "recommendation", recommendation?.recommendation, recommendation?.evidenceReferences || recommendation?.references)),
   ];
   if (targets.length > 120 || new Set(targets.map((target) => target.targetId)).size !== targets.length) {
     throw new HindsightFeedbackError("invalid_feedback_target");
@@ -147,20 +148,84 @@ export async function readHindsightFeedback(path) {
 }
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-async function acquireLock(path) {
+const lockOwnerPath = (lockPath) => `${lockPath}/owner.json`;
+
+function lockOwner(value) {
+  return ownObject(value) && value.schemaVersion === 1 && typeof value.token === "string" && /^[a-f0-9-]{36}$/.test(value.token)
+    && Number.isInteger(value.pid) && value.pid > 0 && validTimestamp(value.createdAt) ? value : undefined;
+}
+
+function lockIsActive(pid, processAlive = (candidate) => {
+  try { process.kill(candidate, 0); return true; }
+  catch (error) { return error?.code !== "ESRCH"; }
+}) {
+  return processAlive(pid) === true;
+}
+
+async function staleLockCandidate(lockPath, { readFileImpl, statImpl, now, staleMs, processAlive }) {
+  let owner;
+  try { owner = lockOwner(JSON.parse(await readFileImpl(lockOwnerPath(lockPath), "utf8"))); } catch { /* A crashed creator can leave no owner file. */ }
+  if (owner) {
+    if (now() - Date.parse(owner.createdAt) < staleMs || lockIsActive(owner.pid, processAlive)) return false;
+    return true;
+  }
+  try {
+    const details = await statImpl(lockPath);
+    return now() - details.mtimeMs >= staleMs;
+  } catch { return false; }
+}
+
+/**
+ * Acquires a feedback lock with a nonce owner record. Only an old lock whose
+ * recorded owner is no longer alive (or ownerless old directory) is atomically
+ * renamed aside before removal; active owners are never removed by a waiter.
+ */
+export async function acquireCrossProcessFeedbackLock(path, {
+  mkdirImpl = mkdir,
+  readFileImpl = readFile,
+  statImpl = stat,
+  renameImpl = rename,
+  rmImpl = rm,
+  delayImpl = delay,
+  now = () => Date.now(),
+  processAlive,
+  randomUUIDImpl = randomUUID,
+  timeoutMs = FEEDBACK_LOCK_TIMEOUT_MS,
+  staleMs = STALE_FEEDBACK_LOCK_MS,
+} = {}) {
   const lockPath = `${path}.lock`;
-  await mkdir(dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + FEEDBACK_LOCK_TIMEOUT_MS;
+  await mkdirImpl(dirname(lockPath), { recursive: true });
+  const deadline = now() + timeoutMs;
   let wait = 5;
   while (true) {
-    try { await mkdir(lockPath); return lockPath; }
-    catch (error) {
+    const token = randomUUIDImpl();
+    try {
+      await mkdirImpl(lockPath);
+      const owner = { schemaVersion: 1, token, pid: process.pid, createdAt: new Date(now()).toISOString() };
+      await writeFile(lockOwnerPath(lockPath), `${JSON.stringify(owner)}\n`, "utf8");
+      return { lockPath, token };
+    } catch (error) {
       const transient = error?.code === "EEXIST" || (error?.code === "EPERM" && error?.syscall === "mkdir" && error?.path === lockPath);
       if (!transient) throw error;
-      if (Date.now() >= deadline) throw new HindsightFeedbackError("feedback_lock_timeout");
-      await delay(wait); wait = Math.min(wait * 2, 100);
+      if (await staleLockCandidate(lockPath, { readFileImpl, statImpl, now, staleMs, processAlive })) {
+        const quarantined = `${lockPath}.stale-${randomUUIDImpl()}`;
+        try {
+          await renameImpl(lockPath, quarantined);
+          await rmImpl(quarantined, { recursive: true, force: true });
+          continue;
+        } catch { /* Another contender changed the path; re-check without deleting it. */ }
+      }
+      if (now() >= deadline) throw new HindsightFeedbackError("feedback_lock_timeout");
+      await delayImpl(wait); wait = Math.min(wait * 2, 100);
     }
   }
+}
+
+async function releaseCrossProcessFeedbackLock(lock, { readFileImpl = readFile, rmImpl = rm } = {}) {
+  try {
+    const owner = lockOwner(JSON.parse(await readFileImpl(lockOwnerPath(lock.lockPath), "utf8")));
+    if (owner?.token === lock.token) await rmImpl(lock.lockPath, { recursive: true, force: true });
+  } catch { /* A reclaimed/missing lock must not cause removal of another owner. */ }
 }
 
 async function withFeedbackLock(path, operation) {
@@ -170,10 +235,10 @@ async function withFeedbackLock(path, operation) {
   const current = new Promise((resolve) => { release = resolve; });
   feedbackLocks.set(path, current);
   await previous;
-  let lockPath;
-  try { lockPath = await acquireLock(path); return await operation(); }
+  let lock;
+  try { lock = await acquireCrossProcessFeedbackLock(path); return await operation(); }
   finally {
-    if (lockPath) await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    if (lock) await releaseCrossProcessFeedbackLock(lock);
     release();
     if (feedbackLocks.get(path) === current) feedbackLocks.delete(path);
   }
@@ -201,7 +266,7 @@ export async function appendHindsightFeedback(path, targetId, entry) {
   return withFeedbackLock(path, () => appendHindsightFeedbackUnlocked(path, targetId, entry));
 }
 
-/** Preserves feedback under matching report identity when a report is regenerated. */
+/** Keeps only current report targets; removed items cannot remain selectable. */
 export async function writeHindsightFeedbackSeed(path, seed) {
   const next = parseHindsightFeedback(seed);
   return withFeedbackLock(path, async () => {
@@ -210,8 +275,8 @@ export async function writeHindsightFeedbackSeed(path, seed) {
       await atomicWrite(path, `${JSON.stringify(next, null, 2)}\n`);
       return next;
     }
-    const targetMap = new Map([...previous.targets, ...next.targets].map((target) => [target.targetId, target]));
-    const merged = parseHindsightFeedback({ ...next, targets: [...targetMap.values()], feedback: previous.feedback });
+    const currentTargetIds = new Set(next.targets.map((target) => target.targetId));
+    const merged = parseHindsightFeedback({ ...next, targets: next.targets, feedback: previous.feedback.filter((entry) => currentTargetIds.has(entry.targetId)) });
     await atomicWrite(path, `${JSON.stringify(merged, null, 2)}\n`);
     return merged;
   });
@@ -233,36 +298,58 @@ function localDispositionSummary(value, reportId) {
 }
 
 /** Aggregates only local user records. Nothing here is model evidence or prompt input. */
+function rate(count, denominator) {
+  return { count, denominator, value: denominator === 0 ? 0 : count / denominator };
+}
+
 export function aggregateHindsightFeedback(store, { dispositions, outcomes } = {}) {
   const parsed = parseHindsightFeedback(store);
   const classifications = Object.fromEntries([...CLASSIFICATIONS].map((classification) => [classification, 0]));
   for (const entry of parsed.feedback) classifications[entry.classification] += 1;
+  const recordedFeedback = parsed.feedback.length;
+  const classificationRates = Object.fromEntries(Object.entries(classifications).map(([classification, count]) => [classification, rate(count, recordedFeedback)]));
   const corrected = parsed.feedback.filter((entry) => Boolean(entry.correctedFraming)).length;
-  const disposition = dispositions === undefined ? undefined : localDispositionSummary(dispositions, parsed.reportId);
-  if (dispositions !== undefined && !disposition) throw new HindsightFeedbackError("aggregate_metadata_malformed");
+  const correctionRate = rate(corrected, recordedFeedback);
+  const dispositionCounts = dispositions === undefined ? undefined : localDispositionSummary(dispositions, parsed.reportId);
+  if (dispositions !== undefined && !dispositionCounts) throw new HindsightFeedbackError("aggregate_metadata_malformed");
+  const disposition = dispositionCounts && {
+    ...dispositionCounts,
+    total: Object.values(dispositionCounts).reduce((sum, count) => sum + count, 0),
+  };
+  if (disposition) disposition.acceptanceRate = rate(disposition.accepted, disposition.total);
   let outcome;
   if (outcomes !== undefined) {
     let parsedOutcomes;
     try { parsedOutcomes = parseHindsightOutcomeHistory(outcomes); }
     catch { throw new HindsightFeedbackError("aggregate_metadata_malformed"); }
     if (parsedOutcomes.reportId !== parsed.reportId) throw new HindsightFeedbackError("aggregate_metadata_mismatch");
-    const updates = Object.values(parsedOutcomes.histories).flatMap((history) => history.updates);
+    const histories = Object.values(parsedOutcomes.histories);
+    const updates = histories.flatMap((history) => history.updates);
     const statusCounts = { "not-started": 0, "in-progress": 0, completed: 0, paused: 0, stopped: 0 };
     for (const update of updates) statusCounts[update.status] += 1;
-    outcome = { recordedUpdates: updates.length, statusCounts };
+    outcome = {
+      recordedUpdates: updates.length,
+      statusCounts,
+      statusRates: Object.fromEntries(Object.entries(statusCounts).map(([status, count]) => [status, rate(count, updates.length)])),
+      recordedOutcomeRate: disposition ? rate(histories.filter((history) => history.updates.length > 0).length, disposition.accepted) : undefined,
+    };
   }
-  return { classifications, recordedFeedback: parsed.feedback.length, corrected, disposition, outcome };
+  return { classifications, classificationRates, recordedFeedback, corrected, correctionRate, disposition, outcome };
+}
+
+function displayRate(value) {
+  return `${value.count}/${value.denominator} (${Math.round(value.value * 100)}%)`;
 }
 
 function aggregateHtml(aggregate) {
-  const feedbackRows = Object.entries(aggregate.classifications).map(([name, count]) => `<li><strong>${escapeHtml(name)}:</strong> ${count}</li>`).join("");
+  const feedbackRows = Object.entries(aggregate.classificationRates).map(([name, value]) => `<li><strong>${escapeHtml(name)}:</strong> ${displayRate(value)}</li>`).join("");
   const disposition = aggregate.disposition
-    ? `<p><strong>User disposition acceptance/correction:</strong> accepted ${aggregate.disposition.accepted}; deferred ${aggregate.disposition.deferred}; rejected ${aggregate.disposition.rejected}; not recorded ${aggregate.disposition.notRecorded}.</p>`
+    ? `<p><strong>User disposition acceptance rate:</strong> ${displayRate(aggregate.disposition.acceptanceRate)}; deferred ${aggregate.disposition.deferred}/${aggregate.disposition.total}; rejected ${aggregate.disposition.rejected}/${aggregate.disposition.total}; not recorded ${aggregate.disposition.notRecorded}/${aggregate.disposition.total}.</p>`
     : '<p class="empty">User disposition acceptance rate is unavailable until a valid local disposition export is present.</p>';
   const outcome = aggregate.outcome
-    ? `<p><strong>Recorded outcome rates:</strong> ${Object.entries(aggregate.outcome.statusCounts).map(([status, count]) => `${escapeHtml(status)} ${count}/${aggregate.outcome.recordedUpdates}`).join("; ")}.</p>`
+    ? `<p><strong>Recorded outcome status rates:</strong> ${Object.entries(aggregate.outcome.statusRates).map(([status, value]) => `${escapeHtml(status)} ${displayRate(value)}`).join("; ")}.${aggregate.outcome.recordedOutcomeRate ? ` <strong>Accepted recommendations with a recorded outcome:</strong> ${displayRate(aggregate.outcome.recordedOutcomeRate)}.` : ""}</p>`
     : '<p class="empty">Recorded outcome rates are unavailable until a valid local outcome store is present.</p>';
-  return `<section class="hindsight-feedback" aria-labelledby="hindsight-feedback-heading"><h2 id="hindsight-feedback-heading">Local feedback and calibration signals</h2><p class="feedback-notice">These are user-provided, local operational signals. They are not model evidence, citations, or prompt input.</p><p><strong>Recorded feedback:</strong> ${aggregate.recordedFeedback}; <strong>corrected framing supplied:</strong> ${aggregate.corrected}.</p><ul>${feedbackRows}</ul>${disposition}${outcome}</section>`;
+  return `<section class="hindsight-feedback" aria-labelledby="hindsight-feedback-heading"><h2 id="hindsight-feedback-heading">Local feedback and calibration signals</h2><p class="feedback-notice">These are user-provided, local operational signals. They are not model evidence, citations, or prompt input.</p><p><strong>Recorded feedback:</strong> ${aggregate.recordedFeedback}; <strong>corrected framing rate:</strong> ${displayRate(aggregate.correctionRate)}.</p><ul>${feedbackRows}</ul>${disposition}${outcome}</section>`;
 }
 
 export function renderHindsightFeedbackHtml(store, options = {}) {
@@ -298,7 +385,7 @@ export async function refreshHindsightFeedbackViews(path, { reportPath, feedback
     if (!store) throw new HindsightFeedbackError("feedback_missing");
     const aggregate = aggregateHindsightFeedback(store, { dispositions, outcomes });
     await atomicWrite(feedbackReportPath, renderHindsightFeedbackDocumentHtml(store, { dispositions, outcomes }));
-    await refreshReport(reportPath, aggregateHtml(aggregate));
+    await withHindsightReportRefreshLock(reportPath, () => refreshReport(reportPath, aggregateHtml(aggregate)));
     return store;
   });
 }
@@ -315,7 +402,7 @@ export async function recordHindsightFeedback(path, targetId, entry, { reportPat
       const store = await appendHindsightFeedbackUnlocked(path, targetId, entry);
       const aggregate = aggregateHindsightFeedback(store, { dispositions, outcomes });
       await atomicWrite(feedbackReportPath, renderHindsightFeedbackDocumentHtml(store, { dispositions, outcomes }));
-      await refreshReport(reportPath, aggregateHtml(aggregate));
+      await withHindsightReportRefreshLock(reportPath, () => refreshReport(reportPath, aggregateHtml(aggregate)));
       return store;
     } catch (error) {
       if (error instanceof HindsightFeedbackError) throw error;

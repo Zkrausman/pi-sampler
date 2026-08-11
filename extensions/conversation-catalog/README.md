@@ -131,17 +131,20 @@ The append-only, schema-version-1 `<report>.feedback.json` store is the durable
 local export. It persists model-item provenance separately from
 `user-feedback · user-confirmed` records, contains no claim/recommendation
 source text, and uses a cross-process lock plus atomic replacement. A matching
-report regeneration retains feedback by stable target identity even when other
-claims or recommendations change. The workflow refreshes the originating
+report scope retains feedback by stable target identity; changing or removing a
+claim or recommendation produces a new report identity, so stale targets are
+not selectable. The workflow refreshes the originating
 report's bounded calibration panel and an escaped, CSP-restricted
 `<report>.feedback.html` inspection companion. If a view refresh fails after
 the JSON append, the JSON remains the source of truth and Pi reports that
 limited failure.
 
 Those panels show only **user-provided/local operational signals**: feedback
-classification and corrected-framing counts; valid local user disposition
-acceptance/defer/reject counts when an exported disposition file is present;
-and recorded outcome status rates when a valid local outcome store is present.
+classification and corrected-framing rates (with explicit count/denominator);
+valid local user disposition acceptance/defer/reject rates when an exported
+disposition file is present; and recorded outcome status rates when a valid
+local outcome store is present. Zero denominators render as `0/0 (0%)` rather
+than implying a model-derived result.
 They are not model evidence, citations, or automatic prompt input. Feedback
 and aggregates are never sent to the model or added to generated claims or
 citations, and the workflow makes no network request.

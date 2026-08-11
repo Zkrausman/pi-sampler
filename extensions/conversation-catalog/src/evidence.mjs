@@ -90,20 +90,32 @@ function normalizedRecommendations(document) {
   });
 }
 
-function dispositionReportId(recommendations) {
-  // This opaque, deterministic identifier stays local to the report. It is
-  // derived from already-approved report content but never exposes it in a key.
+function normalizedReportIdentityClaims(document) {
+  const claims = Array.isArray(document?.claims) ? document.claims : [];
+  return claims.map((claim, index) => {
+    const statement = bounded(claim?.statement, "", 2000);
+    const classification = text(claim?.classification);
+    const references = [...new Set((Array.isArray(claim?.evidenceReferences) ? claim.evidenceReferences : claim?.references || []).map(text))];
+    if (!statement || !["direct evidence", "inference"].includes(classification) || references.length === 0 || references.some((reference) => !reference)) {
+      throw new Error(`Claim ${index + 1} does not meet the report identity contract.`);
+    }
+    return { statement, classification, references, validationExcluded: claim?.validationExcluded === true };
+  });
+}
+
+function dispositionReportId(recommendations, claims) {
+  // This opaque, deterministic identifier stays local to the report. Its scope
+  // includes every current material claim and recommendation, so a report with
+  // no recommendations cannot collapse into a shared constant identity.
   let hash = 2166136261;
-  // Include the complete normalized recommendation so a material model update
-  // receives a fresh local-storage namespace rather than inherited decisions.
-  for (const character of JSON.stringify(recommendations)) {
+  for (const character of JSON.stringify({ claims, recommendations })) {
     hash ^= character.codePointAt(0);
     hash = Math.imul(hash, 16777619);
   }
   return `hindsight-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-function dispositionMetadata(recommendations) {
+function dispositionMetadata(recommendations, claims = []) {
   return {
     // Version 2 keeps the immutable, already-validated model work fields with
     // the local user decision. This makes an exported decision self-contained
@@ -111,7 +123,7 @@ function dispositionMetadata(recommendations) {
     // capability to this report.
     schemaVersion: 2,
     kind: "pi-hindsight-recommendation-dispositions",
-    reportId: dispositionReportId(recommendations),
+    reportId: dispositionReportId(recommendations, claims),
     provenance: {
       modelSuggestions: "model-suggestion",
       userDispositions: "not-user-confirmed",
@@ -139,7 +151,7 @@ function dispositionMetadata(recommendations) {
  * the safe recommendation validation so callers cannot persist arbitrary data.
  */
 export function createHindsightRecommendationDispositionMetadata(document) {
-  return dispositionMetadata(normalizedRecommendations(document));
+  return dispositionMetadata(normalizedRecommendations(document), normalizedReportIdentityClaims(document));
 }
 
 function scriptJson(value) {
@@ -211,7 +223,7 @@ export function generateCitedHindsightDocumentHtml(document) {
     return { statement, classification, references, validationExcluded: claim?.validationExcluded === true };
   });
   const recommendations = normalizedRecommendations(document);
-  const recommendationDispositionMetadata = dispositionMetadata(recommendations);
+  const recommendationDispositionMetadata = dispositionMetadata(recommendations, normalizedClaims);
   // Feedback identities are hashes of the stable rendered claim/recommendation
   // contract plus pseudonymous citations, never source excerpts or raw sessions.
   // Generic renderer callers may use synthetic citations outside the durable
