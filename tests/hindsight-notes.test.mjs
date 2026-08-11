@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,7 +10,6 @@ import {
   HindsightNotesError,
   acquireCrossProcessHindsightNotesLock,
   addHindsightNote,
-  createWindowsRegistryBackend,
   deleteHindsightNote,
   editHindsightNote,
   emptyHindsightNotes,
@@ -55,48 +55,36 @@ test("notes schema is pseudonymous, provenance-bound, and rejects session IDs, c
   assert.throws(() => parseHindsightNotes({ ...valid, notes: [{ ...note(), noteId: "note-evil" }] }), /malformed_notes/);
 });
 
-test("SHA-256 note references are session-ID-only and split known legacy FNV collision-style inputs", () => {
+test("sidecar key is the full SHA-256 of only Pi's actual session ID", () => {
   const first = { id: "s-mcru1l2z79g", name: "n-abgujexihn" };
   const second = { id: "s-lcwrmc14uh", name: "n-8pnfxpikqn5" };
   assert.equal(pseudonymizeSession(first), pseudonymizeSession(second), "test inputs collide in the legacy 32-bit catalog pseudonym");
+  assert.equal(sessionReference, createHash("sha256").update(sessionId, "utf8").digest("hex"));
+  assert.equal(hindsightNotesSessionReference(first.id), createHash("sha256").update(first.id, "utf8").digest("hex"));
   assert.notEqual(hindsightNotesSessionReference(first.id), hindsightNotesSessionReference(second.id));
-  assert.equal(hindsightNotesSessionReference(first.id), hindsightNotesSessionReference(first.id));
-  assert.equal(hindsightNotesSessionReference(first.id), hindsightNotesSessionReference(first.id));
   assert.doesNotMatch(hindsightNotesSessionReference(first.id), /mcru1l2z|abgujexihn/);
 });
 
-test("descriptor-relative persistence derives the only store and fails closed where Node lacks secure directory handles", async (t) => {
-  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-"));
+test("Windows actual project sidecar performs add, view, edit, and delete", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-crud-"));
   try {
     const path = hindsightNotesPath(projectRoot, sessionReference);
-    assert.match(path, /\.pi[\\/]hindsight-notes[\\/]session-[a-f0-9]{32}\.json$/);
+    assert.match(path, new RegExp(`\\.pi[\\\\/]hindsight-notes[\\\\/]${sessionReference}\\.json$`));
     assert.throws(() => hindsightNotesPath(projectRoot, "../raw"), /invalid_session_reference/);
-    if (process.platform === "win32") return;
-    if (process.platform !== "linux") {
-      await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, "Must fail closed."), /secure_storage_unavailable/);
-      await assert.rejects(() => readHindsightNotes(projectRoot, sessionReference), /secure_storage_unavailable/);
-      return;
-    }
     const added = await addHindsightNote(projectRoot, sessionReference, "Initial user-authored context.", { now: () => now });
     assert.match(added.noteId, /^note-[a-f0-9]{32}$/);
+    assert.equal((await readHindsightNotes(projectRoot, sessionReference)).notes[0].text, "Initial user-authored context.");
+    assert.doesNotMatch(await readFile(path, "utf8"), new RegExp(sessionId));
     const edited = await editHindsightNote(projectRoot, sessionReference, added.noteId, "Reviewed replacement context.", { now: () => "2026-09-01T12:01:00.000Z" });
     assert.equal(edited.provenance.editedAt, "2026-09-01T12:01:00.000Z");
     await deleteHindsightNote(projectRoot, sessionReference, added.noteId);
     assert.deepEqual((await readHindsightNotes(projectRoot, sessionReference)).notes, []);
     assert.equal(await readHindsightNotes(projectRoot, hindsightNotesSessionReference("other-session")), undefined, "another session cannot select this keyed file");
-    const outside = await mkdtemp(join(tmpdir(), "hindsight-notes-outside-"));
-    const escapedRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-symlink-"));
-    try {
-      await mkdir(join(escapedRoot, ".pi"));
-      try { await symlink(outside, join(escapedRoot, ".pi", "hindsight-notes"), "dir"); }
-      catch (error) { t.diagnostic(`symlink setup unavailable: ${error.code || error}`); return; }
-      await assert.rejects(() => addHindsightNote(escapedRoot, sessionReference, "Must not escape root."), /unsafe_notes_path/);
-    } finally { await rm(outside, { recursive: true, force: true }); await rm(escapedRoot, { recursive: true, force: true }); }
+    assert.deepEqual((await readdir(dirname(path))).filter((name) => name.endsWith(".lock") || name.endsWith(".tmp")), []);
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
 
-test("AIDEV-50 note locks reclaim only stale dead owners and preserve active owners", async () => {
-  if (process.platform !== "linux") return;
+test("sidecar lock reclaims only stale dead owners and preserves active owners", async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-lock-"));
   const path = hindsightNotesPath(projectRoot, sessionReference);
   const lockPath = `${path}.lock`;
@@ -106,7 +94,7 @@ test("AIDEV-50 note locks reclaim only stale dead owners and preserve active own
     await mkdir(lockPath);
     await writeFile(join(lockPath, "owner.json"), JSON.stringify({ schemaVersion: 1, token: "00000000-0000-4000-8000-000000000000", pid: 999999999, createdAt: old }), "utf8");
     const reclaimed = await acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference, { staleMs: 1, timeoutMs: 100, processAliveImpl: () => false });
-    assert.equal(reclaimed.name, `${sessionReference}.json.lock`);
+    assert.equal(reclaimed.lockPath, lockPath);
     await rm(lockPath, { recursive: true, force: true });
 
     await mkdir(lockPath);
@@ -116,8 +104,7 @@ test("AIDEV-50 note locks reclaim only stale dead owners and preserve active own
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
 
-test("atomic cross-process appends retain all notes and leave no lock or temporary file", async (t) => {
-  if (process.platform !== "linux") { t.skip("cross-process filesystem lock is Linux descriptor backend only"); return; }
+test("Windows actual concurrent writers retain all notes with atomic sidecar replacement", async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-process-"));
   try {
     await Promise.all(Array.from({ length: 8 }, (_value, index) => runWriter(projectRoot, index + 1)));
@@ -128,97 +115,21 @@ test("atomic cross-process appends retain all notes and leave no lock or tempora
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
 
-test("Windows Registry backend uses fixed hash-only keys, atomic per-note values, bounded responses, and preserves concurrent notes", async () => {
-  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-registry-"));
-  const values = new Map(); const calls = [];
-  const missing = () => ({ code: 1, stdout: "", stderr: "ERROR: The system was unable to find the specified registry key or value.\r\n" });
-  const runner = async (args) => {
-    calls.push(args);
-    const [verb, key, option, name, ...rest] = args;
-    const header = `HKEY_CURRENT_USER${key.slice("HKCU".length)}`;
-    const bucket = values.get(key);
-    if (verb === "query" && option === "/v") {
-      if (!bucket?.has(name)) return missing();
-      return { code: 0, stdout: `${header}\r\n    ${name}    REG_SZ    ${bucket.get(name)}\r\n`, stderr: "" };
-    }
-    if (verb === "query") {
-      if (!bucket) return missing();
-      return { code: 0, stdout: `${header}\r\n${[...bucket].map(([valueName, value]) => `    ${valueName}    REG_SZ    ${value}\r\n`).join("")}`, stderr: "" };
-    }
-    if (verb === "add") {
-      const valueName = args[3]; const value = args[7];
-      const target = values.get(key) || new Map(); target.set(valueName, value); values.set(key, target);
-      return { code: 0, stdout: "The operation completed successfully.\r\n", stderr: "" };
-    }
-    if (verb === "delete") {
-      if (!bucket?.has(name)) return missing();
-      bucket.delete(name); return { code: 0, stdout: "The operation completed successfully.\r\n", stderr: "" };
-    }
-    throw new Error(`unexpected reg args: ${args.join(" ")}`);
-  };
+test("current store symlinks are rejected before sidecar operations", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-symlink-"));
+  const outside = await mkdtemp(join(tmpdir(), "hindsight-notes-outside-"));
   try {
-    const backend = createWindowsRegistryBackend({ runRegistry: runner, withMutex: async (_name, operation) => operation() });
-    const first = note("First registry note.");
-    const second = { ...note("Second registry note."), noteId: "note-fedcba9876543210fedcba9876543210" };
-    await Promise.all([backend.put(projectRoot, sessionReference, first), backend.put(projectRoot, sessionReference, second)]);
-    const stored = await backend.list(projectRoot, sessionReference);
-    assert.deepEqual(stored.notes.map((entry) => entry.noteId).sort(), [first.noteId, second.noteId].sort());
-    await backend.remove(projectRoot, sessionReference, first.noteId);
-    assert.deepEqual((await backend.list(projectRoot, sessionReference)).notes.map((entry) => entry.noteId), [second.noteId]);
-    for (let index = 1; index < 100; index += 1) await backend.put(projectRoot, sessionReference, { ...note(`bounded note ${index}`), noteId: `note-${index.toString(16).padStart(32, "0")}` });
-    await assert.rejects(() => backend.put(projectRoot, sessionReference, { ...note("over cap"), noteId: "note-ffffffffffffffffffffffffffffffff" }), /notes_limit_reached/);
-    assert.ok(calls.every((args) => args[0] !== "query" || args[2] === "/v"), "backend must never whole-key query");
-    assert.ok(calls.every((args) => ["query", "add", "delete"].includes(args[0])));
-    const serializedCalls = JSON.stringify(calls);
-    assert.doesNotMatch(serializedCalls, new RegExp(projectRoot.replace(/[\\\\^$.*+?()[\]{}|]/g, "\\$&"), "i"));
-    assert.doesNotMatch(serializedCalls, /notes50-current-session|First registry note|Second registry note/);
-    assert.match(calls.find((args) => args[0] === "add")[1], /^HKCU\\Software\\Zkrausman\\PiConversationCatalog\\HindsightNotes\\v1\\[a-f0-9]{64}\\session-[a-f0-9]{32}$/);
-    const invalid = createWindowsRegistryBackend({ runRegistry: async () => ({ code: 0, stdout: "unexpected", stderr: "" }), withMutex: async (_name, operation) => operation() });
-    await assert.rejects(() => invalid.list(projectRoot, sessionReference), /registry_response_invalid/);
-  } finally { await rm(projectRoot, { recursive: true, force: true }); }
+    await mkdir(join(projectRoot, ".pi"));
+    try { await symlink(outside, join(projectRoot, ".pi", "hindsight-notes"), "dir"); }
+    catch (error) { t.skip(`symlink setup unavailable: ${error.code || error}`); return; }
+    await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, "Must not escape root."), /unsafe_notes_path/);
+    assert.deepEqual(await readdir(outside), []);
+  } finally { await rm(projectRoot, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
 });
 
-test("adversarial symlink swaps cannot redirect note read, lock, temp, rename, or delete operations outside storage", async (t) => {
-  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-swap-root-"));
-  const outside = await mkdtemp(join(tmpdir(), "hindsight-notes-swap-outside-"));
-  const sentinel = join(outside, "sentinel.txt");
-  const noteId = "note-0123456789abcdef0123456789abcdef";
-  try {
-    await writeFile(sentinel, "outside-must-not-change", "utf8");
-    if (process.platform === "win32") return;
-    if (process.platform !== "linux") {
-      const attempts = [readHindsightNotes(projectRoot, sessionReference), acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference), addHindsightNote(projectRoot, sessionReference, "blocked")];
-      for (const attempt of attempts) await assert.rejects(() => attempt, /secure_storage_unavailable/);
-      assert.equal(await readFile(sentinel, "utf8"), "outside-must-not-change");
-      return;
-    }
-    const initial = await addHindsightNote(projectRoot, sessionReference, "Initial protected note.", { now: () => now });
-    const notesDir = join(projectRoot, ".pi", "hindsight-notes");
-    const parked = join(projectRoot, ".pi", "hindsight-notes-parked");
-    let swapping = true;
-    const swapper = (async () => {
-      while (swapping) {
-        try {
-          await rename(notesDir, parked);
-          await symlink(outside, notesDir, "dir");
-          await rm(notesDir, { recursive: true, force: true });
-          await rename(parked, notesDir);
-        } catch { /* races only make an operation fail closed */ }
-      }
-    })();
-    const operations = await Promise.allSettled([
-      readHindsightNotes(projectRoot, sessionReference),
-      acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference),
-      addHindsightNote(projectRoot, sessionReference, "Concurrent protected add."),
-      editHindsightNote(projectRoot, sessionReference, initial.noteId, "Concurrent protected edit."),
-      deleteHindsightNote(projectRoot, sessionReference, initial.noteId),
-    ]);
-    swapping = false;
-    await swapper;
-    assert.ok(operations.every((result) => result.status === "fulfilled" || result.reason instanceof HindsightNotesError));
-    assert.equal(await readFile(sentinel, "utf8"), "outside-must-not-change");
-    assert.deepEqual((await readdir(outside)).sort(), ["sentinel.txt"]);
-  } finally { await rm(projectRoot, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
+test("sidecar implementation has no registry or native backend", async () => {
+  const sourceText = await readFile(new URL("../extensions/conversation-catalog/src/hindsight-notes.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(sourceText, /reg\.exe|windows registry|HKCU|koffi/i);
 });
 
 test("only reviewed included notes reach prompt/rendering, are distinct context, and cannot become citations", () => {
