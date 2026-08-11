@@ -254,7 +254,7 @@ export function buildClaimSupportValidationPrompt(sources, modelOutput) {
  * prose is accepted as strictly validated structured claims and recommendations,
  * then escaped and linked here rather than allowing the model to write markup.
  */
-export function buildHindsightDocument(sources, modelOutput = undefined, claimSupportValidation = undefined) {
+export function buildHindsightDocument(sources, modelOutput = undefined, claimSupportValidation = undefined, priorOutcomes = undefined) {
   const selected = selectedSources(sources);
   const evidence = sourceEvidence(selected);
   const allowedReferences = new Set(evidence.filter((item) => item.availability !== "excluded").map((item) => item.reference));
@@ -269,6 +269,8 @@ export function buildHindsightDocument(sources, modelOutput = undefined, claimSu
     claims: [...model.claims, ...fallbackClaims(selected)],
     recommendations: model.recommendations,
     claimSupportValidation: validation,
+    // This separately supplied context intentionally never enters `evidence`.
+    priorOutcomes,
     evidence,
   });
 }
