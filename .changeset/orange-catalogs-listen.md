@@ -2,4 +2,4 @@
 "@zkrausman/pi-conversation-catalog": minor
 ---
 
-Add a metadata-only, standalone HTML catalog command for browsing saved Pi sessions by recorded location.
+Add standalone HTML catalog and opt-in historical conversation-flow commands for browsing saved Pi sessions by recorded location and causal event links.
