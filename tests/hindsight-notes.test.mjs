@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,12 +64,17 @@ test("SHA-256 note references are session-ID-only and split known legacy FNV col
   assert.doesNotMatch(hindsightNotesSessionReference(first.id), /mcru1l2z|abgujexihn/);
 });
 
-test("persistence APIs derive the only project-contained store path and reject traversal/symlink escape", async (t) => {
+test("descriptor-relative persistence derives the only store and fails closed where Node lacks secure directory handles", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-"));
   try {
     const path = hindsightNotesPath(projectRoot, sessionReference);
     assert.match(path, /\.pi[\\/]hindsight-notes[\\/]session-[a-f0-9]{32}\.json$/);
     assert.throws(() => hindsightNotesPath(projectRoot, "../raw"), /invalid_session_reference/);
+    if (process.platform !== "linux") {
+      await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, "Must fail closed."), /secure_storage_unavailable/);
+      await assert.rejects(() => readHindsightNotes(projectRoot, sessionReference), /secure_storage_unavailable/);
+      return;
+    }
     const added = await addHindsightNote(projectRoot, sessionReference, "Initial user-authored context.", { now: () => now });
     assert.match(added.noteId, /^note-[a-f0-9]{32}$/);
     const edited = await editHindsightNote(projectRoot, sessionReference, added.noteId, "Reviewed replacement context.", { now: () => "2026-09-01T12:01:00.000Z" });
@@ -77,12 +82,11 @@ test("persistence APIs derive the only project-contained store path and reject t
     await deleteHindsightNote(projectRoot, sessionReference, added.noteId);
     assert.deepEqual((await readHindsightNotes(projectRoot, sessionReference)).notes, []);
     assert.equal(await readHindsightNotes(projectRoot, hindsightNotesSessionReference("other-session")), undefined, "another session cannot select this keyed file");
-
     const outside = await mkdtemp(join(tmpdir(), "hindsight-notes-outside-"));
     const escapedRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-symlink-"));
     try {
       await mkdir(join(escapedRoot, ".pi"));
-      try { await symlink(outside, join(escapedRoot, ".pi", "hindsight-notes"), process.platform === "win32" ? "junction" : "dir"); }
+      try { await symlink(outside, join(escapedRoot, ".pi", "hindsight-notes"), "dir"); }
       catch (error) { t.diagnostic(`symlink setup unavailable: ${error.code || error}`); return; }
       await assert.rejects(() => addHindsightNote(escapedRoot, sessionReference, "Must not escape root."), /unsafe_notes_path/);
     } finally { await rm(outside, { recursive: true, force: true }); await rm(escapedRoot, { recursive: true, force: true }); }
@@ -90,6 +94,10 @@ test("persistence APIs derive the only project-contained store path and reject t
 });
 
 test("AIDEV-50 note locks reclaim only stale dead owners and preserve active owners", async () => {
+  if (process.platform !== "linux") {
+    await assert.rejects(() => acquireCrossProcessHindsightNotesLock(process.cwd(), sessionReference), /secure_storage_unavailable/);
+    return;
+  }
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-lock-"));
   const path = hindsightNotesPath(projectRoot, sessionReference);
   const lockPath = `${path}.lock`;
@@ -99,7 +107,7 @@ test("AIDEV-50 note locks reclaim only stale dead owners and preserve active own
     await mkdir(lockPath);
     await writeFile(join(lockPath, "owner.json"), JSON.stringify({ schemaVersion: 1, token: "00000000-0000-4000-8000-000000000000", pid: 999999999, createdAt: old }), "utf8");
     const reclaimed = await acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference, { staleMs: 1, timeoutMs: 100, processAliveImpl: () => false });
-    assert.equal(reclaimed.lockPath, lockPath);
+    assert.equal(reclaimed.name, `${sessionReference}.json.lock`);
     await rm(lockPath, { recursive: true, force: true });
 
     await mkdir(lockPath);
@@ -109,7 +117,8 @@ test("AIDEV-50 note locks reclaim only stale dead owners and preserve active own
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
 
-test("atomic cross-process appends retain all notes and leave no lock or temporary file", async () => {
+test("atomic cross-process appends retain all notes and leave no lock or temporary file", async (t) => {
+  if (process.platform !== "linux") { t.skip("secure descriptor-relative storage is unavailable on this Node/Windows runtime"); return; }
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-process-"));
   try {
     await Promise.all(Array.from({ length: 8 }, (_value, index) => runWriter(projectRoot, index + 1)));
@@ -118,6 +127,54 @@ test("atomic cross-process appends retain all notes and leave no lock or tempora
     assert.equal(new Set(store.notes.map((entry) => entry.noteId)).size, 8);
     assert.deepEqual((await readdir(dirname(hindsightNotesPath(projectRoot, sessionReference)))).filter((name) => name.endsWith(".lock") || name.endsWith(".tmp")), []);
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
+});
+
+test("adversarial symlink swaps cannot redirect note read, lock, temp, rename, or delete operations outside storage", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-swap-root-"));
+  const outside = await mkdtemp(join(tmpdir(), "hindsight-notes-swap-outside-"));
+  const sentinel = join(outside, "sentinel.txt");
+  const noteId = "note-0123456789abcdef0123456789abcdef";
+  try {
+    await writeFile(sentinel, "outside-must-not-change", "utf8");
+    if (process.platform !== "linux") {
+      const attempts = [
+        readHindsightNotes(projectRoot, sessionReference),
+        acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference),
+        addHindsightNote(projectRoot, sessionReference, "blocked"),
+        editHindsightNote(projectRoot, sessionReference, noteId, "blocked"),
+        deleteHindsightNote(projectRoot, sessionReference, noteId),
+      ];
+      for (const attempt of attempts) await assert.rejects(() => attempt, /secure_storage_unavailable/);
+      assert.equal(await readFile(sentinel, "utf8"), "outside-must-not-change");
+      return;
+    }
+    const initial = await addHindsightNote(projectRoot, sessionReference, "Initial protected note.", { now: () => now });
+    const notesDir = join(projectRoot, ".pi", "hindsight-notes");
+    const parked = join(projectRoot, ".pi", "hindsight-notes-parked");
+    let swapping = true;
+    const swapper = (async () => {
+      while (swapping) {
+        try {
+          await rename(notesDir, parked);
+          await symlink(outside, notesDir, "dir");
+          await rm(notesDir, { recursive: true, force: true });
+          await rename(parked, notesDir);
+        } catch { /* races only make an operation fail closed */ }
+      }
+    })();
+    const operations = await Promise.allSettled([
+      readHindsightNotes(projectRoot, sessionReference),
+      acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference),
+      addHindsightNote(projectRoot, sessionReference, "Concurrent protected add."),
+      editHindsightNote(projectRoot, sessionReference, initial.noteId, "Concurrent protected edit."),
+      deleteHindsightNote(projectRoot, sessionReference, initial.noteId),
+    ]);
+    swapping = false;
+    await swapper;
+    assert.ok(operations.every((result) => result.status === "fulfilled" || result.reason instanceof HindsightNotesError));
+    assert.equal(await readFile(sentinel, "utf8"), "outside-must-not-change");
+    assert.deepEqual((await readdir(outside)).sort(), ["sentinel.txt"]);
+  } finally { await rm(projectRoot, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
 });
 
 test("only reviewed included notes reach prompt/rendering, are distinct context, and cannot become citations", () => {

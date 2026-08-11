@@ -196,6 +196,7 @@ function hindsightNotesErrorMessage(error: unknown) {
     invalid_session_reference: "The local session reference is invalid; no note was read or changed.",
     invalid_notes_path: "The local hindsight-notes path is invalid; no note was read or changed.",
     unsafe_notes_path: "The local hindsight-notes path is a symlink or unsafe filesystem object; no note was read or changed.",
+    secure_storage_unavailable: "This Node platform cannot provide race-safe local hindsight-note storage; no note was read or changed.",
     malformed_notes: "The local hindsight-notes store is malformed or unsupported; it was not changed.",
     session_mismatch: "The local hindsight-notes store belongs to another session; it was not read or changed.",
     unsafe_note_text: "Notes must not include raw session identifiers or credentials; nothing was saved.",
@@ -603,7 +604,16 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         // that exact store is read, and excluded/deleted notes never enter this
         // reviewed bundle.
         // Never access a project-local note store from an untrusted project.
-        const noteStore = isTrustedProject(ctx) ? await readHindsightNotes(ctx.cwd, noteSessionReference) : undefined;
+        // Unsupported Node platforms fail closed for notes but retain the normal
+        // no-note hindsight workflow rather than weakening storage safety.
+        let noteStore: any;
+        if (isTrustedProject(ctx)) {
+          try { noteStore = await readHindsightNotes(ctx.cwd, noteSessionReference); }
+          catch (error) {
+            if (!(error instanceof HindsightNotesError) || error.code !== "secure_storage_unavailable") throw error;
+            ctx.ui.notify(hindsightNotesErrorMessage(error), "warning");
+          }
+        }
         const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, patterns) : [];
         const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
