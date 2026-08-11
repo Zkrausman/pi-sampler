@@ -281,7 +281,7 @@ export function createExcalidrawScene(diagram: Diagram): ExcalidrawScene {
     const fromIds = nodeElementIds.get(edge.from)!;
     const toIds = nodeElementIds.get(edge.to)!;
     const arrow = {
-      ...commonElement(arrowId, `b${edgeIndex}`, arrowId),
+      ...commonElement(arrowId, `a${diagram.nodes.length * 2 + edgeIndex}`, arrowId),
       type: "arrow",
       ...geometry,
       lastCommittedPoint: null,
