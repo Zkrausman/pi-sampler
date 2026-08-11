@@ -6,7 +6,7 @@ import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
 import { attachEvidenceReferences, createEvidenceManifest } from "./evidence.mjs";
 import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
-import { buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
+import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
@@ -26,6 +26,14 @@ function resolveOutputPath(args: string, cwd: string, defaultFilename = DEFAULT_
 function flowArguments(args: string) {
   const match = args.trim().match(/^(\S+)(?:\s+([\s\S]*))?$/);
   return match ? { sessionId: match[1], outputPath: match[2] || "" } : undefined;
+}
+
+function hindsightArguments(args: string) {
+  const flag = "--validate-claim-support";
+  const trimmed = args.trim();
+  if (trimmed === flag) return { outputPath: "", validateClaimSupport: true };
+  if (trimmed.startsWith(`${flag} `)) return { outputPath: trimmed.slice(flag.length).trim(), validateClaimSupport: true };
+  return { outputPath: args, validateClaimSupport: false };
 }
 
 function safeFilename(value: string) {
@@ -85,7 +93,14 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
 
 /** A read-only catalog of Pi session metadata and an opt-in historical flow viewer. */
 export default function conversationCatalog(pi: ExtensionAPI) {
-  let pendingHindsight: { sources: any[]; outputPath: string; restoreTools: () => void } | undefined;
+  let pendingHindsight: {
+    sources: any[];
+    outputPath: string;
+    restoreTools: () => void;
+    validateClaimSupport: boolean;
+    phase: "draft" | "validation";
+    modelOutput?: any;
+  } | undefined;
 
   // Keep every direct write-capable session tool disabled until the model run
   // settles, including any follow-up turn after the safe tool returns.
@@ -120,10 +135,19 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       }, { additionalProperties: false }), { maxItems: 40 }),
     }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
-      if (!pendingHindsight) {
-        return { content: [{ type: "text", text: "No hindsight document is awaiting generation." }] };
+      if (!pendingHindsight || pendingHindsight.phase !== "draft") {
+        return { content: [{ type: "text", text: "No hindsight document draft is awaiting generation." }] };
       }
       try {
+        if (pendingHindsight.validateClaimSupport) {
+          const validationPrompt = buildClaimSupportValidationPrompt(pendingHindsight.sources, params);
+          pendingHindsight.modelOutput = params;
+          pendingHindsight.phase = "validation";
+          // The draft writer is removed before its result asks the model for the
+          // separate support pass, so only the validator can finish this report.
+          pi.setActiveTools(["hindsight_claim_support_validate"]);
+          return { content: [{ type: "text", text: validationPrompt }] };
+        }
         const html = buildHindsightDocument(pendingHindsight.sources, params);
         await mkdir(dirname(pendingHindsight.outputPath), { recursive: true });
         await writeFile(pendingHindsight.outputPath, html, "utf8");
@@ -132,6 +156,40 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}.` }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? `Unable to write hindsight document: ${error.message}` : "Unable to write hindsight document." }] };
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "hindsight_claim_support_validate",
+    label: "Validate cited hindsight claim support",
+    description: "Completes an opt-in claim-support pass using only the cited, redacted excerpts returned by the safe report contract.",
+    parameters: Type.Object({
+      source: Type.Literal("model-validation"),
+      userDisposition: Type.Literal("not-user-confirmed"),
+      assessments: Type.Array(Type.Object({
+        claimNumber: Type.Integer({ minimum: 1 }),
+        support: Type.Union([
+          Type.Literal("supported"),
+          Type.Literal("partially supported"),
+          Type.Literal("unsupported"),
+          Type.Literal("unverifiable"),
+        ]),
+        evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 20 }),
+      }, { additionalProperties: false }), { maxItems: 80 }),
+    }, { additionalProperties: false }),
+    async execute(_toolCallId, params) {
+      if (!pendingHindsight || pendingHindsight.phase !== "validation" || !pendingHindsight.modelOutput) {
+        return { content: [{ type: "text", text: "No claim-support validation is awaiting completion." }] };
+      }
+      try {
+        const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params);
+        await mkdir(dirname(pendingHindsight.outputPath), { recursive: true });
+        await writeFile(pendingHindsight.outputPath, html, "utf8");
+        const outputPath = pendingHindsight.outputPath;
+        return { content: [{ type: "text", text: `Hindsight document with claim-support validation written to ${outputPath}.` }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: error instanceof Error ? `Unable to validate hindsight claim support: ${error.message}` : "Unable to validate hindsight claim support." }] };
       }
     },
   });
@@ -237,10 +295,11 @@ export default function conversationCatalog(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("hindsight-document", {
-    description: "Interactively select one conversation and write a cited hindsight document",
+    description: "Interactively select one conversation and write a cited hindsight document (optional --validate-claim-support)",
     async handler(args, ctx) {
       try {
         if (!ctx.hasUI) throw new Error("Hindsight generation requires Pi's interactive UI.");
+        const requested = hindsightArguments(args);
         const sessions = await SessionManager.listAll();
         if (sessions.length === 0) throw new Error("No saved conversations are available for hindsight generation.");
         // Numbered choices remain unambiguous even if saved-session labels match.
@@ -265,17 +324,17 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           const cited = attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions));
           sources.push({ reference, events: cited.events, edges: cited.edges });
         }
-        const outputPath = resolveOutputPath(args, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
+        const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
         try {
-          pendingHindsight = { sources, outputPath, restoreTools };
-          pi.sendUserMessage(buildSynthesisPrompt(sources));
+          pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, phase: "draft" };
+          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport }));
         } catch (error) {
           pendingHindsight = undefined;
           restoreTools();
           throw error;
         }
-        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.`, "info");
+        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.${requested.validateClaimSupport ? " Claim-support validation will run as a separate evidence-scoped model pass." : ""}`, "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
     },
   });

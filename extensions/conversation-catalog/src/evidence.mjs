@@ -88,6 +88,38 @@ function normalizedRecommendations(document) {
   });
 }
 
+function normalizedClaimSupportValidation(document, claims) {
+  const validation = document?.claimSupportValidation;
+  if (validation === undefined) return undefined;
+  if (!validation || typeof validation !== "object" || Array.isArray(validation)
+    || text(validation.source) !== "model-validation" || text(validation.userDisposition) !== "not-user-confirmed") {
+    throw new Error("Claim-support validation must be model-generated and not user-confirmed.");
+  }
+  const assessments = validation.assessments;
+  if (!Array.isArray(assessments) || assessments.length !== claims.length) {
+    throw new Error("Claim-support validation must assess every material claim exactly once.");
+  }
+  const claimNumbers = new Set();
+  return assessments.map((assessment, index) => {
+    const label = `Claim-support assessment ${index + 1}`;
+    const claimNumber = assessment?.claimNumber;
+    if (!Number.isInteger(claimNumber) || claimNumber < 1 || claimNumber > claims.length || claimNumbers.has(claimNumber)) {
+      throw new Error("Claim-support validation must assess every material claim exactly once.");
+    }
+    claimNumbers.add(claimNumber);
+    const support = text(assessment?.support);
+    if (!["supported", "partially supported", "unsupported", "unverifiable"].includes(support)) {
+      throw new Error(`${label} has an invalid support classification.`);
+    }
+    const references = [...new Set((Array.isArray(assessment?.evidenceReferences) ? assessment.evidenceReferences : []).map(text))];
+    const claimReferences = claims[claimNumber - 1].references;
+    if (references.length !== claimReferences.length || references.some((reference) => !reference) || claimReferences.some((reference) => !references.includes(reference))) {
+      throw new Error(`${label} must evaluate exactly the claim's cited redacted evidence excerpts.`);
+    }
+    return { claimNumber, support, references };
+  });
+}
+
 /**
  * Renders a saved/exportable hindsight document from explicit claims and a
  * redacted evidence snapshot. Every claim and recommendation citation links to
@@ -117,6 +149,7 @@ export function generateCitedHindsightDocumentHtml(document) {
     return { statement, classification, references };
   });
   const recommendations = normalizedRecommendations(document);
+  const claimSupportValidation = normalizedClaimSupportValidation(document, normalizedClaims);
 
   // Missing references retain a navigable, explicit fallback rather than a dead link.
   const referenced = [...new Set([
@@ -152,6 +185,9 @@ export function generateCitedHindsightDocumentHtml(document) {
   const recommendationHtml = recommendations.length === 0
     ? '<p class="empty" role="status">No structured recommendations were supplied. Review the cited claims and source context before deciding on follow-up work.</p>'
     : `<div class="table-scroll" tabindex="0" aria-label="Scrollable recommendation table"><table><caption>Structured recommendations proposed by the model; none are user-confirmed.</caption><thead><tr><th scope="col">Recommendation</th><th scope="col">Priority</th><th scope="col">Expected impact</th><th scope="col">Suggested owner</th><th scope="col">Dependencies</th><th scope="col">Measurable acceptance criteria</th><th scope="col">Status and source</th><th scope="col">Evidence</th></tr></thead><tbody>${recommendations.map((recommendation) => `<tr><th scope="row">${escapeHtml(recommendation.recommendation)}</th><td>${escapeHtml(recommendation.priority)}</td><td>${escapeHtml(recommendation.expectedImpact)}</td><td>${escapeHtml(recommendation.suggestedOwner)}</td><td>${list(recommendation.dependencies, "No dependencies specified")}</td><td>${list(recommendation.acceptanceCriteria, "No acceptance criteria supplied")}</td><td><span class="provenance">${escapeHtml(recommendation.status)} · ${escapeHtml(recommendation.source)}</span><br><span class="empty">Not user-confirmed</span></td><td class="citations">${citationLinks(recommendation.references)}</td></tr>`).join("\n")}</tbody></table></div>`;
+  const claimSupportHtml = !claimSupportValidation
+    ? '<p class="empty" role="status">Claim-support validation was not requested.</p>'
+    : `<p class="empty">Model-generated validation only; it is not a user-confirmed disposition.</p><ol class="claim-support-list">${claimSupportValidation.map((assessment) => `<li><strong>Claim ${assessment.claimNumber}:</strong> <span class="provenance">${escapeHtml(assessment.support)}</span><br><span class="empty">Evidence evaluated:</span> <span class="citations">${citationLinks(assessment.references)}</span></li>`).join("")}</ol>`;
   const evidenceHtml = evidence.length === 0
     ? '<p class="empty">No evidence snapshot was supplied.</p>'
     : evidence.map((item) => {
@@ -174,5 +210,5 @@ export function generateCitedHindsightDocumentHtml(document) {
         <section id="${anchor}-map" class="context-panel"><h4>Relationship-map context</h4><p class="context">${escapeHtml(mapContext ? bounded(mapContext) : "No relationship-map context was supplied.")}</p></section>
       </article>`;
     }).join("\n");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pi hindsight document</title><style>:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#1a1b26;color:#c0caf5}body{margin:0 auto;max-width:80rem;padding:2rem;line-height:1.45}.claim,.evidence{background:#24283b;border:1px solid #414868;border-radius:.5rem;margin:1rem 0;padding:1rem}.claim-inference{border-left:.5rem solid #a66b12}.claim-direct-evidence{border-left:.5rem solid #2c78c4}.classification,.provenance{font-size:.85rem;font-weight:700;text-transform:capitalize}.citations a{font-weight:700}.context{white-space:pre-wrap;overflow-wrap:anywhere}.context-panel{border-top:1px dashed #414868;margin-top:.9rem;padding-top:.2rem;scroll-margin-top:1rem}.context-panel h4,.evidence h4{margin-bottom:.25rem}.evidence-unavailable{border-left:.5rem solid #a66b12}.context-fallback,.empty{color:#a9b1d6}.table-scroll{overflow-x:auto;margin:1rem 0}.table-scroll:focus{outline:2px solid #7aa2f7;outline-offset:2px}table{border-collapse:collapse;min-width:72rem;width:100%;background:#24283b}caption{text-align:left;font-weight:700;padding:.5rem 0}th,td{border:1px solid #414868;padding:.7rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}thead th{background:#2f354d}tbody th{min-width:14rem}td ul{margin:.1rem 0;padding-left:1.2rem}</style></head><body><h1>${escapeHtml(bounded(document?.title, "Pi hindsight document", 160))}</h1><p>Claims label direct evidence separately from model-generated inference. Every material claim and recommendation links to embedded redacted source context, with flow and relationship-map context where available.</p><main><section aria-labelledby="claims-heading"><h2 id="claims-heading">Claims</h2>${claimHtml}</section><section aria-labelledby="recommendations-heading"><h2 id="recommendations-heading">Recommendations</h2>${recommendationHtml}</section></main><section><h2>Evidence</h2>${evidenceHtml}</section></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pi hindsight document</title><style>:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#1a1b26;color:#c0caf5}body{margin:0 auto;max-width:80rem;padding:2rem;line-height:1.45}.claim,.evidence,.claim-support-list li{background:#24283b;border:1px solid #414868;border-radius:.5rem;margin:1rem 0;padding:1rem}.claim-inference{border-left:.5rem solid #a66b12}.claim-direct-evidence{border-left:.5rem solid #2c78c4}.classification,.provenance{font-size:.85rem;font-weight:700;text-transform:capitalize}.citations a{font-weight:700}.context{white-space:pre-wrap;overflow-wrap:anywhere}.context-panel{border-top:1px dashed #414868;margin-top:.9rem;padding-top:.2rem;scroll-margin-top:1rem}.context-panel h4,.evidence h4{margin-bottom:.25rem}.evidence-unavailable{border-left:.5rem solid #a66b12}.context-fallback,.empty{color:#a9b1d6}.claim-support-list{list-style-position:inside;padding:0}.table-scroll{overflow-x:auto;margin:1rem 0}.table-scroll:focus{outline:2px solid #7aa2f7;outline-offset:2px}table{border-collapse:collapse;min-width:72rem;width:100%;background:#24283b}caption{text-align:left;font-weight:700;padding:.5rem 0}th,td{border:1px solid #414868;padding:.7rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}thead th{background:#2f354d}tbody th{min-width:14rem}td ul{margin:.1rem 0;padding-left:1.2rem}</style></head><body><h1>${escapeHtml(bounded(document?.title, "Pi hindsight document", 160))}</h1><p>Claims label direct evidence separately from model-generated inference. Every material claim and recommendation links to embedded redacted source context, with flow and relationship-map context where available.</p><main><section aria-labelledby="claims-heading"><h2 id="claims-heading">Claims</h2>${claimHtml}</section><section aria-labelledby="claim-support-heading"><h2 id="claim-support-heading">Claim-support validation</h2>${claimSupportHtml}</section><section aria-labelledby="recommendations-heading"><h2 id="recommendations-heading">Recommendations</h2>${recommendationHtml}</section></main><section><h2>Evidence</h2>${evidenceHtml}</section></body></html>`;
 }

@@ -72,6 +72,34 @@ test("missing and excluded citations stay navigable with redaction-safe fallback
   assert.doesNotMatch(html, /raw session ID|unredacted content/);
 });
 
+test("claim-support rendering only accepts scoped model validation and emits safe citations", () => {
+  const document = {
+    claims: [{ statement: "Claim", classification: "inference", evidenceReferences: ["event-1"] }],
+    evidence: [{ reference: "event-1", context: "Redacted context" }],
+    claimSupportValidation: {
+      source: "model-validation",
+      userDisposition: "not-user-confirmed",
+      assessments: [{ claimNumber: 1, support: "partially supported", evidenceReferences: ["event-1"] }],
+    },
+  };
+  const html = generateCitedHindsightDocumentHtml(document);
+  assert.match(html, /Claim-support validation/);
+  assert.match(html, /Model-generated validation only; it is not a user-confirmed disposition/);
+  assert.match(html, /partially supported/);
+  assert.match(html, /href="#citation-1">event-1<\/a>/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({
+    ...document,
+    claimSupportValidation: { ...document.claimSupportValidation, userDisposition: "<script>user-confirmed<\/script>" },
+  }), /model-generated and not user-confirmed/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({
+    ...document,
+    claimSupportValidation: {
+      ...document.claimSupportValidation,
+      assessments: [{ claimNumber: 1, support: "supported", evidenceReferences: ["other-event"] }],
+    },
+  }), /exactly the claim's cited redacted evidence excerpts/);
+});
+
 test("citation anchors do not collide for distinct punctuation and duplicate evidence is rejected", () => {
   const html = generateCitedHindsightDocumentHtml({
     claims: [{ statement: "Two sources", classification: "direct evidence", evidenceReferences: ["a/b", "a?b"] }],

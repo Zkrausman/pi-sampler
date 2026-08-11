@@ -41,7 +41,7 @@ In Pi, run:
 ```text
 /conversation-catalog [output-path]
 /conversation-flow <session-id> [output-path]
-/hindsight-document [output-path]
+/hindsight-document [--validate-claim-support] [output-path]
 ```
 
 With no argument, `/conversation-catalog` writes
@@ -67,6 +67,8 @@ direct-evidence reference/anchor index, but never matched sensitive text, source
 context, or a raw session ID/name. An excluded export is an HTML notice with no conversation content.
 
 `/hindsight-document` temporarily provides a single-select workflow across recorded conversations. Select exactly one conversation and review its redactions or exclude it; the command does not accept or silently choose among multiple conversations. An excluded conversation produces a pseudonymous, navigable redaction-review fallback with no conversation content. The active model submits structured claims and recommendations to the extension's safe report contract; it does not write report HTML directly. The contract validates, bounds, and escapes model text and generates every citation anchor, embedded redacted source-context section, and available flow/relationship-map context. Every material claim and recommendation must cite included evidence from the selected conversation. Excluded conversations remain navigable only as explicit redaction-review fallbacks, and neither fallbacks nor citations reveal a raw session/event ID or unredacted text.
+
+Pass `--validate-claim-support` to opt into a separate model-validation pass after the draft is structurally accepted. The extension gives that pass only each claim and its own cited, redacted excerpts; it cannot add evidence, cite another included excerpt, access excluded text, or alter the accepted claims or recommendations. It must classify every material claim as `supported`, `partially supported`, `unsupported`, or `unverifiable`, citing exactly that claim's references. The report labels this output as **model-generated validation**, never a user-confirmed disposition.
 
 ### Hindsight recommendation contract
 

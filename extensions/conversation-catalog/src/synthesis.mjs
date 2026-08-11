@@ -11,6 +11,7 @@ const MODEL_LIMITS = Object.freeze({
   dependency: 200,
   acceptanceCriterion: 500,
 });
+const SUPPORT_CLASSIFICATIONS = new Set(["supported", "partially supported", "unsupported", "unverifiable"]);
 
 function selectedSources(sources) {
   if (!Array.isArray(sources) || sources.length !== 1) throw new Error("Select exactly one conversation.");
@@ -160,6 +161,45 @@ function validateModelOutput(modelOutput, allowedReferences) {
   };
 }
 
+function validateClaimSupportValidation(validation, claims) {
+  if (!validation || typeof validation !== "object" || Array.isArray(validation)) {
+    throw new Error("Claim-support validation must be an object.");
+  }
+  if (requiredModelText(validation.source, "Claim-support validation source", 32) !== "model-validation"
+    || requiredModelText(validation.userDisposition, "Claim-support validation userDisposition", 32) !== "not-user-confirmed") {
+    throw new Error("Claim-support validation must be model-generated and not user-confirmed.");
+  }
+  const assessments = modelArray(validation.assessments, "Claim-support validation assessments", { maxItems: 80 });
+  if (assessments.length !== claims.length) {
+    throw new Error("Claim-support validation must assess every material claim exactly once.");
+  }
+  const claimNumbers = new Set();
+  const normalizedAssessments = assessments.map((assessment, index) => {
+    const label = `Claim-support assessment ${index + 1}`;
+    if (!assessment || typeof assessment !== "object" || Array.isArray(assessment)) throw new Error(`${label} must be an object.`);
+    if (!Number.isInteger(assessment.claimNumber) || assessment.claimNumber < 1 || assessment.claimNumber > claims.length) {
+      throw new Error(`${label} claimNumber must identify a material claim.`);
+    }
+    if (claimNumbers.has(assessment.claimNumber)) throw new Error("Claim-support validation must assess every material claim exactly once.");
+    claimNumbers.add(assessment.claimNumber);
+    const support = requiredModelText(assessment.support, `${label} support`, 32);
+    if (!SUPPORT_CLASSIFICATIONS.has(support)) {
+      throw new Error(`${label} support must be supported, partially supported, unsupported, or unverifiable.`);
+    }
+    const references = evidenceReferences(
+      assessment.evidenceReferences,
+      `${label} evidenceReferences`,
+      new Set(claims[assessment.claimNumber - 1].evidenceReferences),
+    );
+    const claimReferences = claims[assessment.claimNumber - 1].evidenceReferences;
+    if (references.length !== claimReferences.length || claimReferences.some((reference) => !references.includes(reference))) {
+      throw new Error(`${label} must evaluate exactly the claim's cited redacted evidence excerpts.`);
+    }
+    return { claimNumber: assessment.claimNumber, support, evidenceReferences: references };
+  });
+  return { source: "model-validation", userDisposition: "not-user-confirmed", assessments: normalizedAssessments };
+}
+
 function defaultClaims(sources) {
   return sources.flatMap((source) => {
     if (source.excluded || !Array.isArray(source.events) || source.events.length === 0) return [];
@@ -172,34 +212,71 @@ function defaultClaims(sources) {
   });
 }
 
+function preparedModelAndEvidence(sources, modelOutput) {
+  const selected = selectedSources(sources);
+  const evidence = sourceEvidence(selected);
+  const allowedReferences = new Set(evidence.filter((item) => item.availability !== "excluded").map((item) => item.reference));
+  return { selected, evidence, model: validateModelOutput(modelOutput, allowedReferences) };
+}
+
+function evidenceExcerpt(value) {
+  const characters = Array.from(text(value));
+  return characters.length > 480 ? `${characters.slice(0, 480).join("")}…` : characters.join("");
+}
+
+/**
+ * Builds the second, opt-in model pass. Its payload contains a generated claim
+ * and only the already-cited, redacted source excerpts for that claim.
+ */
+export function buildClaimSupportValidationPrompt(sources, modelOutput) {
+  const { evidence, model } = preparedModelAndEvidence(sources, modelOutput);
+  const evidenceByReference = new Map(evidence.filter((item) => item.availability !== "excluded").map((item) => [item.reference, item]));
+  const claims = model.claims.map((claim, index) => ({
+    claimNumber: index + 1,
+    statement: claim.statement,
+    citedEvidence: claim.evidenceReferences.map((reference) => ({
+      reference,
+      excerpt: evidenceExcerpt(evidenceByReference.get(reference)?.context),
+    })),
+  }));
+  return `Run the requested claim-support validation pass. Evaluate each material generated claim ONLY against that claim's cited, redacted evidence excerpts below. Do not use any other conversation content, introduce evidence, infer a user disposition, or change the claims or recommendations. For every claim, classify support as exactly supported, partially supported, unsupported, or unverifiable.\n\nCall hindsight_claim_support_validate exactly once with source "model-validation", userDisposition "not-user-confirmed", and one assessment for every claim. Each assessment must include claimNumber, support, and exactly the evidenceReferences shown for that claim.\n\nCLAIM-SUPPORT VALIDATION BUNDLE:\n${JSON.stringify(claims)}`;
+}
+
 /**
  * Creates the only report HTML contract used by hindsight generation. Model
  * prose is accepted as strictly validated structured claims and recommendations,
  * then escaped and linked here rather than allowing the model to write markup.
  */
-export function buildHindsightDocument(sources, modelOutput = undefined) {
+export function buildHindsightDocument(sources, modelOutput = undefined, claimSupportValidation = undefined) {
   const selected = selectedSources(sources);
   const evidence = sourceEvidence(selected);
   const allowedReferences = new Set(evidence.filter((item) => item.availability !== "excluded").map((item) => item.reference));
   const model = modelOutput === undefined
     ? { claims: defaultClaims(selected), recommendations: [] }
     : validateModelOutput(modelOutput, allowedReferences);
+  const validation = claimSupportValidation === undefined
+    ? undefined
+    : validateClaimSupportValidation(claimSupportValidation, model.claims);
   return generateCitedHindsightDocumentHtml({
     title: model.title || "Hindsight source bundle — selected conversation",
     claims: [...model.claims, ...fallbackClaims(selected)],
     recommendations: model.recommendations,
+    claimSupportValidation: validation,
     evidence,
   });
 }
 
-export function buildSynthesisPrompt(sources) {
+export function buildSynthesisPrompt(sources, { validateClaimSupport = false } = {}) {
   const selected = selectedSources(sources);
   const evidence = sourceEvidence(selected);
   const includedEvidence = evidence.filter((item) => item.availability !== "excluded");
   const excludedEvidence = evidence.filter((item) => item.availability === "excluded").map((item) => item.reference);
+  const validationInstruction = validateClaimSupport
+    ? "The user explicitly opted into a separate claim-support validation pass. Call hindsight_document_write first; its safe result will provide the only redacted excerpts permitted for the second pass."
+    : "Do not request a claim-support validation pass unless the user explicitly opted in.";
   return `Create a rigorous hindsight analysis from ONLY the selected conversation's redacted source bundle below. Identify evidence, friction/rework, recommendations, and confidence. Every material claim and recommendation must cite one or more exact included evidence references and be labeled direct evidence or inference where applicable. Do not invent facts or use any content outside this bundle.
 
-Do NOT write HTML or use a file-writing tool. Call hindsight_document_write exactly once with a short title, structured claims, and structured recommendations. Every recommendation must include: recommendation, priority (critical, high, medium, or low), expectedImpact, suggestedOwner, dependencies (an array, which may be empty), acceptanceCriteria (one or more measurable criteria), status "proposed", source "model-suggestion", and evidenceReferences. Status and source are fixed: a model must never claim that a user confirmed an owner, dependency, or recommendation. Owner and dependency text must be derived only from this reviewed, redacted source bundle. The tool rejects malformed recommendations rather than filling in missing values. It escapes model text and generates all citation anchors, redacted source sections, flow/map context, and excluded-source fallbacks in the requested standalone HTML output. Do not cite an excluded reference for a substantive claim or recommendation; the contract records its redaction-review fallback itself.
+Do NOT write HTML or use a file-writing tool. Call hindsight_document_write exactly once with a short title, structured claims, and structured recommendations. Every recommendation must include: recommendation, priority (critical, high, medium, or low), expectedImpact, suggestedOwner, dependencies (an array, which may be empty), acceptanceCriteria (one or more measurable criteria), status "proposed", source "model-suggestion", and evidenceReferences. Status and source are fixed: a model must never claim that a user confirmed an owner, dependency, or recommendation. Owner and dependency text must be derived only from this reviewed, redacted source bundle. The tool rejects malformed recommendations rather than filling in missing values. It escapes model text and generates all citation anchors, redacted source sections, flow/map context, and excluded-source fallbacks in the requested standalone HTML output. Do not cite an excluded reference for a substantive claim or recommendation; the contract records its redaction-review fallback itself. ${validationInstruction}
 
 REDACTED SOURCE BUNDLE:
 ${JSON.stringify(includedEvidence)}
