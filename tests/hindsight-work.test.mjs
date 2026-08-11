@@ -13,7 +13,7 @@ import {
   requireFinalHindsightWorkConfirmation,
   validateHindsightLinearConfig,
   validateHindsightWorkContext,
-  withHindsightWorkLinkLock,
+  withHindsightWorkBacklinkLock,
   workLinkKey,
   writeHindsightWorkLink,
 } from "../extensions/conversation-catalog/src/hindsight-work.mjs";
@@ -204,27 +204,35 @@ test("link lookup has a bounded contract and create timeout remains unknown with
   assert.equal(calls, 1);
 });
 
-test("concurrent work transactions serialize duplicate check, mutation, and backlink write", async () => {
+test("concurrent recommendations serialize the shared backlink file without losing links", async () => {
   const directory = await mkdtemp(join(tmpdir(), "hindsight-work-lock-"));
   const path = join(directory, "report.work-links.json");
   const reportId = "hindsight-1234abcd";
   const payload = { teamId: "team_1", title: "Title", description: "Text", priority: 2 };
-  const link = { issueId: "issue_5", issueUrl: "https://linear.app/acme/issue/ABC-5", status: "Todo", timestamp: "2026-08-11T12:04:00.000Z", payloadDigest: digestHindsightWorkPayload(payload), action: "created" };
+  const linkFor = (number) => ({
+    issueId: `issue_${number}`, issueUrl: `https://linear.app/acme/issue/ABC-${number}`, status: "Todo",
+    timestamp: `2026-08-11T12:04:0${number}.000Z`, payloadDigest: digestHindsightWorkPayload(payload), action: "created",
+  });
   let remoteMutations = 0;
-  const transaction = () => withHindsightWorkLinkLock(reportId, 1, async () => {
+  const transaction = (number) => withHindsightWorkBacklinkLock(path, async () => {
     const existing = await readHindsightWorkLinks(path);
-    if (existing.links[workLinkKey(reportId, 1)]) return "duplicate";
+    if (existing.links[workLinkKey(reportId, number)]) return "duplicate";
     remoteMutations += 1;
     await new Promise((resolve) => setTimeout(resolve, 10));
-    await writeHindsightWorkLink(path, reportId, 1, link);
+    const link = linkFor(number);
+    await writeHindsightWorkLink(path, reportId, number, link);
     return "created";
   });
   try {
-    assert.deepEqual(await Promise.all([transaction(), transaction()]), ["created", "duplicate"]);
-    assert.equal(remoteMutations, 1);
-    assert.deepEqual((await readHindsightWorkLinks(path)).links[workLinkKey(reportId, 1)], link);
-    await assert.rejects(() => withHindsightWorkLinkLock(reportId, 2, async () => { throw new Error("simulated failure"); }), /simulated failure/);
-    assert.equal(await withHindsightWorkLinkLock(reportId, 2, async () => "recovered"), "recovered");
+    assert.deepEqual(await Promise.all([transaction(1), transaction(2)]), ["created", "created"]);
+    assert.equal(remoteMutations, 2);
+    const stored = await readHindsightWorkLinks(path);
+    assert.deepEqual(stored.links[workLinkKey(reportId, 1)], linkFor(1));
+    assert.deepEqual(stored.links[workLinkKey(reportId, 2)], linkFor(2));
+    assert.equal(await transaction(1), "duplicate");
+    assert.equal(remoteMutations, 2);
+    await assert.rejects(() => withHindsightWorkBacklinkLock(path, async () => { throw new Error("simulated failure"); }), /simulated failure/);
+    assert.equal(await withHindsightWorkBacklinkLock(path, async () => "recovered"), "recovered");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

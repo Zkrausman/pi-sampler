@@ -9,7 +9,7 @@ import { attachEvidenceReferences, createEvidenceManifest, createHindsightRecomm
 import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
 import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
-import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkLinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
+import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkBacklinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
 import { HindsightLinearAdapter, createRequestPreview, linkLookupRequestPreview } from "./hindsight-linear-adapter.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
@@ -441,9 +441,9 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         if (!selectedLabel || selectedLabel === "Cancel") throw new Error("Hindsight work canceled.");
         const selected = accepted[options.indexOf(selectedLabel) - 1];
         if (!selected) throw new HindsightWorkError("malformed_metadata");
-        const linkAction = await withHindsightWorkLinkLock(metadata.reportId, selected.recommendationNumber, async () => {
-          // Keep this whole transaction serialized: a second command cannot
-          // pass this duplicate check while the first can still create/link.
+        const linkAction = await withHindsightWorkBacklinkLock(linksPath, async () => {
+          // Keep this whole transaction serialized by backlink file: another
+          // recommendation cannot overwrite the same report record mid-write.
           const existing = await readHindsightWorkLinks(linksPath);
           if (existing.links[workLinkKey(metadata.reportId, selected.recommendationNumber)]) throw new HindsightWorkError("duplicate_link");
           const payload = buildLinearIssueCreatePayload(configuration.config.teamId, metadata.reportId, selected);
