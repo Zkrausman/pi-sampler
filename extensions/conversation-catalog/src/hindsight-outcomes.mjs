@@ -222,19 +222,34 @@ export async function readHindsightOutcomeHistory(path) {
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-async function acquireCrossProcessOutcomeLock(path) {
+function isTransientOutcomeLockContention(error, lockPath) {
+  if (error?.code === "EEXIST") return true;
+  // Windows can report EPERM while another process creates/removes this exact
+  // lock directory. Limit that exception to the mkdir lock operation itself:
+  // parent-directory access, malformed paths, and unrelated EPERM failures
+  // still fail closed immediately.
+  return error?.code === "EPERM" && error?.syscall === "mkdir" && error?.path === lockPath;
+}
+
+/** Exported for deterministic filesystem-error regression coverage. */
+export async function acquireCrossProcessOutcomeLock(path, {
+  mkdirImpl = mkdir,
+  delayImpl = delay,
+  now = () => Date.now(),
+  timeoutMs = OUTCOME_LOCK_TIMEOUT_MS,
+} = {}) {
   const lockPath = `${path}.lock`;
-  await mkdir(dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + OUTCOME_LOCK_TIMEOUT_MS;
+  await mkdirImpl(dirname(lockPath), { recursive: true });
+  const deadline = now() + timeoutMs;
   let wait = 5;
   while (true) {
     try {
-      await mkdir(lockPath);
+      await mkdirImpl(lockPath);
       return lockPath;
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      if (Date.now() >= deadline) throw new HindsightOutcomeError("outcome_lock_timeout");
-      await delay(wait);
+      if (!isTransientOutcomeLockContention(error, lockPath)) throw error;
+      if (now() >= deadline) throw new HindsightOutcomeError("outcome_lock_timeout");
+      await delayImpl(wait);
       wait = Math.min(wait * 2, 100);
     }
   }

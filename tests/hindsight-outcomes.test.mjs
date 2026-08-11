@@ -8,6 +8,7 @@ import test from "node:test";
 import { buildHindsightDocument, buildSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
 import {
   HindsightOutcomeError,
+  acquireCrossProcessOutcomeLock,
   appendHindsightOutcomeUpdate,
   createHindsightOutcomeOrigin,
   emptyHindsightOutcomeHistory,
@@ -143,6 +144,41 @@ test("paths are bounded to disposition companions and atomic failure leaves no t
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("cross-process lock retries only a transient Windows EPERM for the exact lock directory", async () => {
+  const path = "C:/temp/report.outcomes.json";
+  const lockPath = `${path}.lock`;
+  let attempts = 0;
+  const waits = [];
+  const mkdirImpl = async (target) => {
+    if (target !== lockPath) return;
+    attempts += 1;
+    if (attempts === 1) {
+      const error = new Error("transient Windows lock race");
+      error.code = "EPERM";
+      error.syscall = "mkdir";
+      error.path = lockPath;
+      throw error;
+    }
+  };
+  assert.equal(await acquireCrossProcessOutcomeLock(path, { mkdirImpl, delayImpl: async (milliseconds) => waits.push(milliseconds) }), lockPath);
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [5]);
+
+  const denied = new Error("permission denied");
+  denied.code = "EPERM";
+  denied.syscall = "mkdir";
+  denied.path = "C:/different-path";
+  let deniedAttempts = 0;
+  await assert.rejects(() => acquireCrossProcessOutcomeLock(path, {
+    mkdirImpl: async (target) => {
+      if (target === lockPath) deniedAttempts += 1;
+      if (target === lockPath) throw denied;
+    },
+    delayImpl: async () => { throw new Error("non-transient EPERM must not retry"); },
+  }), (error) => error === denied);
+  assert.equal(deniedAttempts, 1);
 });
 
 test("cross-process record transactions retain every update and refresh the latest histories", async () => {
