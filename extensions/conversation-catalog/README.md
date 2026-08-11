@@ -66,7 +66,26 @@ state, finding locations/pattern names, redact/retain choices, and the stable
 direct-evidence reference/anchor index, but never matched sensitive text, source
 context, or a raw session ID/name. An excluded export is an HTML notice with no conversation content.
 
-`/hindsight-document` provides a multi-select workflow across recorded location groups. Select at least two conversations, remove selections if needed, and review each conversation's redactions or exclude it. Excluding one of two selected conversations does not cancel generation: the report keeps a pseudonymous, navigable excluded-source fallback with no conversation content. The active model submits structured claims to the extension's safe report contract; it does not write report HTML directly. The contract escapes model text and generates every citation anchor, embedded redacted source-context section, and available flow/relationship-map context. Every material claim must cite an included source. Excluded conversations remain navigable only as explicit redaction-review fallbacks, and neither fallbacks nor citations reveal a raw session/event ID or unredacted text.
+`/hindsight-document` provides a multi-select workflow across recorded location groups. Select at least two conversations, remove selections if needed, and review each conversation's redactions or exclude it. Excluding one of two selected conversations does not cancel generation: the report keeps a pseudonymous, navigable excluded-source fallback with no conversation content. The active model submits structured claims and recommendations to the extension's safe report contract; it does not write report HTML directly. The contract validates, bounds, and escapes model text and generates every citation anchor, embedded redacted source-context section, and available flow/relationship-map context. Every material claim and recommendation must cite an included source. Excluded conversations remain navigable only as explicit redaction-review fallbacks, and neither fallbacks nor citations reveal a raw session/event ID or unredacted text.
+
+### Hindsight recommendation contract
+
+A model recommendation is accepted only when it contains a bounded action,
+`priority` (`critical`, `high`, `medium`, or `low`), `expectedImpact`,
+`suggestedOwner`, a `dependencies` array, one or more measurable
+`acceptanceCriteria`, and included `evidenceReferences`. It must also set
+`status` to `proposed` and `source` to `model-suggestion`. Those fixed values
+make it explicit that the report is a model suggestion, **not user-confirmed**;
+the safe writer does not accept a model assertion that a user confirmed an
+owner, dependency, or recommendation. Malformed recommendations are rejected,
+not completed with invented values.
+
+The report renders accepted recommendations in a captioned, keyboard-scrollable
+table with priority, impact, owner, dependencies, acceptance criteria,
+provenance, and evidence columns. When none are supplied, it renders a clear
+fallback instead. Owner and dependency strings are model output derived only
+from the reviewed, redacted source bundle; they are not read from, copied to,
+or persisted outside the generated cited report.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,

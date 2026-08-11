@@ -77,17 +77,54 @@ test("excluded selected conversations retain a pseudonymous navigable fallback w
   assert.doesNotMatch(html, /Hidden|hidden:event-1/);
 });
 
-test("model claims are rendered by the safe HTML contract instead of trusted as markup", () => {
+test("model claims and structured recommendations are escaped, cited, and rendered in an accessible table", () => {
   const html = buildHindsightDocument([source("one", "First"), source("two", "Second")], {
     title: "<unsafe title>",
     claims: [{ statement: "<img src=x onerror=alert(1)>", classification: "inference", evidenceReferences: ["one:event-0001"] }],
+    recommendations: [{
+      recommendation: "<script>prioritize()</script>",
+      priority: "high",
+      expectedImpact: "<strong>Less rework</strong>",
+      suggestedOwner: "<img src=x onerror=alert(2)>",
+      dependencies: ["<dependency>"],
+      acceptanceCriteria: ["<criterion> is measurable"],
+      status: "proposed",
+      source: "model-suggestion",
+      evidenceReferences: ["two:event-0001"],
+    }],
   });
   assert.match(html, /&lt;unsafe title&gt;/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
-  assert.match(html, /href="#citation-1"/);
-  assert.throws(() => buildHindsightDocument([source("one", "First"), source("two", "Second")], {
-    claims: [{ statement: "Unsupported", classification: "inference", evidenceReferences: ["not-selected"] }],
+  assert.match(html, /&lt;script&gt;prioritize\(\)&lt;\/script&gt;/);
+  assert.match(html, /&lt;img src=x onerror=alert\(2\)&gt;/);
+  assert.match(html, /<table>/);
+  assert.match(html, /<caption>Structured recommendations proposed by the model; none are user-confirmed.<\/caption>/);
+  assert.match(html, /scope="col">Measurable acceptance criteria/);
+  assert.match(html, /proposed · model-suggestion/);
+  assert.match(html, /Not user-confirmed/);
+  assert.match(html, /href="#citation-2"/);
+});
+
+test("safe hindsight recommendations reject missing, malformed, unconfirmed, or uncited model data", () => {
+  const sources = [source("one", "First"), source("two", "Second")];
+  const claim = { statement: "Supported", classification: "inference", evidenceReferences: ["one:event-0001"] };
+  const recommendation = {
+    recommendation: "Improve handoff", priority: "medium", expectedImpact: "Reduce delays", suggestedOwner: "Delivery team",
+    dependencies: [], acceptanceCriteria: ["A handoff completes within one business day"], status: "proposed", source: "model-suggestion",
+    evidenceReferences: ["two:event-0001"],
+  };
+  assert.throws(() => buildHindsightDocument(sources, { claims: [claim] }), /recommendations must be an array/);
+  assert.throws(() => buildHindsightDocument(sources, {
+    claims: [claim], recommendations: [{ ...recommendation, status: "user-confirmed", source: "user-confirmed" }],
+  }), /status "proposed" and source "model-suggestion"/);
+  assert.throws(() => buildHindsightDocument(sources, {
+    claims: [claim], recommendations: [{ ...recommendation, acceptanceCriteria: [] }],
+  }), /acceptanceCriteria must contain between 1 and 20 items/);
+  assert.throws(() => buildHindsightDocument(sources, {
+    claims: [claim], recommendations: [{ ...recommendation, evidenceReferences: ["not-selected"] }],
   }), /outside the selected redacted source bundle/);
+  const fallback = buildHindsightDocument(sources, { claims: [], recommendations: [] });
+  assert.match(fallback, /No structured recommendations were supplied/);
 });
 
 test("synthesis prompt includes redacted flow and relationship-map context", () => {
@@ -163,7 +200,7 @@ test("successful safe hindsight write remains restricted until agent settlement 
   assert.deepEqual(activeTools, ["hindsight_document_write"]);
 
   const writer = tools.find((tool) => tool.name === "hindsight_document_write");
-  const result = await writer.execute("call", { claims: [] });
+  const result = await writer.execute("call", { claims: [], recommendations: [] });
   assert.match(result.content[0].text, /Hindsight document written/);
   assert.deepEqual(activeTools, ["hindsight_document_write"]);
 

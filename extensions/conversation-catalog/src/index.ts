@@ -101,13 +101,24 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     label: "Write safe hindsight document",
     description: "Writes the requested hindsight report through its safe HTML citation contract. Use this instead of writing hindsight HTML directly.",
     parameters: Type.Object({
-      title: Type.Optional(Type.String({ maxLength: 160 })),
+      title: Type.Optional(Type.String({ minLength: 1, maxLength: 160 })),
       claims: Type.Array(Type.Object({
-        statement: Type.String({ maxLength: 2000 }),
+        statement: Type.String({ minLength: 1, maxLength: 2000 }),
         classification: Type.Union([Type.Literal("direct evidence"), Type.Literal("inference")]),
-        evidenceReferences: Type.Array(Type.String({ maxLength: 100 }), { minItems: 1, maxItems: 20 }),
-      }), { maxItems: 80 }),
-    }),
+        evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 20 }),
+      }, { additionalProperties: false }), { maxItems: 80 }),
+      recommendations: Type.Array(Type.Object({
+        recommendation: Type.String({ minLength: 1, maxLength: 1000 }),
+        priority: Type.Union([Type.Literal("critical"), Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
+        expectedImpact: Type.String({ minLength: 1, maxLength: 500 }),
+        suggestedOwner: Type.String({ minLength: 1, maxLength: 200 }),
+        dependencies: Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { maxItems: 20 }),
+        acceptanceCriteria: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { minItems: 1, maxItems: 20 }),
+        status: Type.Literal("proposed"),
+        source: Type.Literal("model-suggestion"),
+        evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 20 }),
+      }, { additionalProperties: false }), { maxItems: 40 }),
+    }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
       if (!pendingHindsight) {
         return { content: [{ type: "text", text: "No hindsight document is awaiting generation." }] };
