@@ -29,7 +29,7 @@ test("flow exposes direct citations that point to inspectable event context", ()
   assert.doesNotMatch(html, /<b>help<\/b>/);
 });
 
-test("cited hindsight documents require evidence and label inference", () => {
+test("cited hindsight documents link claims to embedded redacted source, flow, and map context", () => {
   const html = generateCitedHindsightDocumentHtml({
     title: "Review",
     claims: [
@@ -37,17 +37,39 @@ test("cited hindsight documents require evidence and label inference", () => {
       { statement: "Support may need follow-up.", classification: "inference", evidenceReferences: ["session-abc:event-0002"] },
     ],
     evidence: [
-      { reference: "session-abc:event-0001", context: "Customer asked for help" },
+      { reference: "session-abc:event-0001", context: "Customer asked for help", flowContext: "user · Customer asked for help", mapContext: "parent entry → session-abc:event-0002" },
       { reference: "session-abc:event-0002", context: "Provided a response" },
     ],
   });
   assert.match(html, /claim-direct-evidence/);
   assert.match(html, /claim-inference/);
   assert.match(html, /href="#citation-1"/);
+  assert.match(html, /href="#citation-1-flow">flow<\/a>/);
+  assert.match(html, /href="#citation-1-map">map<\/a>/);
+  assert.match(html, /id="citation-1-flow"/);
+  assert.match(html, /id="citation-1-map"/);
+  assert.match(html, /Redacted source context/);
   assert.match(html, /Customer asked for help/);
+  assert.match(html, /No relationship-map context was supplied/);
   assert.throws(() => generateCitedHindsightDocumentHtml({ claims: [{ statement: "Unsupported", classification: "direct evidence" }], evidence: [] }), /no inspectable source evidence/);
-  assert.throws(() => generateCitedHindsightDocumentHtml({ claims: [{ statement: "Missing source", classification: "direct evidence", evidenceReferences: ["not-present"] }], evidence: [] }), /unavailable source evidence/);
   assert.throws(() => generateCitedHindsightDocumentHtml({ claims: [{ statement: "Model statement", classification: "model inference", evidenceReferences: ["event-1"] }], evidence: [{ reference: "event-1", context: "Context" }] }), /explicitly classified/);
+});
+
+test("missing and excluded citations stay navigable with redaction-safe fallbacks", () => {
+  const html = generateCitedHindsightDocumentHtml({
+    claims: [
+      { statement: "Missing source claim", classification: "inference", evidenceReferences: ["unknown:event-0001"] },
+      { statement: "Excluded source claim", classification: "direct evidence", evidenceReferences: ["excluded:event-0001"] },
+    ],
+    excludedEvidenceReferences: ["excluded:event-0001"],
+    evidence: [],
+  });
+  assert.match(html, /href="#citation-1">unknown:event-0001<\/a>/);
+  assert.match(html, /id="citation-1"/);
+  assert.match(html, /Source context is unavailable in this report/);
+  assert.match(html, /id="citation-2"/);
+  assert.match(html, /Source context was excluded during redaction review/);
+  assert.doesNotMatch(html, /raw session ID|unredacted content/);
 });
 
 test("citation anchors do not collide for distinct punctuation and duplicate evidence is rejected", () => {

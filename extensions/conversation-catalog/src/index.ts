@@ -214,7 +214,8 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           const review = await reviewRedactionChoices(ctx, findSensitiveContent(projection, patterns));
           if (review.excluded) continue;
           const reference = pseudonymizeSession(session);
-          sources.push({ events: attachEvidenceReferences(reference, redactProjection(projection, findSensitiveContent(projection, patterns), review.decisions)).events });
+          const cited = attachEvidenceReferences(reference, redactProjection(projection, findSensitiveContent(projection, patterns), review.decisions));
+          sources.push({ events: cited.events, edges: cited.edges });
         }
         const outputPath = resolveOutputPath(args, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         await mkdir(dirname(outputPath), { recursive: true });

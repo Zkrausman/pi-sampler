@@ -66,7 +66,7 @@ state, finding locations/pattern names, redact/retain choices, and the stable
 direct-evidence reference/anchor index, but never matched sensitive text, source
 context, or a raw session ID/name. An excluded export is an HTML notice with no conversation content.
 
-`/hindsight-document` provides a multi-select workflow across recorded location groups. Select at least two conversations, remove selections if needed, review each conversation's redactions or exclude it, then generate a standalone cited document from the included source set.
+`/hindsight-document` provides a multi-select workflow across recorded location groups. Select at least two conversations, remove selections if needed, review each conversation's redactions or exclude it, then generate a standalone cited document from the included source set. Every material claim must cite an embedded redacted source-context section. Citations also navigate to embedded flow and relationship-map context when that context is available. Missing source context and conversations excluded during redaction review remain navigable as explicit fallbacks; they never reveal a raw session/event ID or unredacted text.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,
