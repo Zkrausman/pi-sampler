@@ -5,7 +5,7 @@ import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
 import { attachEvidenceReferences, createEvidenceManifest } from "./evidence.mjs";
 import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
-import { buildHindsightDocument } from "./synthesis.mjs";
+import { buildSynthesisPrompt } from "./synthesis.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
 const DEFAULT_FILENAME = "pi-conversation-catalog.html";
@@ -218,8 +218,8 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         }
         const outputPath = resolveOutputPath(args, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         await mkdir(dirname(outputPath), { recursive: true });
-        await writeFile(outputPath, buildHindsightDocument(sources), "utf8");
-        ctx.ui.notify(`Hindsight document written to ${outputPath}.`, "info");
+        pi.sendUserMessage(buildSynthesisPrompt(sources, outputPath));
+        ctx.ui.notify(`Redacted evidence submitted to the active model. It will write the hindsight document to ${outputPath}.`, "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
     },
   });
