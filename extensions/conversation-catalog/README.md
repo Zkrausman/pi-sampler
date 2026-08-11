@@ -53,9 +53,16 @@ path when complete; open that local `.html` file directly in a browser.
 `/conversation-flow` is an explicit, historical-session view. Supply the full
 saved session ID, or an unambiguous prefix (obtain one from Pi's session UI or
 its saved-session listing). With no output path it writes
-`pi-conversation-flow-<session-id>.html`. The command uses Pi's
+`pi-conversation-flow-session-<local-reference>.html`. The command uses Pi's
 `SessionManager.open()` for the selected saved session; it does not parse or
-modify JSONL logs itself.
+modify JSONL logs itself. It requires Pi's interactive UI: before it writes an
+export, it presents every detected sensitive finding and lets you **redact**,
+**retain**, or **exclude the entire conversation**. Canceling makes no export.
+
+The command writes a companion `pi-conversation-flow-session-<local-reference>.redaction.json`
+file beside the HTML. It records a local pseudonymous session reference, excluded
+state, finding locations/pattern names, and redact/retain choices, but never
+matched sensitive text or a raw session ID/name. An excluded export is an HTML notice with no conversation content.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,
@@ -75,11 +82,24 @@ by Pi, but the catalog neither renders, serializes, logs, caches, nor transmits
 transcript text or raw session JSON; it never changes a source session log.
 
 A flow is intentionally different: it is produced only by the explicit
-`/conversation-flow` request and contains bounded text from the selected local
+`/conversation-flow` request and can contain bounded text from the selected local
 conversation, including tool-result text that may contain sensitive material.
-It has no external assets, network requests, or scripts, and the extension does
-not log, cache, transmit, or modify its source session. Protect or delete the
-generated local HTML as appropriate.
+The required redaction review defaults to detecting email addresses, bearer/API
+keys, and GitHub tokens. Add project-specific patterns in
+`.pi/conversation-redaction-patterns.json` when needed:
+
+```json
+{
+  "patterns": [
+    { "name": "customer number", "expression": "CUST-[0-9]{4}", "flags": "i" }
+  ]
+}
+```
+
+Invalid configured patterns are ignored; defaults remain active. It has no
+external assets, network requests, or scripts, and the extension does not log,
+cache, transmit, or modify its source session. Protect or delete the generated
+local HTML and its decision metadata as appropriate.
 
 If no saved sessions exist, the catalog shows an empty-state message. Older
 sessions with a missing or blank recorded location are grouped under **Unknown
