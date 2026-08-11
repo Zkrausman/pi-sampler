@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { rename as renameAsync, writeFile as writeFileAsync } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,6 +67,9 @@ test("map HTML is evidence-aware, safely escaped, filterable, and navigable with
   assert.match(html, /Embedded relationship context|embedded relationship context/);
   assert.match(html, /time order only; not causal/);
   assert.match(html, /setAttribute\("role","button"\)/);
+  assert.match(html, /\.node:focus-visible\{outline:2px solid #ffbf47/);
+  assert.match(html, /\.node:focus-visible circle\{stroke:#ffbf47;stroke-width:5\}/);
+  assert.doesNotMatch(html, /\.node:focus\{outline:none\}/);
   assert.match(html, /\[REDACTED: email address\]/);
   assert.doesNotMatch(html, /raw-entry-SECRET|call-secret|jane@example\.com|<img src=x/);
   assert.doesNotMatch(html, /<script[^>]+src=|\bfetch\s*\(/i);
@@ -80,6 +83,7 @@ test("map export stages redaction/evidence metadata before final map paths", asy
   await writeRelationshipMapExport(outputPath, "<html>map</html>", metadata);
   assert.equal(readFileSync(outputPath, "utf8"), "<html>map</html>");
   assert.deepEqual(JSON.parse(readFileSync(metadataPath, "utf8")), metadata);
+  assert.deepEqual(readdirSync(directory).filter((name) => /\.(?:tmp|bak)$|relationship-map-recovery\.json$/.test(name)), []);
 
   const failedPath = join(directory, "failed.html");
   await assert.rejects(() => writeRelationshipMapExport(failedPath, "<html>map</html>", metadata, {
@@ -120,4 +124,32 @@ test("metadata staging failure preserves an existing completed map pair", async 
   }), /metadata unavailable/);
   assert.equal(readFileSync(outputPath, "utf8"), "old map");
   assert.equal(readFileSync(metadataPath, "utf8"), "{\"old\":true}\n");
+});
+
+test("double finalization and restoration failure retains an old backup and retries deterministically", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-map-double-failure-"));
+  const outputPath = join(directory, "map.html");
+  const metadataPath = join(directory, "map.redaction.json");
+  writeFileSync(outputPath, "old map");
+  writeFileSync(metadataPath, "{\"old\":true}\n");
+  await assert.rejects(() => writeRelationshipMapExport(outputPath, "new map", { new: true }, {
+    rename: async (from, to) => {
+      if (from.endsWith(".tmp") && to === outputPath) throw new Error("final HTML rename failed");
+      if (from.endsWith(".bak") && to === outputPath) throw new Error("HTML restoration failed");
+      return renameAsync(from, to);
+    },
+  }), /final HTML rename failed; Relationship map export recovery is required/);
+
+  const recoveryPath = `${outputPath}.relationship-map-recovery.json`;
+  const backup = readdirSync(directory).find((name) => name.startsWith("map.html.") && name.endsWith(".bak"));
+  assert.ok(backup, "the only old HTML copy remains in its backup");
+  assert.equal(readFileSync(join(directory, backup), "utf8"), "old map");
+  assert.equal(readFileSync(metadataPath, "utf8"), "{\"old\":true}\n");
+  assert.equal(existsSync(outputPath), false);
+  assert.equal(JSON.parse(readFileSync(recoveryPath, "utf8")).state, "rollback-required");
+
+  await writeRelationshipMapExport(outputPath, "new map", { new: true });
+  assert.equal(readFileSync(outputPath, "utf8"), "new map");
+  assert.deepEqual(JSON.parse(readFileSync(metadataPath, "utf8")), { new: true });
+  assert.deepEqual(readdirSync(directory).filter((name) => /\.(?:tmp|bak)$|relationship-map-recovery\.json$/.test(name)), []);
 });

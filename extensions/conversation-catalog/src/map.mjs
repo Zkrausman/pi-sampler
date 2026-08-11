@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { escapeHtml } from "./catalog.mjs";
 
@@ -101,48 +101,160 @@ export function generateRelationshipMapHtml(session, graph) {
     return `<li id="${escapeHtml(edge.id)}"><strong>${escapeHtml(edge.type)}</strong>: <a href="#${escapeHtml(from.citationAnchor)}">${escapeHtml(from.evidenceReference || `event ${from.order}`)}</a> → <a href="#${escapeHtml(to.flowAnchor)}">${escapeHtml(to.evidenceReference || `event ${to.order}`)} flow context</a>${edge.type === "chronological order" ? " (time order only; not causal)" : ""}</li>`;
   }).join("")}</ul>`;
   const typeControls = `<fieldset><legend>Event types</legend>${eventTypes.map((type) => `<label><input type="checkbox" data-event-filter value="${escapeHtml(type)}" checked> ${escapeHtml(type)}</label>`).join("")}</fieldset><fieldset><legend>Relationship types</legend>${edgeTypes.map((type) => `<label><input type="checkbox" data-edge-filter value="${escapeHtml(type)}" checked> ${escapeHtml(type)}</label>`).join("")}</fieldset>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Pi relationship map</title><style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0 auto;max-width:100rem;padding:1rem;line-height:1.45}.layout{display:grid;gap:1rem;grid-template-columns:minmax(16rem,25rem) minmax(0,1fr)}aside,#map,.citation-context,.edge-panel{border:1px solid #9997;border-radius:.5rem;padding:1rem}aside{max-height:72vh;overflow:auto}.chronological-events{padding-left:1.5rem}.chronological-events li{margin:.65rem 0}.chronological-events span{color:#777;display:block;font-size:.85rem}.flow-link{font-size:.85rem}.controls{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.6rem}.filters{display:flex;flex-wrap:wrap;gap:1rem;margin:.5rem 0}.filters fieldset{border:1px solid #9997}.filters label{display:inline-block;margin:.15rem .45rem .15rem 0}#map{height:62vh;overflow:hidden;padding:0;position:relative;touch-action:none}svg{height:100%;width:100%}.node{cursor:pointer}.node:focus{outline:none}.node circle{fill:#3975a8;stroke:#dcefff;stroke-width:2}.node text{fill:#fff;font-size:12px;pointer-events:none}.edge{cursor:pointer;stroke:#789;stroke-width:2}.edge.selected{stroke:#f80;stroke-width:4}.node.selected circle{stroke:#f80;stroke-width:4}.detail{min-height:2.5rem}.citation-context{margin:1rem 0;scroll-margin-top:1rem}.citation-context p{overflow-wrap:anywhere;white-space:pre-wrap}.citation-context dl div{display:grid;gap:.5rem;grid-template-columns:10rem minmax(0,1fr)}dt{font-weight:700}dd{margin:0;overflow-wrap:anywhere}.provenance,.empty{color:#777}.edge-contexts li{margin:.5rem 0;scroll-margin-top:1rem}button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid #3983c4;outline-offset:2px}@media(max-width:50rem){.layout{grid-template-columns:1fr}aside{max-height:none}}</style></head><body><h1>Conversation relationship map</h1><p>Session ${escapeHtml(sessionReference)}. This map uses only reviewed, redacted local session data. Each event has a direct-evidence reference and is ordered chronologically. Relationships are persisted parent, tool-result, or chronological-order links; chronological order is not a causal claim.</p><div class="layout"><aside aria-labelledby="chronological-heading"><h2 id="chronological-heading">Chronological evidence</h2>${sidebar}</aside><main><div class="controls" aria-label="Map view controls"><button type="button" id="map-fit">Fit map</button><button type="button" id="map-reset">Reset view</button><button type="button" id="map-zoom-in">Zoom in</button><button type="button" id="map-zoom-out">Zoom out</button><label><input type="checkbox" id="focus-connected-evidence"> Focus connected evidence</label></div><div class="filters" aria-label="Map filters">${typeControls}</div><div id="map" aria-label="Interactive relationship map"></div><p id="map-detail" class="detail" role="status">Select a node or relationship to inspect its embedded citation and flow context.</p></main></div><section class="edge-panel" aria-labelledby="relationships-heading"><h2 id="relationships-heading">Supported relationship context</h2>${edgeContexts}</section><section aria-labelledby="citation-heading"><h2 id="citation-heading">Embedded citation and flow context</h2>${contexts}</section><script type="application/json" id="relationship-map-data">${payload}</script><script>(() => { const dataElement=document.getElementById("relationship-map-data"),box=document.getElementById("map"),detail=document.getElementById("map-detail"); if(!dataElement||!box||!detail)return; let graph;try{graph=JSON.parse(dataElement.textContent)}catch{return} const svg=document.createElementNS("http://www.w3.org/2000/svg","svg"),layer=document.createElementNS(svg.namespaceURI,"g");svg.append(layer);box.append(svg);let scale=1,x=0,y=0,activeNode="",activeEdge="",drag;const eventFilters=()=>new Set(Array.from(document.querySelectorAll("[data-event-filter]:checked"),input=>input.value)),edgeFilters=()=>new Set(Array.from(document.querySelectorAll("[data-edge-filter]:checked"),input=>input.value));const position=id=>{const index=graph.nodes.findIndex(node=>node.id===id);return{x:100+(index%5)*180,y:100+Math.floor(index/5)*135}};const selected=()=>activeNode||"";const visible=()=>{const eventTypes=eventFilters(),edgeTypes=edgeFilters(),focus=document.getElementById("focus-connected-evidence").checked;let nodeIds=new Set(graph.nodes.filter(node=>eventTypes.has(node.type)).map(node=>node.id));const edges=graph.edges.filter(edge=>edgeTypes.has(edge.type)&&nodeIds.has(edge.from)&&nodeIds.has(edge.to));if(focus&&selected()){const connected=new Set([selected(),...edges.filter(edge=>edge.from===selected()||edge.to===selected()).flatMap(edge=>[edge.from,edge.to])]);nodeIds=new Set([...nodeIds].filter(id=>connected.has(id)));}return{nodeIds,edges:edges.filter(edge=>nodeIds.has(edge.from)&&nodeIds.has(edge.to))}};function showNode(node){activeNode=node.id;activeEdge="";detail.replaceChildren(document.createTextNode("Event "+node.order+" · "+node.type+". "));const citation=document.createElement("a");citation.href="#"+node.citationAnchor;citation.textContent=node.evidenceReference||"Embedded citation";detail.append(citation,document.createTextNode(" · "));const flow=document.createElement("a");flow.href="#"+node.flowAnchor;flow.textContent="Flow context";detail.append(flow);draw()}function showEdge(edge){activeEdge=edge.id;activeNode="";const from=graph.nodes.find(node=>node.id===edge.from),to=graph.nodes.find(node=>node.id===edge.to);detail.replaceChildren(document.createTextNode(edge.type+": "));const context=document.createElement("a");context.href="#"+edge.id;context.textContent="embedded relationship context";detail.append(context,document.createTextNode(" · "));const flow=document.createElement("a");flow.href="#"+(to?to.flowAnchor:"");flow.textContent="target flow context";detail.append(flow);draw()}function draw(){layer.replaceChildren();layer.setAttribute("transform","translate("+x+" "+y+") scale("+scale+")");const state=visible();for(const edge of state.edges){const a=position(edge.from),b=position(edge.to),line=document.createElementNS(svg.namespaceURI,"line");line.setAttribute("x1",a.x);line.setAttribute("y1",a.y);line.setAttribute("x2",b.x);line.setAttribute("y2",b.y);line.setAttribute("class","edge "+(activeEdge===edge.id?"selected":""));line.setAttribute("role","button");line.setAttribute("tabindex","0");line.setAttribute("aria-label",edge.type+" relationship");line.addEventListener("click",()=>showEdge(edge));line.addEventListener("keydown",event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();showEdge(edge)}});layer.append(line)}for(const node of graph.nodes)if(state.nodeIds.has(node.id)){const p=position(node.id),group=document.createElementNS(svg.namespaceURI,"g");group.setAttribute("class","node "+(activeNode===node.id?"selected":""));group.setAttribute("transform","translate("+p.x+" "+p.y+")");group.setAttribute("role","button");group.setAttribute("tabindex","0");group.setAttribute("aria-label","Event "+node.order+": "+node.type+". Open citation and flow context.");group.addEventListener("click",()=>showNode(node));group.addEventListener("keydown",event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();showNode(node)}});const circle=document.createElementNS(svg.namespaceURI,"circle");circle.setAttribute("r",32);group.append(circle);const label=document.createElementNS(svg.namespaceURI,"text");label.setAttribute("text-anchor","middle");label.setAttribute("y",5);label.textContent=(node.order+". "+node.label).slice(0,20);group.append(label);layer.append(group)}}function reset(){scale=1;x=0;y=0;draw()}function fit(){if(!graph.nodes.length){reset();return}const cols=Math.min(5,graph.nodes.length),rows=Math.ceil(graph.nodes.length/5),width=100+(cols-1)*180+100,height=100+(rows-1)*135+100;const rect=box.getBoundingClientRect();scale=Math.max(.3,Math.min(2,Math.min(rect.width/width,rect.height/height)));x=Math.max(10,(rect.width-width*scale)/2);y=Math.max(10,(rect.height-height*scale)/2);draw()}document.getElementById("map-fit").addEventListener("click",fit);document.getElementById("map-reset").addEventListener("click",reset);document.getElementById("map-zoom-in").addEventListener("click",()=>{scale=Math.min(3,scale*1.2);draw()});document.getElementById("map-zoom-out").addEventListener("click",()=>{scale=Math.max(.3,scale/1.2);draw()});for(const input of document.querySelectorAll("[data-event-filter],[data-edge-filter],#focus-connected-evidence"))input.addEventListener("change",draw);svg.addEventListener("pointerdown",event=>{drag=[event.clientX,event.clientY];svg.setPointerCapture?.(event.pointerId)});svg.addEventListener("pointermove",event=>{if(!drag)return;x+=event.clientX-drag[0];y+=event.clientY-drag[1];drag=[event.clientX,event.clientY];draw()});svg.addEventListener("pointerup",()=>{drag=undefined});svg.addEventListener("wheel",event=>{event.preventDefault();scale=Math.max(.3,Math.min(3,scale*(event.deltaY<0?0.9:1.1)));draw()},{passive:false});fit()})();</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Pi relationship map</title><style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0 auto;max-width:100rem;padding:1rem;line-height:1.45}.layout{display:grid;gap:1rem;grid-template-columns:minmax(16rem,25rem) minmax(0,1fr)}aside,#map,.citation-context,.edge-panel{border:1px solid #9997;border-radius:.5rem;padding:1rem}aside{max-height:72vh;overflow:auto}.chronological-events{padding-left:1.5rem}.chronological-events li{margin:.65rem 0}.chronological-events span{color:#777;display:block;font-size:.85rem}.flow-link{font-size:.85rem}.controls{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.6rem}.filters{display:flex;flex-wrap:wrap;gap:1rem;margin:.5rem 0}.filters fieldset{border:1px solid #9997}.filters label{display:inline-block;margin:.15rem .45rem .15rem 0}#map{height:62vh;overflow:hidden;padding:0;position:relative;touch-action:none}svg{height:100%;width:100%}.node{cursor:pointer}.node circle{fill:#3975a8;stroke:#dcefff;stroke-width:2}.node:focus-visible{outline:2px solid #ffbf47;outline-offset:3px}.node:focus-visible circle{stroke:#ffbf47;stroke-width:5}.node text{fill:#fff;font-size:12px;pointer-events:none}.edge{cursor:pointer;stroke:#789;stroke-width:2}.edge.selected{stroke:#f80;stroke-width:4}.node.selected circle{stroke:#f80;stroke-width:4}.detail{min-height:2.5rem}.citation-context{margin:1rem 0;scroll-margin-top:1rem}.citation-context p{overflow-wrap:anywhere;white-space:pre-wrap}.citation-context dl div{display:grid;gap:.5rem;grid-template-columns:10rem minmax(0,1fr)}dt{font-weight:700}dd{margin:0;overflow-wrap:anywhere}.provenance,.empty{color:#777}.edge-contexts li{margin:.5rem 0;scroll-margin-top:1rem}button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid #3983c4;outline-offset:2px}@media(max-width:50rem){.layout{grid-template-columns:1fr}aside{max-height:none}}</style></head><body><h1>Conversation relationship map</h1><p>Session ${escapeHtml(sessionReference)}. This map uses only reviewed, redacted local session data. Each event has a direct-evidence reference and is ordered chronologically. Relationships are persisted parent, tool-result, or chronological-order links; chronological order is not a causal claim.</p><div class="layout"><aside aria-labelledby="chronological-heading"><h2 id="chronological-heading">Chronological evidence</h2>${sidebar}</aside><main><div class="controls" aria-label="Map view controls"><button type="button" id="map-fit">Fit map</button><button type="button" id="map-reset">Reset view</button><button type="button" id="map-zoom-in">Zoom in</button><button type="button" id="map-zoom-out">Zoom out</button><label><input type="checkbox" id="focus-connected-evidence"> Focus connected evidence</label></div><div class="filters" aria-label="Map filters">${typeControls}</div><div id="map" aria-label="Interactive relationship map"></div><p id="map-detail" class="detail" role="status">Select a node or relationship to inspect its embedded citation and flow context.</p></main></div><section class="edge-panel" aria-labelledby="relationships-heading"><h2 id="relationships-heading">Supported relationship context</h2>${edgeContexts}</section><section aria-labelledby="citation-heading"><h2 id="citation-heading">Embedded citation and flow context</h2>${contexts}</section><script type="application/json" id="relationship-map-data">${payload}</script><script>(() => { const dataElement=document.getElementById("relationship-map-data"),box=document.getElementById("map"),detail=document.getElementById("map-detail"); if(!dataElement||!box||!detail)return; let graph;try{graph=JSON.parse(dataElement.textContent)}catch{return} const svg=document.createElementNS("http://www.w3.org/2000/svg","svg"),layer=document.createElementNS(svg.namespaceURI,"g");svg.append(layer);box.append(svg);let scale=1,x=0,y=0,activeNode="",activeEdge="",drag;const eventFilters=()=>new Set(Array.from(document.querySelectorAll("[data-event-filter]:checked"),input=>input.value)),edgeFilters=()=>new Set(Array.from(document.querySelectorAll("[data-edge-filter]:checked"),input=>input.value));const position=id=>{const index=graph.nodes.findIndex(node=>node.id===id);return{x:100+(index%5)*180,y:100+Math.floor(index/5)*135}};const selected=()=>activeNode||"";const visible=()=>{const eventTypes=eventFilters(),edgeTypes=edgeFilters(),focus=document.getElementById("focus-connected-evidence").checked;let nodeIds=new Set(graph.nodes.filter(node=>eventTypes.has(node.type)).map(node=>node.id));const edges=graph.edges.filter(edge=>edgeTypes.has(edge.type)&&nodeIds.has(edge.from)&&nodeIds.has(edge.to));if(focus&&selected()){const connected=new Set([selected(),...edges.filter(edge=>edge.from===selected()||edge.to===selected()).flatMap(edge=>[edge.from,edge.to])]);nodeIds=new Set([...nodeIds].filter(id=>connected.has(id)));}return{nodeIds,edges:edges.filter(edge=>nodeIds.has(edge.from)&&nodeIds.has(edge.to))}};function showNode(node){activeNode=node.id;activeEdge="";detail.replaceChildren(document.createTextNode("Event "+node.order+" · "+node.type+". "));const citation=document.createElement("a");citation.href="#"+node.citationAnchor;citation.textContent=node.evidenceReference||"Embedded citation";detail.append(citation,document.createTextNode(" · "));const flow=document.createElement("a");flow.href="#"+node.flowAnchor;flow.textContent="Flow context";detail.append(flow);draw()}function showEdge(edge){activeEdge=edge.id;activeNode="";const from=graph.nodes.find(node=>node.id===edge.from),to=graph.nodes.find(node=>node.id===edge.to);detail.replaceChildren(document.createTextNode(edge.type+": "));const context=document.createElement("a");context.href="#"+edge.id;context.textContent="embedded relationship context";detail.append(context,document.createTextNode(" · "));const flow=document.createElement("a");flow.href="#"+(to?to.flowAnchor:"");flow.textContent="target flow context";detail.append(flow);draw()}function draw(){layer.replaceChildren();layer.setAttribute("transform","translate("+x+" "+y+") scale("+scale+")");const state=visible();for(const edge of state.edges){const a=position(edge.from),b=position(edge.to),line=document.createElementNS(svg.namespaceURI,"line");line.setAttribute("x1",a.x);line.setAttribute("y1",a.y);line.setAttribute("x2",b.x);line.setAttribute("y2",b.y);line.setAttribute("class","edge "+(activeEdge===edge.id?"selected":""));line.setAttribute("role","button");line.setAttribute("tabindex","0");line.setAttribute("aria-label",edge.type+" relationship");line.addEventListener("click",()=>showEdge(edge));line.addEventListener("keydown",event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();showEdge(edge)}});layer.append(line)}for(const node of graph.nodes)if(state.nodeIds.has(node.id)){const p=position(node.id),group=document.createElementNS(svg.namespaceURI,"g");group.setAttribute("class","node "+(activeNode===node.id?"selected":""));group.setAttribute("transform","translate("+p.x+" "+p.y+")");group.setAttribute("role","button");group.setAttribute("tabindex","0");group.setAttribute("aria-label","Event "+node.order+": "+node.type+". Open citation and flow context.");group.addEventListener("click",()=>showNode(node));group.addEventListener("keydown",event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();showNode(node)}});const circle=document.createElementNS(svg.namespaceURI,"circle");circle.setAttribute("r",32);group.append(circle);const label=document.createElementNS(svg.namespaceURI,"text");label.setAttribute("text-anchor","middle");label.setAttribute("y",5);label.textContent=(node.order+". "+node.label).slice(0,20);group.append(label);layer.append(group)}}function reset(){scale=1;x=0;y=0;draw()}function fit(){if(!graph.nodes.length){reset();return}const cols=Math.min(5,graph.nodes.length),rows=Math.ceil(graph.nodes.length/5),width=100+(cols-1)*180+100,height=100+(rows-1)*135+100;const rect=box.getBoundingClientRect();scale=Math.max(.3,Math.min(2,Math.min(rect.width/width,rect.height/height)));x=Math.max(10,(rect.width-width*scale)/2);y=Math.max(10,(rect.height-height*scale)/2);draw()}document.getElementById("map-fit").addEventListener("click",fit);document.getElementById("map-reset").addEventListener("click",reset);document.getElementById("map-zoom-in").addEventListener("click",()=>{scale=Math.min(3,scale*1.2);draw()});document.getElementById("map-zoom-out").addEventListener("click",()=>{scale=Math.max(.3,scale/1.2);draw()});for(const input of document.querySelectorAll("[data-event-filter],[data-edge-filter],#focus-connected-evidence"))input.addEventListener("change",draw);svg.addEventListener("pointerdown",event=>{drag=[event.clientX,event.clientY];svg.setPointerCapture?.(event.pointerId)});svg.addEventListener("pointermove",event=>{if(!drag)return;x+=event.clientX-drag[0];y+=event.clientY-drag[1];drag=[event.clientX,event.clientY];draw()});svg.addEventListener("pointerup",()=>{drag=undefined});svg.addEventListener("wheel",event=>{event.preventDefault();scale=Math.max(.3,Math.min(3,scale*(event.deltaY<0?0.9:1.1)));draw()},{passive:false});fit()})();</script></body></html>`;
+}
+
+const RECOVERY_KIND = "pi-relationship-map-export-recovery";
+
+async function fileExists(fs, path) {
+  try { await fs.stat(path); return true; } catch (error) { if (error?.code === "ENOENT") return false; throw error; }
+}
+
+function recoveryPathFor(outputPath) {
+  return `${outputPath}.relationship-map-recovery.json`;
+}
+
+function recoveryRecord({ outputPath, metadataPath, htmlTemporary, metadataTemporary, htmlBackup, metadataBackup, original, moves = {}, commits = {}, state = "rollback-required" }) {
+  return {
+    schemaVersion: 1,
+    kind: RECOVERY_KIND,
+    state,
+    outputPath,
+    metadataPath,
+    temporary: { html: htmlTemporary, metadata: metadataTemporary },
+    backups: { html: htmlBackup, metadata: metadataBackup },
+    original,
+    moves: { html: "not-started", metadata: "not-started", ...moves },
+    commits: { html: "not-started", metadata: "not-started", ...commits },
+  };
+}
+
+async function writeRecoveryRecord(fs, recoveryPath, record) {
+  await fs.writeFile(recoveryPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+}
+
+function parseRecoveryRecord(value, outputPath, metadataPath) {
+  if (!value || value.schemaVersion !== 1 || value.kind !== RECOVERY_KIND
+    || value.outputPath !== outputPath || value.metadataPath !== metadataPath
+    || !value.original || typeof value.original.html !== "boolean" || typeof value.original.metadata !== "boolean"
+    || !value.backups || !value.temporary || !value.moves || !value.commits) {
+    throw new Error(`Relationship map export recovery state is invalid: ${recoveryPathFor(outputPath)}`);
+  }
+  return value;
 }
 
 /**
- * Stages both export files before either final path changes. If staging metadata
- * fails, no map path is created or replaced. Final-path failures restore any
- * prior pair best-effort and remove newly committed files.
+ * Resolves a durable interrupted-export record before another export can start.
+ * A rollback never discards a backup: if an original cannot be restored, the
+ * record and its backup remain in place for the next deterministic retry.
+ */
+async function recoverRelationshipMapExport(outputPath, metadataPath, fs) {
+  const recoveryPath = recoveryPathFor(outputPath);
+  let serialized;
+  try { serialized = await fs.readFile(recoveryPath, "utf8"); } catch (error) { if (error?.code === "ENOENT") return; throw error; }
+  const record = parseRecoveryRecord(JSON.parse(serialized), outputPath, metadataPath);
+  if (record.state === "completed") {
+    await fs.rm(record.backups.html, { force: true });
+    await fs.rm(record.backups.metadata, { force: true });
+    await fs.rm(record.temporary.html, { force: true });
+    await fs.rm(record.temporary.metadata, { force: true });
+    await fs.rm(recoveryPath, { force: true });
+    return;
+  }
+
+  const failures = [];
+  for (const kind of ["html", "metadata"]) {
+    const finalPath = kind === "html" ? outputPath : metadataPath;
+    const backupPath = record.backups[kind];
+    const originalExisted = record.original[kind] === true;
+    const commitMayHaveStarted = record.commits[kind] !== "not-started";
+    const backupExists = await fileExists(fs, backupPath);
+    try {
+      if (originalExisted) {
+        // A prior recovery attempt may already have restored this member. In
+        // that case its backup is gone and the existing final is the preserved
+        // original; leave it intact so recovery remains idempotent.
+        if (!backupExists) continue;
+        // The final may be either absent or a newly committed replacement.
+        await fs.rm(finalPath, { force: true });
+        await fs.rename(backupPath, finalPath);
+      } else if (commitMayHaveStarted) {
+        // No prior member existed, so a possibly committed new member is partial.
+        await fs.rm(finalPath, { force: true });
+      }
+    } catch (error) { failures.push(`${kind}: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+  if (failures.length) {
+    throw new Error(`Relationship map export recovery is required at ${recoveryPath}: ${failures.join("; ")}`);
+  }
+  await fs.rm(record.temporary.html, { force: true });
+  await fs.rm(record.temporary.metadata, { force: true });
+  await fs.rm(recoveryPath, { force: true });
+}
+
+/**
+ * Stages both files, journals every replace step, then commits the pair. A
+ * failed rollback retains its journal and backups, which are automatically
+ * recovered before the next export instead of silently discarding old HTML.
  */
 export async function writeRelationshipMapExport(outputPath, html, metadata, operations = {}) {
-  const fs = { mkdir, writeFile, rename, rm, ...operations };
+  const fs = { mkdir, readFile, rename, rm, stat, writeFile, ...operations };
   const metadataPath = outputPath.replace(/\.html$/i, ".redaction.json");
   const token = randomUUID();
   const htmlTemporary = `${outputPath}.${token}.tmp`;
   const metadataTemporary = `${metadataPath}.${token}.tmp`;
   const htmlBackup = `${outputPath}.${token}.bak`;
   const metadataBackup = `${metadataPath}.${token}.bak`;
-  const moved = { html: false, metadata: false };
-  const committed = { html: false, metadata: false };
-  const moveAside = async (path, backup, kind) => {
-    try { await fs.rename(path, backup); moved[kind] = true; } catch (error) { if (error?.code !== "ENOENT") throw error; }
-  };
+  const recoveryPath = recoveryPathFor(outputPath);
+  let record;
+  let completed = false;
   try {
+    await recoverRelationshipMapExport(outputPath, metadataPath, fs);
     await fs.mkdir(dirname(outputPath), { recursive: true });
     await fs.writeFile(htmlTemporary, html, "utf8");
     await fs.writeFile(metadataTemporary, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
-    await moveAside(outputPath, htmlBackup, "html");
-    await moveAside(metadataPath, metadataBackup, "metadata");
-    await fs.rename(metadataTemporary, metadataPath); committed.metadata = true;
-    await fs.rename(htmlTemporary, outputPath); committed.html = true;
-    await fs.rm(htmlBackup, { force: true });
-    await fs.rm(metadataBackup, { force: true });
+    record = recoveryRecord({
+      outputPath, metadataPath, htmlTemporary, metadataTemporary, htmlBackup, metadataBackup,
+      original: { html: await fileExists(fs, outputPath), metadata: await fileExists(fs, metadataPath) },
+    });
+    await writeRecoveryRecord(fs, recoveryPath, record);
+
+    for (const kind of ["html", "metadata"]) {
+      const finalPath = kind === "html" ? outputPath : metadataPath;
+      const backupPath = record.backups[kind];
+      if (!record.original[kind]) continue;
+      record.moves[kind] = "maybe-moved";
+      await writeRecoveryRecord(fs, recoveryPath, record);
+      await fs.rename(finalPath, backupPath);
+      record.moves[kind] = "moved";
+      await writeRecoveryRecord(fs, recoveryPath, record);
+    }
+    // Metadata finalizes first so a successful return always represents the pair.
+    for (const kind of ["metadata", "html"]) {
+      record.commits[kind] = "maybe-committed";
+      await writeRecoveryRecord(fs, recoveryPath, record);
+      await fs.rename(record.temporary[kind], kind === "html" ? outputPath : metadataPath);
+      record.commits[kind] = "committed";
+      await writeRecoveryRecord(fs, recoveryPath, record);
+    }
+    record.state = "completed";
+    await writeRecoveryRecord(fs, recoveryPath, record);
+    completed = true;
+    // A completed journal makes cleanup retryable without rolling back the pair.
+    await recoverRelationshipMapExport(outputPath, metadataPath, fs);
   } catch (error) {
-    if (committed.html) await fs.rm(outputPath, { force: true }).catch(() => undefined);
-    if (committed.metadata) await fs.rm(metadataPath, { force: true }).catch(() => undefined);
-    if (moved.html) await fs.rename(htmlBackup, outputPath).catch(() => undefined);
-    if (moved.metadata) await fs.rename(metadataBackup, metadataPath).catch(() => undefined);
+    if (record && !completed) {
+      try {
+        await recoverRelationshipMapExport(outputPath, metadataPath, fs);
+      } catch (recoveryError) {
+        const message = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+        throw new Error(`${error instanceof Error ? error.message : String(error)}; ${message}`, { cause: error });
+      }
+    }
     throw error;
   } finally {
     await fs.rm(htmlTemporary, { force: true }).catch(() => undefined);
     await fs.rm(metadataTemporary, { force: true }).catch(() => undefined);
-    await fs.rm(htmlBackup, { force: true }).catch(() => undefined);
-    await fs.rm(metadataBackup, { force: true }).catch(() => undefined);
   }
   return { outputPath, metadataPath };
 }
