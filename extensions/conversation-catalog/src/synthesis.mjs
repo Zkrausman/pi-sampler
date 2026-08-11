@@ -13,9 +13,12 @@ const MODEL_LIMITS = Object.freeze({
 });
 
 function selectedSources(sources) {
-  const selected = (Array.isArray(sources) ? sources : []).filter((source) => source && (source.excluded || Array.isArray(source.events)));
-  if (selected.length < 2) throw new Error("Select at least two conversations.");
-  return selected;
+  if (!Array.isArray(sources) || sources.length !== 1) throw new Error("Select exactly one conversation.");
+  const [source] = sources;
+  if (!source || (!source.excluded && !Array.isArray(source.events))) {
+    throw new Error("Select exactly one valid conversation.");
+  }
+  return [source];
 }
 
 function sourceReference(source, index) {
@@ -182,7 +185,7 @@ export function buildHindsightDocument(sources, modelOutput = undefined) {
     ? { claims: defaultClaims(selected), recommendations: [] }
     : validateModelOutput(modelOutput, allowedReferences);
   return generateCitedHindsightDocumentHtml({
-    title: model.title || `Hindsight source bundle — ${selected.length} selected conversations`,
+    title: model.title || "Hindsight source bundle — selected conversation",
     claims: [...model.claims, ...fallbackClaims(selected)],
     recommendations: model.recommendations,
     evidence,
@@ -194,7 +197,7 @@ export function buildSynthesisPrompt(sources) {
   const evidence = sourceEvidence(selected);
   const includedEvidence = evidence.filter((item) => item.availability !== "excluded");
   const excludedEvidence = evidence.filter((item) => item.availability === "excluded").map((item) => item.reference);
-  return `Create a rigorous hindsight analysis from ONLY the redacted source bundle below. Identify cross-conversation patterns, friction/rework, recommendations, and confidence. Every material claim and recommendation must cite one or more exact included evidence references and be labeled direct evidence or inference where applicable. Do not invent facts or use any content outside this bundle.
+  return `Create a rigorous hindsight analysis from ONLY the selected conversation's redacted source bundle below. Identify evidence, friction/rework, recommendations, and confidence. Every material claim and recommendation must cite one or more exact included evidence references and be labeled direct evidence or inference where applicable. Do not invent facts or use any content outside this bundle.
 
 Do NOT write HTML or use a file-writing tool. Call hindsight_document_write exactly once with a short title, structured claims, and structured recommendations. Every recommendation must include: recommendation, priority (critical, high, medium, or low), expectedImpact, suggestedOwner, dependencies (an array, which may be empty), acceptanceCriteria (one or more measurable criteria), status "proposed", source "model-suggestion", and evidenceReferences. Status and source are fixed: a model must never claim that a user confirmed an owner, dependency, or recommendation. Owner and dependency text must be derived only from this reviewed, redacted source bundle. The tool rejects malformed recommendations rather than filling in missing values. It escapes model text and generates all citation anchors, redacted source sections, flow/map context, and excluded-source fallbacks in the requested standalone HTML output. Do not cite an excluded reference for a substantive claim or recommendation; the contract records its redaction-review fallback itself.
 
