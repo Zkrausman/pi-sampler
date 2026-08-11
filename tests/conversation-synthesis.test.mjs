@@ -75,6 +75,17 @@ test("an excluded selected conversation retains a pseudonymous navigable fallbac
   assert.doesNotMatch(html, /Hidden|hidden:event-1/);
 });
 
+test("opt-in validation writes an excluded fallback without assessing unavailable fallback claims", () => {
+  const html = buildHindsightDocument(
+    [{ reference: "session-excluded", excluded: true, events: [{ summary: "Hidden", evidence: { reference: "hidden:event-1" } }] }],
+    { claims: [], recommendations: [] },
+    { source: "model-validation", userDisposition: "not-user-confirmed", assessments: [] },
+  );
+  assert.match(html, /href="#citation-1">session-excluded:excluded<\/a>/);
+  assert.match(html, /No material generated claims were available for claim-support validation/);
+  assert.doesNotMatch(html, /Claim 1:|Hidden|hidden:event-1/);
+});
+
 test("model claims and structured recommendations are escaped, cited, and rendered in an accessible table", () => {
   const html = buildHindsightDocument([source("one", "First")], {
     title: "<unsafe title>",
@@ -139,12 +150,13 @@ test("opt-in claim-support validation requires a complete, evidence-scoped model
   const validation = {
     source: "model-validation",
     userDisposition: "not-user-confirmed",
-    assessments: [{ claimNumber: 1, support: "supported", evidenceReferences: ["one:event-0001"] }],
+    assessments: [{ claimNumber: 1, support: "supported", rationale: "The cited excerpt explicitly reports the timeout.", evidenceReferences: ["one:event-0001"] }],
   };
   const html = buildHindsightDocument(sources, model, validation);
   assert.match(html, /Claim-support validation/);
   assert.match(html, /Model-generated validation only; it is not a user-confirmed disposition/);
   assert.match(html, /Claim 1:<\/strong> <span class="provenance">supported/);
+  assert.match(html, /Rationale:<\/span> The cited excerpt explicitly reports the timeout/);
   assert.match(html, /Evidence evaluated:<\/span> <span class="citations"><a href="#citation-1">one:event-0001/);
   assert.throws(() => buildHindsightDocument(sources, model, {
     ...validation,
@@ -158,6 +170,10 @@ test("opt-in claim-support validation requires a complete, evidence-scoped model
     ...validation,
     assessments: [{ ...validation.assessments[0], support: "<img src=x>" }],
   }), /support must be supported/);
+  assert.throws(() => buildHindsightDocument(sources, model, {
+    ...validation,
+    assessments: [{ ...validation.assessments[0], rationale: "" }],
+  }), /rationale must not be blank/);
 });
 
 test("claim-support validation cannot cite another included excerpt or omit a claim citation", () => {
@@ -173,12 +189,13 @@ test("claim-support validation cannot cite another included excerpt or omit a cl
   };
   const validation = {
     source: "model-validation", userDisposition: "not-user-confirmed",
-    assessments: [{ claimNumber: 1, support: "unverifiable", evidenceReferences: ["one:event-0002"] }],
+    assessments: [{ claimNumber: 1, support: "unverifiable", rationale: "The cited excerpt cannot establish the claim.", evidenceReferences: ["one:event-0002"] }],
   };
   assert.throws(() => buildHindsightDocument(sources, model, validation), /outside the selected redacted source bundle/);
   assert.match(buildClaimSupportValidationPrompt(sources, model), /Customer|First redacted excerpt/);
   const prompt = buildClaimSupportValidationPrompt(sources, model);
   assert.match(prompt, /one:event-0001/);
+  assert.match(prompt, /bounded rationale explaining why the cited excerpts support/);
   assert.doesNotMatch(prompt, /Second redacted excerpt|one:event-0002/);
 });
 

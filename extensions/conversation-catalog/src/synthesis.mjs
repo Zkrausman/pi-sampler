@@ -10,6 +10,7 @@ const MODEL_LIMITS = Object.freeze({
   owner: 200,
   dependency: 200,
   acceptanceCriterion: 500,
+  rationale: 1000,
 });
 const SUPPORT_CLASSIFICATIONS = new Set(["supported", "partially supported", "unsupported", "unverifiable"]);
 
@@ -73,6 +74,7 @@ function fallbackClaims(sources) {
     statement: "A selected conversation was excluded during redaction review.",
     classification: "direct evidence",
     evidenceReferences: [excludedReference(source, index)],
+    validationExcluded: true,
   }] : []);
 }
 
@@ -195,7 +197,12 @@ function validateClaimSupportValidation(validation, claims) {
     if (references.length !== claimReferences.length || claimReferences.some((reference) => !references.includes(reference))) {
       throw new Error(`${label} must evaluate exactly the claim's cited redacted evidence excerpts.`);
     }
-    return { claimNumber: assessment.claimNumber, support, evidenceReferences: references };
+    return {
+      claimNumber: assessment.claimNumber,
+      support,
+      rationale: requiredModelText(assessment.rationale, `${label} rationale`, MODEL_LIMITS.rationale),
+      evidenceReferences: references,
+    };
   });
   return { source: "model-validation", userDisposition: "not-user-confirmed", assessments: normalizedAssessments };
 }
@@ -239,7 +246,7 @@ export function buildClaimSupportValidationPrompt(sources, modelOutput) {
       excerpt: evidenceExcerpt(evidenceByReference.get(reference)?.context),
     })),
   }));
-  return `Run the requested claim-support validation pass. Evaluate each material generated claim ONLY against that claim's cited, redacted evidence excerpts below. Do not use any other conversation content, introduce evidence, infer a user disposition, or change the claims or recommendations. For every claim, classify support as exactly supported, partially supported, unsupported, or unverifiable.\n\nCall hindsight_claim_support_validate exactly once with source "model-validation", userDisposition "not-user-confirmed", and one assessment for every claim. Each assessment must include claimNumber, support, and exactly the evidenceReferences shown for that claim.\n\nCLAIM-SUPPORT VALIDATION BUNDLE:\n${JSON.stringify(claims)}`;
+  return `Run the requested claim-support validation pass. Evaluate each material generated claim ONLY against that claim's cited, redacted evidence excerpts below. Do not use any other conversation content, introduce evidence, infer a user disposition, or change the claims or recommendations. For every claim, classify support as exactly supported, partially supported, unsupported, or unverifiable.\n\nCall hindsight_claim_support_validate exactly once with source "model-validation", userDisposition "not-user-confirmed", and one assessment for every claim. Each assessment must include claimNumber, support, a bounded rationale explaining why the cited excerpts support, partially support, fail to support, or cannot establish the claim, and exactly the evidenceReferences shown for that claim.\n\nCLAIM-SUPPORT VALIDATION BUNDLE:\n${JSON.stringify(claims)}`;
 }
 
 /**

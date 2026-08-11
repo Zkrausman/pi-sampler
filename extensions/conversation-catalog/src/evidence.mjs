@@ -90,20 +90,21 @@ function normalizedRecommendations(document) {
 
 function normalizedClaimSupportValidation(document, claims) {
   const validation = document?.claimSupportValidation;
+  const materialClaims = claims.filter((claim) => !claim.validationExcluded);
   if (validation === undefined) return undefined;
   if (!validation || typeof validation !== "object" || Array.isArray(validation)
     || text(validation.source) !== "model-validation" || text(validation.userDisposition) !== "not-user-confirmed") {
     throw new Error("Claim-support validation must be model-generated and not user-confirmed.");
   }
   const assessments = validation.assessments;
-  if (!Array.isArray(assessments) || assessments.length !== claims.length) {
+  if (!Array.isArray(assessments) || assessments.length !== materialClaims.length) {
     throw new Error("Claim-support validation must assess every material claim exactly once.");
   }
   const claimNumbers = new Set();
   return assessments.map((assessment, index) => {
     const label = `Claim-support assessment ${index + 1}`;
     const claimNumber = assessment?.claimNumber;
-    if (!Number.isInteger(claimNumber) || claimNumber < 1 || claimNumber > claims.length || claimNumbers.has(claimNumber)) {
+    if (!Number.isInteger(claimNumber) || claimNumber < 1 || claimNumber > materialClaims.length || claimNumbers.has(claimNumber)) {
       throw new Error("Claim-support validation must assess every material claim exactly once.");
     }
     claimNumbers.add(claimNumber);
@@ -111,12 +112,14 @@ function normalizedClaimSupportValidation(document, claims) {
     if (!["supported", "partially supported", "unsupported", "unverifiable"].includes(support)) {
       throw new Error(`${label} has an invalid support classification.`);
     }
+    const rationale = bounded(assessment?.rationale, "", 1000);
+    if (!rationale) throw new Error(`${label} requires a readable rationale.`);
     const references = [...new Set((Array.isArray(assessment?.evidenceReferences) ? assessment.evidenceReferences : []).map(text))];
-    const claimReferences = claims[claimNumber - 1].references;
+    const claimReferences = materialClaims[claimNumber - 1].references;
     if (references.length !== claimReferences.length || references.some((reference) => !reference) || claimReferences.some((reference) => !references.includes(reference))) {
       throw new Error(`${label} must evaluate exactly the claim's cited redacted evidence excerpts.`);
     }
-    return { claimNumber, support, references };
+    return { claimNumber, support, rationale, references };
   });
 }
 
@@ -146,7 +149,7 @@ export function generateCitedHindsightDocumentHtml(document) {
     if (references.length === 0 || references.some((reference) => !reference)) {
       throw new Error(`Claim ${index + 1} has no inspectable source evidence.`);
     }
-    return { statement, classification, references };
+    return { statement, classification, references, validationExcluded: claim?.validationExcluded === true };
   });
   const recommendations = normalizedRecommendations(document);
   const claimSupportValidation = normalizedClaimSupportValidation(document, normalizedClaims);
@@ -187,7 +190,9 @@ export function generateCitedHindsightDocumentHtml(document) {
     : `<div class="table-scroll" tabindex="0" aria-label="Scrollable recommendation table"><table><caption>Structured recommendations proposed by the model; none are user-confirmed.</caption><thead><tr><th scope="col">Recommendation</th><th scope="col">Priority</th><th scope="col">Expected impact</th><th scope="col">Suggested owner</th><th scope="col">Dependencies</th><th scope="col">Measurable acceptance criteria</th><th scope="col">Status and source</th><th scope="col">Evidence</th></tr></thead><tbody>${recommendations.map((recommendation) => `<tr><th scope="row">${escapeHtml(recommendation.recommendation)}</th><td>${escapeHtml(recommendation.priority)}</td><td>${escapeHtml(recommendation.expectedImpact)}</td><td>${escapeHtml(recommendation.suggestedOwner)}</td><td>${list(recommendation.dependencies, "No dependencies specified")}</td><td>${list(recommendation.acceptanceCriteria, "No acceptance criteria supplied")}</td><td><span class="provenance">${escapeHtml(recommendation.status)} · ${escapeHtml(recommendation.source)}</span><br><span class="empty">Not user-confirmed</span></td><td class="citations">${citationLinks(recommendation.references)}</td></tr>`).join("\n")}</tbody></table></div>`;
   const claimSupportHtml = !claimSupportValidation
     ? '<p class="empty" role="status">Claim-support validation was not requested.</p>'
-    : `<p class="empty">Model-generated validation only; it is not a user-confirmed disposition.</p><ol class="claim-support-list">${claimSupportValidation.map((assessment) => `<li><strong>Claim ${assessment.claimNumber}:</strong> <span class="provenance">${escapeHtml(assessment.support)}</span><br><span class="empty">Evidence evaluated:</span> <span class="citations">${citationLinks(assessment.references)}</span></li>`).join("")}</ol>`;
+    : claimSupportValidation.length === 0
+      ? '<p class="empty" role="status">No material generated claims were available for claim-support validation.</p>'
+      : `<p class="empty">Model-generated validation only; it is not a user-confirmed disposition.</p><ol class="claim-support-list">${claimSupportValidation.map((assessment) => `<li><strong>Claim ${assessment.claimNumber}:</strong> <span class="provenance">${escapeHtml(assessment.support)}</span><br><span class="empty">Rationale:</span> ${escapeHtml(assessment.rationale)}<br><span class="empty">Evidence evaluated:</span> <span class="citations">${citationLinks(assessment.references)}</span></li>`).join("")}</ol>`;
   const evidenceHtml = evidence.length === 0
     ? '<p class="empty">No evidence snapshot was supplied.</p>'
     : evidence.map((item) => {

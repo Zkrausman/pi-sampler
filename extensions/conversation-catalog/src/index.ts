@@ -175,6 +175,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           Type.Literal("unsupported"),
           Type.Literal("unverifiable"),
         ]),
+        rationale: Type.String({ minLength: 1, maxLength: 1000 }),
         evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 20 }),
       }, { additionalProperties: false }), { maxItems: 80 }),
     }, { additionalProperties: false }),

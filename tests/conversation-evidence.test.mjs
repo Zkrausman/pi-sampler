@@ -79,13 +79,15 @@ test("claim-support rendering only accepts scoped model validation and emits saf
     claimSupportValidation: {
       source: "model-validation",
       userDisposition: "not-user-confirmed",
-      assessments: [{ claimNumber: 1, support: "partially supported", evidenceReferences: ["event-1"] }],
+      assessments: [{ claimNumber: 1, support: "partially supported", rationale: "<img src=x onerror=alert(1)>", evidenceReferences: ["event-1"] }],
     },
   };
   const html = generateCitedHindsightDocumentHtml(document);
   assert.match(html, /Claim-support validation/);
   assert.match(html, /Model-generated validation only; it is not a user-confirmed disposition/);
   assert.match(html, /partially supported/);
+  assert.match(html, /Rationale:<\/span> &lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(html, /<img src=x onerror=alert\(1\)>/);
   assert.match(html, /href="#citation-1">event-1<\/a>/);
   assert.throws(() => generateCitedHindsightDocumentHtml({
     ...document,
@@ -95,9 +97,16 @@ test("claim-support rendering only accepts scoped model validation and emits saf
     ...document,
     claimSupportValidation: {
       ...document.claimSupportValidation,
-      assessments: [{ claimNumber: 1, support: "supported", evidenceReferences: ["other-event"] }],
+      assessments: [{ claimNumber: 1, support: "supported", rationale: "Not scoped.", evidenceReferences: ["other-event"] }],
     },
   }), /exactly the claim's cited redacted evidence excerpts/);
+  assert.throws(() => generateCitedHindsightDocumentHtml({
+    ...document,
+    claimSupportValidation: {
+      ...document.claimSupportValidation,
+      assessments: [{ claimNumber: 1, support: "supported", rationale: "", evidenceReferences: ["event-1"] }],
+    },
+  }), /requires a readable rationale/);
 });
 
 test("citation anchors do not collide for distinct punctuation and duplicate evidence is rejected", () => {
