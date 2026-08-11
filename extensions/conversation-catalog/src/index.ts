@@ -6,7 +6,7 @@ import { Type } from "typebox";
 import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
 import { attachEvidenceReferences, createEvidenceManifest, createHindsightRecommendationDispositionMetadata } from "./evidence.mjs";
-import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
+import { generateRelationshipMapHtml, projectRelationshipMap, writeRelationshipMapExport } from "./map.mjs";
 import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkBacklinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
@@ -829,10 +829,20 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd));
         const review = await reviewRedactionChoices(ctx, findings);
         if (review.excluded) throw new Error("Conversation excluded; no map was created.");
-        const cited = attachEvidenceReferences(pseudonymizeSession(selected), redactProjection(projection, findings, review.decisions));
-        await mkdir(dirname(outputPath), { recursive: true });
-        await writeFile(outputPath, generateRelationshipMapHtml({ id: pseudonymizeSession(selected) }, projectRelationshipMap(cited)), "utf8");
-        ctx.ui.notify(`Conversation map written to ${outputPath}.`, "info");
+        const sessionReference = pseudonymizeSession(selected);
+        const cited = attachEvidenceReferences(sessionReference, redactProjection(projection, findings, review.decisions));
+        const graph = projectRelationshipMap(cited);
+        const metadata = {
+          ...createRedactionMetadata(sessionReference, findings, review.decisions, false),
+          evidence: createEvidenceManifest(cited),
+          map: { schemaVersion: 1, eventCount: graph.nodes.length, edgeCount: graph.edges.length },
+        };
+        const paths = await writeRelationshipMapExport(
+          outputPath,
+          generateRelationshipMapHtml({ id: sessionReference }, graph),
+          metadata,
+        );
+        ctx.ui.notify(`Conversation map written to ${paths.outputPath}. Redaction and evidence decisions are recorded in ${paths.metadataPath}.`, "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to write conversation map.", "error"); }
     },
   });
