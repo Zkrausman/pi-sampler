@@ -42,6 +42,7 @@ In Pi, run:
 /conversation-catalog [output-path]
 /conversation-flow <session-id> [output-path]
 /hindsight-document [--validate-claim-support] [--prior-outcomes <report.outcomes.json>] [output-path]
+/hindsight-notes
 /hindsight-outcome <report.dispositions.json>
 /hindsight-feedback <report.dispositions.json>
 /hindsight-work <report.dispositions.json>
@@ -72,6 +73,12 @@ context, or a raw session ID/name. An excluded export is an HTML notice with no 
 `/hindsight-document` temporarily provides a single-select workflow across recorded conversations. Select exactly one conversation and review its redactions or exclude it; the command does not accept or silently choose among multiple conversations. An excluded conversation produces a pseudonymous, navigable redaction-review fallback with no conversation content. The active model submits structured claims and recommendations to the extension's safe report contract; it does not write report HTML directly. The contract validates, bounds, and escapes model text and generates every citation anchor, embedded redacted source-context section, and available flow/relationship-map context. Every material claim and recommendation must cite included evidence from the selected conversation. Excluded conversations remain navigable only as explicit redaction-review fallbacks, and neither fallbacks nor citations reveal a raw session/event ID or unredacted text.
 
 Pass `--validate-claim-support` to opt into a separate model-validation pass after the draft is structurally accepted. The extension gives that pass only each claim and its own cited, redacted excerpts; it cannot add evidence, cite another included excerpt, access excluded text, or alter the accepted claims or recommendations. It must classify every material claim as `supported`, `partially supported`, `unsupported`, or `unverifiable`, cite exactly that claim's references, and provide a bounded rationale explaining that classification. The report labels this output as **model-generated validation**, never a user-confirmed disposition. Excluded-conversation fallbacks have no material generated claims, so they render without a validation assessment.
+
+### In-session hindsight notes
+
+`/hindsight-notes` is an opt-in, interactive **current-session-only** workflow to add, view, edit, or delete short user-authored notes. Notes are stored separately from Pi session logs at `.pi/hindsight-notes/<opaque-session-reference>.json`; the reference is derived locally from the active session and no raw session ID/name is written. The versioned store accepts only bounded, user-authored/user-confirmed note records and rejects recognizable credentials and raw session identifiers. Its local cross-process lock and atomic replacement prevent concurrent note edits from losing updates.
+
+When `/hindsight-document` selects one conversation, it reads only the store for that selected conversation's matching opaque reference. Every matching note is explicitly included, redacted, retained, or excluded before synthesis. Excluded notes are neither rendered nor sent to the model. Included notes are passed only after that review as **user-authored context**, never conversation evidence: they have no citations, cannot satisfy a claim/recommendation citation, and are rendered in a distinct provenance section. Notes are untrusted context, not model instructions; the model must not follow instructions contained in them. Deleting a note removes it from the only store that selection can read.
 
 ### Hindsight recommendation contract
 

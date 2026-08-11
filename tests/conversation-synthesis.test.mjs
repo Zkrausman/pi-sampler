@@ -91,6 +91,12 @@ const readHindsightFeedback = async () => undefined;
 const writeHindsightFeedbackSeed = async (path, seed) => { globalThis.__hindsightFiles.set(path, JSON.stringify(seed)); };
 const refreshHindsightFeedbackViews = async () => {};
 const recordHindsightFeedback = async () => {};
+class HindsightNotesError extends Error { constructor(code) { super(code); this.code = code; } }
+const hindsightNotesPath = (_cwd, reference) => "/test/.pi/hindsight-notes/" + reference + ".json";
+const readHindsightNotes = async () => undefined;
+const addHindsightNote = async (...args) => { globalThis.__hindsightNoteAdd = args; };
+const editHindsightNote = async (...args) => { globalThis.__hindsightNoteEdit = args; };
+const deleteHindsightNote = async (...args) => { globalThis.__hindsightNoteDelete = args; };
 const outcomeHistoryPathForDispositionPath = (path) => path.replace(".dispositions.json", ".outcomes.json");
 class HindsightLinearAdapter {
   async createIssue() { globalThis.__hindsightCreateCalls = (globalThis.__hindsightCreateCalls || 0) + 1; return { id: "issue_1", url: "https://linear.app/acme/issue/ABC-1", status: "Todo" }; }
@@ -323,6 +329,28 @@ test("hindsight synthesis disables direct file-write tools and restores the sess
   restoreTools();
   restoreTools();
   assert.deepEqual(setActiveToolsCalls, [["hindsight_document_write"], normalTools]);
+});
+
+test("hindsight-notes registers a current-session-only add workflow", async () => {
+  const { default: conversationCatalog } = await loadConversationCatalogExtension();
+  const commands = [];
+  conversationCatalog({
+    on: () => {}, registerTool: () => {}, registerCommand: (name, command) => commands.push({ name, ...command }),
+    getActiveTools: () => [], setActiveTools: () => {}, sendUserMessage: () => {},
+  });
+  const notes = commands.find((command) => command.name === "hindsight-notes");
+  const notifications = [];
+  globalThis.__hindsightNoteAdd = undefined;
+  await notes.handler("", {
+    cwd: "/test", hasUI: true,
+    sessionManager: { getSessionId: () => "one", getSessionName: () => "First" },
+    ui: {
+      select: async () => "Add note", input: async () => "Current session note.", confirm: async () => true,
+      notify: (message, level) => notifications.push({ message, level }),
+    },
+  });
+  assert.deepEqual(globalThis.__hindsightNoteAdd, ["/test/.pi/hindsight-notes/one.json", "one", "Current session note."]);
+  assert.match(notifications[0].message, /saved/);
 });
 
 test("hindsight work command rejects noninteractive, untrusted, and missing-config requests before any work selection", async () => {
