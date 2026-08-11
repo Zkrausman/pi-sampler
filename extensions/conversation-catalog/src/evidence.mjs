@@ -103,7 +103,11 @@ function dispositionReportId(recommendations) {
 
 function dispositionMetadata(recommendations) {
   return {
-    schemaVersion: 1,
+    // Version 2 keeps the immutable, already-validated model work fields with
+    // the local user decision. This makes an exported decision self-contained
+    // for the separate trusted-project work workflow; it never adds a network
+    // capability to this report.
+    schemaVersion: 2,
     kind: "pi-hindsight-recommendation-dispositions",
     reportId: dispositionReportId(recommendations),
     provenance: {
@@ -112,11 +116,17 @@ function dispositionMetadata(recommendations) {
     },
     recommendations: recommendations.map((recommendation, index) => ({
       recommendationNumber: index + 1,
-      // Retain the approved original text and pseudonymous citation references;
-      // never read from or write back to the source Pi session.
-      originalRecommendation: recommendation.recommendation,
-      evidenceReferences: recommendation.references,
-      modelSuggestion: { status: recommendation.status, source: recommendation.source },
+      modelSuggestion: {
+        status: recommendation.status,
+        source: recommendation.source,
+        recommendation: recommendation.recommendation,
+        priority: recommendation.priority,
+        expectedImpact: recommendation.expectedImpact,
+        suggestedOwner: recommendation.suggestedOwner,
+        dependencies: recommendation.dependencies,
+        acceptanceCriteria: recommendation.acceptanceCriteria,
+        evidenceReferences: recommendation.references,
+      },
       userDisposition: { status: "not-recorded", source: "not-user-confirmed", rationale: "" },
     })),
   };

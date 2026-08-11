@@ -9,6 +9,8 @@ import { attachEvidenceReferences, createEvidenceManifest, createHindsightRecomm
 import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
 import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
+import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
+import { HindsightLinearAdapter, createRequestPreview, linkLookupRequestPreview } from "./hindsight-linear-adapter.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
 const DEFAULT_FILENAME = "pi-conversation-catalog.html";
@@ -88,6 +90,59 @@ async function configuredPatterns(cwd: string) {
     if (error?.code === "ENOENT") return compileSensitivePatterns();
     throw new Error("Unable to read .pi/conversation-redaction-patterns.json.");
   }
+}
+
+function hindsightWorkErrorMessage(error: unknown) {
+  const code = error instanceof HindsightWorkError ? error.code : "operation_failed";
+  const messages: Record<string, string> = {
+    untrusted_project: "Hindsight work requires a trusted project.",
+    ui_required: "Hindsight work requires Pi's interactive UI.",
+    confirmation_required: "Hindsight work canceled.",
+    config_missing: "Hindsight work is unavailable: .pi/hindsight-linear.json was not found.",
+    invalid_config: "Hindsight work is unavailable: the trusted project config is invalid.",
+    invalid_team_id: "Hindsight work is unavailable: the configured team ID is invalid.",
+    invalid_endpoint: "Hindsight work is unavailable: the configured endpoint is not the official Linear GraphQL endpoint.",
+    invalid_token_reference: "Hindsight work is unavailable: the configured token environment reference is invalid.",
+    missing_token: "Hindsight work is unavailable: the referenced token environment variable is not set.",
+    invalid_disposition_path: "Use a report companion path ending in .dispositions.json.",
+    malformed_metadata: "The disposition metadata is malformed, unsupported, or lacks the required version 2 immutable model fields.",
+    no_accepted_recommendations: "The disposition metadata contains no user-confirmed accepted recommendations.",
+    duplicate_link: "This recommendation already has a local work link; no remote request was made.",
+    invalid_work_links: "The existing local work-links record is invalid; it was not replaced.",
+    linear_request_failed: "Linear could not resolve the requested issue. No local link was written.",
+    linear_http_error: "Linear returned an HTTP error. No local link was written.",
+    linear_graphql_error: "Linear rejected the request. No local link was written.",
+    linear_issue_not_found: "The specified Linear issue was not found. No local link was written.",
+    team_mismatch: "The specified Linear issue is not in the configured team. No local link was written.",
+    invalid_linear_response: "Linear returned an unexpected response. No local link was written.",
+    linear_create_rejected: "Linear did not create the issue. No local link was written.",
+    unknown_create_outcome: "The Linear create outcome is unknown. It was not retried; resolve and explicitly link an existing issue instead.",
+    local_record_failed_after_create: "Linear created the issue, but the local work-link record could not be written. Do not retry creation; resolve and explicitly link the existing issue.",
+  };
+  return messages[code] || "Unable to create or link hindsight work. No local link was written.";
+}
+
+function isTrustedProject(ctx: any) {
+  return typeof ctx?.isProjectTrusted === "function" && ctx.isProjectTrusted() === true;
+}
+
+function acceptedRecommendationLabel(recommendation: any) {
+  const text = typeof recommendation?.recommendation === "string" ? recommendation.recommendation.trim() : "";
+  const preview = Array.from(text).slice(0, 80).join("");
+  return `Recommendation ${recommendation?.recommendationNumber}: ${preview}${Array.from(text).length > 80 ? "…" : ""}`;
+}
+
+async function loadHindsightLinearConfiguration(cwd: string) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(resolve(cwd, HINDSIGHT_WORK_CONFIG_PATH), "utf8"));
+  } catch (error: any) {
+    if (error?.code === "ENOENT") throw new HindsightWorkError("config_missing");
+    throw new HindsightWorkError("invalid_config");
+  }
+  const validated = validateHindsightLinearConfig(parsed);
+  if (!validated.ok) throw new HindsightWorkError(validated.code);
+  return validated;
 }
 
 async function reviewRedactionChoices(ctx: any, findings: any[]) {
@@ -359,6 +414,82 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         }
         ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.${requested.validateClaimSupport ? " Claim-support validation will run as a separate evidence-scoped model pass." : ""}`, "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
+    },
+  });
+
+  pi.registerCommand("hindsight-work", {
+    description: "Interactively create or link one accepted hindsight recommendation in configured Linear",
+    async handler(args, ctx) {
+      try {
+        validateHindsightWorkContext({ hasUI: ctx.hasUI, trusted: isTrustedProject(ctx) });
+        const input = args.trim();
+        if (!input || input.includes("\0")) throw new HindsightWorkError("invalid_disposition_path");
+        const dispositionPath = resolve(ctx.cwd, input);
+        const linksPath = workLinksPathForDispositionPath(dispositionPath);
+        const configuration = await loadHindsightLinearConfiguration(ctx.cwd);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(await readFile(dispositionPath, "utf8"));
+        } catch {
+          throw new HindsightWorkError("malformed_metadata");
+        }
+        const metadata = parseHindsightWorkDispositions(parsed);
+        const accepted = acceptedHindsightRecommendations(metadata);
+        const options = ["Cancel", ...accepted.map(acceptedRecommendationLabel)];
+        const selectedLabel = await ctx.ui.select("Select a user-confirmed accepted recommendation", options);
+        if (!selectedLabel || selectedLabel === "Cancel") throw new Error("Hindsight work canceled.");
+        const selected = accepted[options.indexOf(selectedLabel) - 1];
+        if (!selected) throw new HindsightWorkError("malformed_metadata");
+        const existing = await readHindsightWorkLinks(linksPath);
+        if (existing.links[workLinkKey(metadata.reportId, selected.recommendationNumber)]) throw new HindsightWorkError("duplicate_link");
+
+        const payload = buildLinearIssueCreatePayload(configuration.config.teamId, metadata.reportId, selected);
+        const payloadDigest = digestHindsightWorkPayload(payload);
+        const action = await ctx.ui.select("Choose confirmed work action", ["Create new Linear issue", "Link existing Linear issue", "Cancel"]);
+        if (!action || action === "Cancel") throw new Error("Hindsight work canceled.");
+        const adapter = new HindsightLinearAdapter({ endpoint: configuration.config.endpoint, token: configuration.token });
+        let issue: { id: string; url: string; status: string };
+        let linkAction: "created" | "linked";
+
+        if (action === "Create new Linear issue") {
+          const preview = createRequestPreview(payload);
+          const confirmed = await ctx.ui.confirm("Final confirmation: create Linear issue", `The exact redacted GraphQL payload below will be sent to Linear. It contains no source excerpts, raw session IDs, credentials, assignments, or status changes.\n\n${preview}\n\nCreate this issue now?`);
+          requireFinalHindsightWorkConfirmation(confirmed);
+          issue = await adapter.createIssue(payload, configuration.config.teamId);
+          linkAction = "created";
+        } else if (action === "Link existing Linear issue") {
+          if (typeof ctx.ui.input !== "function") throw new Error("Hindsight work requires a Pi UI that supports entering an existing issue ID.");
+          const issueId = (await ctx.ui.input("Existing Linear issue ID", "Paste the exact Linear issue ID to link"))?.trim();
+          if (!isValidExistingIssueId(issueId)) throw new Error("Enter one valid existing Linear issue ID.");
+          const lookupPreview = linkLookupRequestPreview(issueId);
+          const lookupConfirmed = await ctx.ui.confirm("Confirm Linear issue lookup", `The exact read-only GraphQL lookup payload below will be sent to validate the issue's configured team membership. It does not modify the issue.\n\n${lookupPreview}\n\nResolve this issue now?`);
+          requireFinalHindsightWorkConfirmation(lookupConfirmed);
+          issue = await adapter.resolveIssue(issueId, configuration.config.teamId);
+          const localPreview = JSON.stringify({ action: "linked", issue, payloadDigest }, null, 2);
+          const confirmed = await ctx.ui.confirm("Final confirmation: link existing Linear issue", `The issue was resolved in the configured team. The exact local work-link record below will be written; the existing issue will not be modified.\n\n${localPreview}\n\nLink this issue now?`);
+          requireFinalHindsightWorkConfirmation(confirmed);
+          linkAction = "linked";
+        } else {
+          throw new Error("Hindsight work canceled.");
+        }
+
+        try {
+          await writeHindsightWorkLink(linksPath, metadata.reportId, selected.recommendationNumber, {
+            issueId: issue.id,
+            issueUrl: issue.url,
+            status: issue.status,
+            timestamp: new Date().toISOString(),
+            payloadDigest,
+            action: linkAction,
+          });
+        } catch (error) {
+          if (linkAction === "created") throw new HindsightWorkError("local_record_failed_after_create");
+          throw error;
+        }
+        ctx.ui.notify(`Hindsight work ${linkAction === "created" ? "created" : "linked"}; local record written to ${linksPath}.`, "info");
+      } catch (error: any) {
+        ctx.ui.notify(error?.message === "Hindsight work canceled." ? "Hindsight work canceled." : hindsightWorkErrorMessage(error), "error");
+      }
     },
   });
 
