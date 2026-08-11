@@ -1,0 +1,29 @@
+{
+  "name": "@zkrausman/pi-conversation-catalog",
+  "version": "0.1.0",
+  "description": "Metadata-only static catalog of saved Pi conversations.",
+  "license": "UNLICENSED",
+  "private": false,
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zkrausman/pi-sampler.git",
+    "directory": "extensions/conversation-catalog"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
