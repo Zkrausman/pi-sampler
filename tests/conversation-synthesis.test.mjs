@@ -69,6 +69,26 @@ const findSensitiveContent = () => [];
 const generateExcludedConversationHtml = () => "";
 const pseudonymizeSession = (session) => session.id;
 const redactProjection = (value) => value;
+class HindsightWorkError extends Error { constructor(code) { super(code); this.code = code; } }
+const HINDSIGHT_WORK_CONFIG_PATH = ".pi/hindsight-linear.json";
+const acceptedHindsightRecommendations = (value) => value.recommendations || [];
+const buildLinearIssueCreatePayload = () => ({ teamId: "team", title: "Title", description: "Payload", priority: 2 });
+const digestHindsightWorkPayload = () => "0".repeat(64);
+const isValidExistingIssueId = () => true;
+const parseHindsightWorkDispositions = () => ({ reportId: "hindsight-1234abcd", recommendations: [] });
+const readHindsightWorkLinks = async () => ({ links: {} });
+const requireFinalHindsightWorkConfirmation = () => {};
+const validateHindsightLinearConfig = () => ({ ok: false, code: "invalid_config" });
+const validateHindsightWorkContext = ({ hasUI, trusted }) => { if (!hasUI) throw new HindsightWorkError("ui_required"); if (!trusted) throw new HindsightWorkError("untrusted_project"); };
+const workLinkKey = () => "key";
+const workLinksPathForDispositionPath = (path) => path.replace(".dispositions.json", ".work-links.json");
+const writeHindsightWorkLink = async () => { globalThis.__hindsightWriteCalls = (globalThis.__hindsightWriteCalls || 0) + 1; };
+class HindsightLinearAdapter {
+  async createIssue() { globalThis.__hindsightCreateCalls = (globalThis.__hindsightCreateCalls || 0) + 1; return { id: "issue_1", url: "https://linear.app/acme/issue/ABC-1", status: "Todo" }; }
+  async resolveIssue() { globalThis.__hindsightResolveCalls = (globalThis.__hindsightResolveCalls || 0) + 1; return { id: "issue_1", url: "https://linear.app/acme/issue/ABC-1", status: "Todo" }; }
+}
+const createRequestPreview = () => "{}";
+const linkLookupRequestPreview = () => "{}";
 `;
   const compiled = ts.transpileModule(`${stubs}\n${extension}`, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -143,12 +163,15 @@ test("disposition metadata keeps original model recommendations and pseudonymous
     evidenceReferences: ["one:event-0001"],
   }] });
   assert.equal(metadata.kind, "pi-hindsight-recommendation-dispositions");
+  assert.equal(metadata.schemaVersion, 2);
   assert.match(metadata.reportId, /^hindsight-[a-f0-9]{8}$/);
   assert.deepEqual(metadata.recommendations[0], {
     recommendationNumber: 1,
-    originalRecommendation: "Improve handoff",
-    evidenceReferences: ["one:event-0001"],
-    modelSuggestion: { status: "proposed", source: "model-suggestion" },
+    modelSuggestion: {
+      status: "proposed", source: "model-suggestion", recommendation: "Improve handoff", priority: "medium",
+      expectedImpact: "Reduce delays", suggestedOwner: "Delivery team", dependencies: [],
+      acceptanceCriteria: ["A handoff completes within one business day"], evidenceReferences: ["one:event-0001"],
+    },
     userDisposition: { status: "not-recorded", source: "not-user-confirmed", rationale: "" },
   });
   const original = {
@@ -291,6 +314,29 @@ test("hindsight synthesis disables direct file-write tools and restores the sess
   restoreTools();
   restoreTools();
   assert.deepEqual(setActiveToolsCalls, [["hindsight_document_write"], normalTools]);
+});
+
+test("hindsight work command rejects noninteractive, untrusted, and missing-config requests before any work selection", async () => {
+  const { default: conversationCatalog } = await loadConversationCatalogExtension();
+  const commands = [];
+  conversationCatalog({
+    on: () => {}, registerTool: () => {}, registerCommand: (name, command) => commands.push({ name, ...command }),
+    getActiveTools: () => [], setActiveTools: () => {}, sendUserMessage: () => {},
+  });
+  const hindsightWork = commands.find((command) => command.name === "hindsight-work");
+  const notifications = [];
+  const context = (hasUI, trusted) => ({
+    cwd: "/test", hasUI, isProjectTrusted: () => trusted,
+    ui: { notify: (message, level) => notifications.push({ message, level }), select: async () => { throw new Error("selection must not run"); } },
+  });
+  await hindsightWork.handler("report.dispositions.json", context(false, true));
+  await hindsightWork.handler("report.dispositions.json", context(true, false));
+  await hindsightWork.handler("report.dispositions.json", context(true, true));
+  assert.deepEqual(notifications, [
+    { message: "Hindsight work requires Pi's interactive UI.", level: "error" },
+    { message: "Hindsight work requires a trusted project.", level: "error" },
+    { message: "Hindsight work is unavailable: .pi/hindsight-linear.json was not found.", level: "error" },
+  ]);
 });
 
 test("safe hindsight write preserves a prior disposition seed on failure and remains restricted until settlement", async () => {

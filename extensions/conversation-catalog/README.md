@@ -42,6 +42,7 @@ In Pi, run:
 /conversation-catalog [output-path]
 /conversation-flow <session-id> [output-path]
 /hindsight-document [--validate-claim-support] [output-path]
+/hindsight-work <report.dispositions.json>
 ```
 
 With no argument, `/conversation-catalog` writes
@@ -106,7 +107,49 @@ request. At report generation, the extension also writes a sibling
 `<report-name>.dispositions.json` model-suggestion seed with no user decision.
 If a report write fails, an existing companion seed is preserved. Keep exported
 metadata with the report as appropriate and do not treat the initial seed as a
-user decision.
+user decision. The current **schema version 2** export also carries the
+immutable validated model work fields (priority, impact, owner text,
+dependencies, and acceptance criteria) beside its model provenance and
+pseudonymous citations. Older exports lack those fields and cannot be used for
+external work creation; the extension will reject rather than infer them.
+
+### Create or link accepted hindsight work
+
+`/hindsight-work <report.dispositions.json>` is a separate workflow, not a
+report-browser capability. It requires Pi's interactive UI, a trusted project,
+and a user-exported schema-version-2 disposition file in which at least one
+recommendation is explicitly `accepted · user-confirmed`. It lets you select
+one accepted recommendation and then either create one new Linear issue or
+link one exact existing Linear issue ID. It previews the exact redacted GraphQL
+payload and requires final confirmation immediately before creation. Existing
+issues are resolved and checked against the configured team before a second,
+final confirmation persists a link; linking does not modify the existing issue.
+
+In the trusted consumer project only, create `.pi/hindsight-linear.json`:
+
+```json
+{
+  "teamId": "your-linear-team-id",
+  "endpoint": "https://api.linear.app/graphql",
+  "tokenEnvRef": "$LINEAR_API_KEY"
+}
+```
+
+The endpoint must be exactly the official URL, and the token is read only from
+the named environment variable; never put a token in this file or a report.
+Creation transmits the approved recommendation text, model priority/impact,
+suggested owner as text (never an assignment), dependencies, acceptance
+criteria, model/user provenance, and pseudonymous citations. It never sends
+source excerpts, raw Pi session IDs, credentials, the user rationale, or report
+HTML. The workflow does not search, poll, assign, or mutate statuses.
+
+Only after a confirmed remote create or a confirmed validated link does it
+atomically write `<report>.work-links.json`. Each local record is keyed by
+report ID and recommendation number and contains the issue ID/URL, observed
+status, timestamp, action, and a SHA-256 payload digest. A duplicate local link
+is rejected before any remote request. A create timeout or transport ambiguity
+is reported as unknown and is never retried; resolve the issue manually and use
+the explicit link action instead.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,
