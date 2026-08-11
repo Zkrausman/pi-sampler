@@ -204,6 +204,7 @@ function hindsightNotesErrorMessage(error: unknown) {
     notes_missing: "No local notes exist for this session.",
     notes_limit_reached: "This session already has the maximum number of local notes.",
     notes_lock_timeout: "Another local hindsight-note operation is in progress; no change was made.",
+    required_redaction: "A required sensitive finding must be redacted or excluded; no note was included.",
     confirmation_required: "Hindsight notes canceled.",
   };
   return messages[code] || "Unable to update local hindsight notes.";
@@ -255,7 +256,8 @@ async function reviewHindsightNotes(ctx: any, notes: any[], patterns: any[]) {
         );
         if (!choice || choice === "Cancel") throw new HindsightNotesError("confirmation_required");
         if (choice === "Exclude this note") { excluded = true; break; }
-        decisions[finding.id] = finding.requiredRedaction === true || choice !== "Retain" ? "redact" : "retain";
+        if (finding.requiredRedaction === true && choice !== "Redact (required)") throw new HindsightNotesError("required_redaction");
+        decisions[finding.id] = choice === "Retain" ? "retain" : "redact";
       }
       if (excluded) continue;
     }
@@ -301,10 +303,11 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
   for (const [index, finding] of findings.entries()) {
     const choice = await ctx.ui.select(
       `Finding ${index + 1}/${findings.length}: ${finding.pattern} — ${finding.preview}`,
-      ["Redact (recommended)", "Retain", "Exclude this conversation"],
+      finding.requiredRedaction === true ? ["Redact (required)", "Exclude this conversation"] : ["Redact (recommended)", "Retain", "Exclude this conversation"],
     );
     if (!choice) throw new Error("Conversation export canceled.");
     if (choice === "Exclude this conversation") return { excluded: true, decisions };
+    if (finding.requiredRedaction === true && choice !== "Redact (required)") throw new Error("Required sensitive finding must be redacted or the conversation excluded.");
     decisions[finding.id] = choice === "Retain" ? "retain" : "redact";
   }
   return { excluded: false, decisions };

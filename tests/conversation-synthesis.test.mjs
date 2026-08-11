@@ -65,10 +65,16 @@ const restrictToolsForHindsightSynthesis = (pi) => {
 };
 const compileSensitivePatterns = () => [];
 const createRedactionMetadata = () => ({});
-const findSensitiveContent = (projection) => (projection?.events || []).flatMap((event) => event?.summary?.includes("user@example.test") ? [{ id: "finding-1", eventId: event.id, pattern: "email address", preview: "user@example.test", start: event.summary.indexOf("user@example.test"), end: event.summary.indexOf("user@example.test") + 17, field: "summary" }] : []);
+const findSensitiveContent = (projection) => (projection?.events || []).flatMap((event) => {
+  const email = "user@example.test";
+  const slack = "xoxb-1234567890-AbCdEfGhIjKl";
+  const value = event?.summary || "";
+  const matched = value.includes(email) ? { pattern: "email address", preview: email, requiredRedaction: false } : value.includes(slack) ? { pattern: "Slack token", preview: slack, requiredRedaction: true } : undefined;
+  return matched ? [{ id: "finding-1", eventId: event.id, ...matched, start: value.indexOf(matched.preview), end: value.indexOf(matched.preview) + matched.preview.length, field: "summary" }] : [];
+});
 const generateExcludedConversationHtml = () => "";
 const pseudonymizeSession = (session) => session.id;
-const redactProjection = (value, findings, decisions) => ({ ...value, events: (value?.events || []).map((event) => ({ ...event, summary: findings?.length && decisions?.[findings[0].id] === "redact" ? event.summary.replace("user@example.test", "[REDACTED: email address]") : event.summary })) });
+const redactProjection = (value, findings, decisions) => ({ ...value, events: (value?.events || []).map((event) => ({ ...event, summary: findings?.length && decisions?.[findings[0].id] === "redact" ? event.summary.replace(findings[0].preview, "[REDACTED: " + findings[0].pattern + "]") : event.summary })) });
 class HindsightWorkError extends Error { constructor(code) { super(code); this.code = code; } }
 const HINDSIGHT_WORK_CONFIG_PATH = ".pi/hindsight-linear.json";
 const acceptedHindsightRecommendations = (value) => value.recommendations || [];
@@ -92,6 +98,7 @@ const writeHindsightFeedbackSeed = async (path, seed) => { globalThis.__hindsigh
 const refreshHindsightFeedbackViews = async () => {};
 const recordHindsightFeedback = async () => {};
 class HindsightNotesError extends Error { constructor(code) { super(code); this.code = code; } }
+class HindsightOutcomeError extends Error { constructor(code) { super(code); this.code = code; } }
 const hindsightNotesPath = (_cwd, reference) => "/test/.pi/hindsight-notes/" + reference + ".json";
 const hindsightNotesSessionReference = (id) => "session-" + id.padEnd(32, "0").slice(0, 32);
 const readHindsightNotes = async (_root, reference) => globalThis.__hindsightNotesByReference?.[reference];
@@ -393,6 +400,44 @@ test("single-session hindsight selection sends only selected reviewed/redacted n
   await tools.find((tool) => tool.name === "hindsight_document_write").execute("excluded", { claims: [], recommendations: [] });
   assert.deepEqual(globalThis.__hindsightDocumentArgs[4], []);
   handlers.get("agent_settled")();
+  globalThis.__hindsightNotesByReference = undefined;
+  globalThis.__hindsightEntries = undefined;
+});
+
+test("required Slack note redaction blocks Retain and never reaches prompt or context HTML", async () => {
+  const { default: conversationCatalog } = await loadConversationCatalogExtension();
+  const commands = []; const tools = []; const handlers = new Map(); const sent = [];
+  const pi = {
+    on: (event, handler) => handlers.set(event, handler), registerTool: (tool) => tools.push(tool),
+    registerCommand: (name, command) => commands.push({ name, ...command }), getActiveTools: () => [], setActiveTools: () => {}, sendUserMessage: (message) => sent.push(message),
+  };
+  const selectedRef = "session-one00000000000000000000000000000";
+  const slackToken = "xoxb-1234567890-AbCdEfGhIjKl";
+  const slackNote = { noteId: "note-0123456789abcdef0123456789abcdef", text: `Do not retain ${slackToken}.`, provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: "2026-09-01T12:00:00.000Z" } };
+  globalThis.__hindsightEntries = { "/one": { events: [{ id: "event-one", summary: "Selected source", evidence: { reference: "one:event-0001" } }], edges: [] } };
+  globalThis.__hindsightNotesByReference = { [selectedRef]: { notes: [slackNote] } };
+  conversationCatalog(pi);
+  const hindsight = commands.find((command) => command.name === "hindsight-document");
+  const notifications = [];
+  const chooseRequiredRedaction = async (title, options) => title === "Select one conversation for hindsight" ? options[1]
+    : title.includes("sensitive content detected") ? "Review findings"
+      : title.startsWith("Note finding") ? "Redact (required)" : (() => { throw new Error(`unexpected picker: ${title}`); })();
+  await hindsight.handler("", { cwd: "/test", hasUI: true, isProjectTrusted: () => true, ui: { select: chooseRequiredRedaction, confirm: async () => true, notify: (message, level) => notifications.push({ message, level }) } });
+  assert.doesNotMatch(JSON.stringify(globalThis.__hindsightPromptArgs), new RegExp(slackToken));
+  await tools.find((tool) => tool.name === "hindsight_document_write").execute("draft", { claims: [], recommendations: [] });
+  assert.doesNotMatch(JSON.stringify(globalThis.__hindsightDocumentArgs), new RegExp(slackToken));
+  handlers.get("agent_settled")();
+
+  globalThis.__hindsightPromptArgs = undefined;
+  globalThis.__hindsightDocumentArgs = undefined;
+  const attemptRetain = async (title, options) => title === "Select one conversation for hindsight" ? options[1]
+    : title.includes("sensitive content detected") ? "Review findings"
+      : title.startsWith("Note finding") ? "Retain" : (() => { throw new Error(`unexpected picker: ${title}`); })();
+  await hindsight.handler("", { cwd: "/test", hasUI: true, isProjectTrusted: () => true, ui: { select: attemptRetain, confirm: async () => true, notify: (message, level) => notifications.push({ message, level }) } });
+  assert.equal(globalThis.__hindsightPromptArgs, undefined);
+  assert.equal(globalThis.__hindsightDocumentArgs, undefined);
+  assert.equal(sent.length, 1);
+  assert.match(notifications.at(-1).message, /required sensitive finding/i);
   globalThis.__hindsightNotesByReference = undefined;
   globalThis.__hindsightEntries = undefined;
 });

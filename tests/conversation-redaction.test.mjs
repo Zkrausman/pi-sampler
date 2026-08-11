@@ -40,6 +40,20 @@ test("redaction replaces only chosen visible values and metadata omits secrets",
   assert.equal(metadata.decisions.filter((decision) => decision.action === "redact").length, 2);
 });
 
+test("required Slack findings reject retain decisions and redact before rendering", () => {
+  const slackToken = "xoxb-1234567890-AbCdEfGhIjKl";
+  const source = { events: [{ id: "event-1", category: "user", title: "User", timestamp: "Unknown time", summary: `Use ${slackToken}.`, metadata: [] }], edges: [] };
+  const findings = findSensitiveContent(source);
+  const retain = Object.fromEntries(findings.map((finding) => [finding.id, "retain"]));
+  assert.deepEqual(findings.map((finding) => finding.pattern), ["Slack token"]);
+  assert.throws(() => redactProjection(source, findings, retain), /required_redaction/);
+  assert.throws(() => createRedactionMetadata("session-1", findings, retain, false), /required_redaction/);
+  const redacted = redactProjection(source, findings, Object.fromEntries(findings.map((finding) => [finding.id, "redact"])));
+  const html = generateConversationFlowHtml({ id: "session-safe", name: "Selected conversation" }, redacted);
+  assert.doesNotMatch(html, new RegExp(slackToken));
+  assert.match(html, /\[REDACTED: Slack token\]/);
+});
+
 test("overlapping findings redact their complete union", () => {
   const source = { events: [{ id: "event-1", summary: "Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ", metadata: [] }], edges: [] };
   const findings = findSensitiveContent(source, compileSensitivePatterns([{ name: "inner token", expression: "ABC", flags: "g" }]));

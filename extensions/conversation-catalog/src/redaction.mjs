@@ -121,8 +121,19 @@ export function pseudonymizeSession(session) {
   return `session-${(hash >>> 0).toString(36)}`;
 }
 
+function requireRedactionDecisions(findings, decisions, { excluded = false } = {}) {
+  for (const finding of (Array.isArray(findings) ? findings : [])) {
+    if (finding?.requiredRedaction !== true) continue;
+    const action = decisions?.[finding.id];
+    // A persisted/manual retain is never a valid fallback for a mandatory
+    // finding. An excluded whole projection carries no renderable content.
+    if (action === "retain" || (!excluded && action !== "redact")) throw new Error("required_redaction");
+  }
+}
+
 /** Returns a renderer-safe copy. Only findings chosen for redaction are changed. */
 export function redactProjection(projection, findings, decisions) {
+  requireRedactionDecisions(findings, decisions);
   const redactIds = new Set((Array.isArray(findings) ? findings : [])
     .filter((finding) => decisions?.[finding.id] === "redact")
     .map((finding) => finding.id));
@@ -157,6 +168,7 @@ export function redactProjection(projection, findings, decisions) {
 /** Metadata never includes matched sensitive text or the unredacted preview. */
 export function createRedactionMetadata(sessionId, findings, decisions, excluded) {
   const safeFindings = Array.isArray(findings) ? findings : [];
+  requireRedactionDecisions(safeFindings, decisions, { excluded: Boolean(excluded) });
   return {
     schemaVersion: 1,
     sessionId: text(sessionId),
