@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildHindsightDocument, buildSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
+import { restrictToolsForHindsightSynthesis } from "../extensions/conversation-catalog/src/hindsight-tools.mjs";
 
 const source = (id, summary) => ({
   events: [{ id: `${id}-event-1`, category: "user", timestamp: "2025-01-01", summary, evidence: { reference: `${id}:event-0001` } }],
@@ -47,3 +48,19 @@ test("synthesis prompt includes redacted flow and relationship-map context", () 
 });
 
 test("hindsight document rejects fewer than two included conversations", () => assert.throws(() => buildHindsightDocument([source("one", "First")]), /at least two/));
+
+test("hindsight synthesis disables direct file-write tools and restores the session tool set", () => {
+  const normalTools = ["read", "write", "edit", "bash", "hindsight_document_write"];
+  const setActiveToolsCalls = [];
+  const pi = {
+    getActiveTools: () => normalTools,
+    setActiveTools: (tools) => setActiveToolsCalls.push(tools),
+  };
+
+  const restoreTools = restrictToolsForHindsightSynthesis(pi);
+  assert.deepEqual(setActiveToolsCalls, [["hindsight_document_write"]]);
+
+  restoreTools();
+  restoreTools();
+  assert.deepEqual(setActiveToolsCalls, [["hindsight_document_write"], normalTools]);
+});

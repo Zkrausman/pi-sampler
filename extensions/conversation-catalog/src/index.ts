@@ -7,6 +7,7 @@ import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
 import { attachEvidenceReferences, createEvidenceManifest } from "./evidence.mjs";
 import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
 import { buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
+import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
 const DEFAULT_FILENAME = "pi-conversation-catalog.html";
@@ -84,7 +85,16 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
 
 /** A read-only catalog of Pi session metadata and an opt-in historical flow viewer. */
 export default function conversationCatalog(pi: ExtensionAPI) {
-  let pendingHindsight: { sources: any[]; outputPath: string } | undefined;
+  let pendingHindsight: { sources: any[]; outputPath: string; restoreTools: () => void } | undefined;
+
+  // Keep every direct write-capable session tool disabled until the model run
+  // settles, including any follow-up turn after the safe tool returns.
+  pi.on("agent_settled", () => {
+    const pending = pendingHindsight;
+    if (!pending) return;
+    pendingHindsight = undefined;
+    pending.restoreTools();
+  });
 
   pi.registerTool({
     name: "hindsight_document_write",
@@ -256,9 +266,16 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           sources.push({ reference, events: cited.events, edges: cited.edges });
         }
         const outputPath = resolveOutputPath(args, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
-        pendingHindsight = { sources, outputPath };
-        pi.sendUserMessage(buildSynthesisPrompt(sources));
-        ctx.ui.notify(`Redacted evidence submitted to the active model. It will generate the hindsight document through the safe report contract at ${outputPath}.`, "info");
+        const restoreTools = restrictToolsForHindsightSynthesis(pi);
+        try {
+          pendingHindsight = { sources, outputPath, restoreTools };
+          pi.sendUserMessage(buildSynthesisPrompt(sources));
+        } catch (error) {
+          pendingHindsight = undefined;
+          restoreTools();
+          throw error;
+        }
+        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.`, "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
     },
   });
