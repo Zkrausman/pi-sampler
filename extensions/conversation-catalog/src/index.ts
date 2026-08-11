@@ -10,6 +10,7 @@ import { generateRelationshipMapHtml, projectRelationshipMap } from "./map.mjs";
 import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkBacklinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
+import { HindsightOutcomeError, appendHindsightOutcomeUpdate, createHindsightOutcomeOrigin, hindsightReportPathForDispositionPath, outcomeHistoryPathForDispositionPath, outcomeHistoryReportPathForDispositionPath, readHindsightOutcomeHistory, refreshHindsightReportOutcomeHistory, withHindsightOutcomeLock, writeHindsightOutcomeHistoryReport } from "./hindsight-outcomes.mjs";
 import { HindsightLinearAdapter, createRequestPreview, linkLookupRequestPreview } from "./hindsight-linear-adapter.mjs";
 import { compileSensitivePatterns, createRedactionMetadata, findSensitiveContent, generateExcludedConversationHtml, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 
@@ -33,10 +34,21 @@ function flowArguments(args: string) {
 
 function hindsightArguments(args: string) {
   const flag = "--validate-claim-support";
-  const trimmed = args.trim();
-  if (trimmed === flag) return { outputPath: "", validateClaimSupport: true };
-  if (trimmed.startsWith(`${flag} `)) return { outputPath: trimmed.slice(flag.length).trim(), validateClaimSupport: true };
-  return { outputPath: args, validateClaimSupport: false };
+  let remaining = args.trim();
+  let validateClaimSupport = false;
+  if (remaining === flag || remaining.startsWith(`${flag} `)) {
+    validateClaimSupport = true;
+    remaining = remaining.slice(flag.length).trim();
+  }
+  const priorMatch = remaining.match(/(?:^|\s)--prior-outcomes\s+(\S+)/);
+  let priorOutcomesPath: string | undefined;
+  if (priorMatch) {
+    priorOutcomesPath = priorMatch[1];
+    remaining = `${remaining.slice(0, priorMatch.index)}${remaining.slice((priorMatch.index || 0) + priorMatch[0].length)}`.trim();
+  } else if (/(?:^|\s)--prior-outcomes(?:\s|$)/.test(remaining)) {
+    throw new Error("--prior-outcomes requires one .outcomes.json path.");
+  }
+  return { outputPath: remaining, validateClaimSupport, priorOutcomesPath };
 }
 
 function safeFilename(value: string) {
@@ -123,6 +135,24 @@ function hindsightWorkErrorMessage(error: unknown) {
   return messages[code] || "Unable to create or link hindsight work. No local link was written.";
 }
 
+function hindsightOutcomeErrorMessage(error: unknown) {
+  const code = error instanceof HindsightOutcomeError ? error.code : "operation_failed";
+  const messages: Record<string, string> = {
+    ui_required: "Hindsight outcome updates require Pi's interactive UI.",
+    invalid_disposition_path: "Use a report companion path ending in .dispositions.json.",
+    malformed_metadata: "The disposition metadata is malformed, unsupported, or lacks an accepted user-confirmed recommendation.",
+    no_accepted_recommendations: "The disposition metadata contains no user-confirmed accepted recommendations.",
+    accepted_recommendation_required: "Outcome updates require a user-confirmed accepted recommendation.",
+    malformed_outcome: "The outcome history or update is malformed; it was not changed.",
+    unsafe_outcome_text: "Outcome text must not include raw session identifiers or credentials; it was not saved.",
+    outcome_origin_mismatch: "The outcome history belongs to a different immutable recommendation; it was not changed.",
+    outcome_history_missing: "No outcome history exists at the supplied path.",
+    outcome_report_marker_missing: "The generated hindsight report has no safe outcome-history placeholder; the JSON record was not changed.",
+    confirmation_required: "Hindsight outcome update canceled.",
+  };
+  return messages[code] || "Unable to record the local hindsight outcome update.";
+}
+
 function isTrustedProject(ctx: any) {
   return typeof ctx?.isProjectTrusted === "function" && ctx.isProjectTrusted() === true;
 }
@@ -178,6 +208,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     outputPath: string;
     restoreTools: () => void;
     validateClaimSupport: boolean;
+    priorOutcomes?: any;
     phase: "draft" | "validation";
     modelOutput?: any;
   } | undefined;
@@ -228,7 +259,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
           pi.setActiveTools(["hindsight_claim_support_validate"]);
           return { content: [{ type: "text", text: validationPrompt }] };
         }
-        const html = buildHindsightDocument(pendingHindsight.sources, params);
+        const html = buildHindsightDocument(pendingHindsight.sources, params, undefined, pendingHindsight.priorOutcomes);
         const dispositionPath = await writeHindsightReport(pendingHindsight.outputPath, html, { recommendations: params.recommendations });
         const outputPath = pendingHindsight.outputPath;
         // Keep the pending state until agent_settled restores the original tool set.
@@ -263,7 +294,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         return { content: [{ type: "text", text: "No claim-support validation is awaiting completion." }] };
       }
       try {
-        const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params);
+        const html = buildHindsightDocument(pendingHindsight.sources, pendingHindsight.modelOutput, params, pendingHindsight.priorOutcomes);
         const dispositionPath = await writeHindsightReport(pendingHindsight.outputPath, html, { recommendations: pendingHindsight.modelOutput.recommendations });
         const outputPath = pendingHindsight.outputPath;
         return { content: [{ type: "text", text: `Hindsight document with claim-support validation written to ${outputPath}. Model-suggestion disposition seed written locally to ${dispositionPath}.` }] };
@@ -379,6 +410,14 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       try {
         if (!ctx.hasUI) throw new Error("Hindsight generation requires Pi's interactive UI.");
         const requested = hindsightArguments(args);
+        let priorOutcomes: any;
+        if (requested.priorOutcomesPath) {
+          if (!requested.priorOutcomesPath.endsWith(".outcomes.json") || requested.priorOutcomesPath.includes("\0")) {
+            throw new HindsightOutcomeError("invalid_disposition_path");
+          }
+          priorOutcomes = await readHindsightOutcomeHistory(resolve(ctx.cwd, requested.priorOutcomesPath));
+          if (!priorOutcomes) throw new HindsightOutcomeError("outcome_history_missing");
+        }
         const sessions = await SessionManager.listAll();
         if (sessions.length === 0) throw new Error("No saved conversations are available for hindsight generation.");
         // Numbered choices remain unambiguous even if saved-session labels match.
@@ -406,15 +445,79 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
         try {
-          pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, phase: "draft" };
-          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport }));
+          pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, priorOutcomes, phase: "draft" };
+          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport, priorOutcomes }));
         } catch (error) {
           pendingHindsight = undefined;
           restoreTools();
           throw error;
         }
-        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.${requested.validateClaimSupport ? " Claim-support validation will run as a separate evidence-scoped model pass." : ""}`, "info");
-      } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
+        ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.${requested.validateClaimSupport ? " Claim-support validation will run as a separate evidence-scoped model pass." : ""}${priorOutcomes ? " Deliberately supplied prior outcomes are labeled context, not evidence." : ""}`, "info");
+      } catch (error) { ctx.ui.notify(error instanceof HindsightOutcomeError ? hindsightOutcomeErrorMessage(error) : error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
+    },
+  });
+
+  pi.registerCommand("hindsight-outcome", {
+    description: "Record a local user-observed outcome update for one accepted hindsight recommendation",
+    async handler(args, ctx) {
+      try {
+        if (!ctx.hasUI) throw new HindsightOutcomeError("ui_required");
+        if (typeof ctx.ui.input !== "function") throw new HindsightOutcomeError("ui_required");
+        const input = args.trim();
+        if (!input || input.includes("\0")) throw new HindsightOutcomeError("invalid_disposition_path");
+        const dispositionPath = resolve(ctx.cwd, input);
+        const outcomesPath = outcomeHistoryPathForDispositionPath(dispositionPath);
+        const outcomeReportPath = outcomeHistoryReportPathForDispositionPath(dispositionPath);
+        const reportPath = hindsightReportPathForDispositionPath(dispositionPath);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(await readFile(dispositionPath, "utf8"));
+        } catch {
+          throw new HindsightOutcomeError("malformed_metadata");
+        }
+        const metadata = parseHindsightWorkDispositions(parsed);
+        const accepted = acceptedHindsightRecommendations(metadata);
+        const options = ["Cancel", ...accepted.map(acceptedRecommendationLabel)];
+        const selectedLabel = await ctx.ui.select("Select a user-confirmed accepted recommendation", options);
+        if (!selectedLabel || selectedLabel === "Cancel") throw new Error("Hindsight outcome update canceled.");
+        const selected = accepted[options.indexOf(selectedLabel) - 1];
+        if (!selected) throw new HindsightOutcomeError("accepted_recommendation_required");
+        const status = await ctx.ui.select("User-observed implementation status", ["not-started", "in-progress", "completed", "paused", "stopped", "Cancel"]);
+        if (!status || status === "Cancel") throw new Error("Hindsight outcome update canceled.");
+        const observedResult = await ctx.ui.input("Observed result", "What did you personally observe? This is not model inference.");
+        const measurementEvidence = await ctx.ui.input("Measurement or user-supplied evidence", "What measurement or observation supports the result? Do not paste session logs.");
+        const unexpectedEffects = await ctx.ui.input("Unexpected effects", "What unexpected effects did you observe? Enter 'None observed' when applicable.");
+        const followUpDecision = await ctx.ui.select("User-confirmed follow-up decision", ["continue", "adjust", "monitor", "stop", "no-follow-up", "Cancel"]);
+        if (observedResult === undefined || measurementEvidence === undefined || unexpectedEffects === undefined || !followUpDecision || followUpDecision === "Cancel") {
+          throw new Error("Hindsight outcome update canceled.");
+        }
+        const origin = createHindsightOutcomeOrigin(metadata.reportId, selected);
+        const links = await readHindsightWorkLinks(workLinksPathForDispositionPath(dispositionPath));
+        const workLink = links.links[workLinkKey(metadata.reportId, selected.recommendationNumber)];
+        const update = {
+          status,
+          observedResult,
+          measurementEvidence,
+          unexpectedEffects,
+          followUpDecision,
+          provenance: { source: "user-observed", confirmation: "user-confirmed", confirmedAt: new Date().toISOString() },
+          ...(workLink ? { workLink } : {}),
+        };
+        const confirmed = await ctx.ui.confirm("Final confirmation: save local outcome update", "This appends a user-observed/user-confirmed local outcome record. It makes no network request, does not read or modify session logs, and labels the text as context rather than source evidence. Save this update?");
+        if (confirmed !== true) throw new HindsightOutcomeError("confirmation_required");
+        const history = await withHindsightOutcomeLock(outcomesPath, () => appendHindsightOutcomeUpdate(outcomesPath, origin, update));
+        try {
+          await Promise.all([
+            writeHindsightOutcomeHistoryReport(outcomeReportPath, history),
+            refreshHindsightReportOutcomeHistory(reportPath, history),
+          ]);
+          ctx.ui.notify(`Local outcome update recorded in ${outcomesPath}. Inspectable history refreshed in ${reportPath} and ${outcomeReportPath}.`, "info");
+        } catch {
+          ctx.ui.notify(`Local outcome update recorded in ${outcomesPath}, but its inspectable HTML history could not be fully refreshed. The JSON record remains intact.`, "error");
+        }
+      } catch (error: any) {
+        ctx.ui.notify(error?.message === "Hindsight outcome update canceled." ? "Hindsight outcome update canceled." : hindsightOutcomeErrorMessage(error), "error");
+      }
     },
   });
 

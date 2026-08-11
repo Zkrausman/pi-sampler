@@ -254,7 +254,7 @@ export function buildClaimSupportValidationPrompt(sources, modelOutput) {
  * prose is accepted as strictly validated structured claims and recommendations,
  * then escaped and linked here rather than allowing the model to write markup.
  */
-export function buildHindsightDocument(sources, modelOutput = undefined, claimSupportValidation = undefined) {
+export function buildHindsightDocument(sources, modelOutput = undefined, claimSupportValidation = undefined, priorOutcomes = undefined) {
   const selected = selectedSources(sources);
   const evidence = sourceEvidence(selected);
   const allowedReferences = new Set(evidence.filter((item) => item.availability !== "excluded").map((item) => item.reference));
@@ -269,11 +269,13 @@ export function buildHindsightDocument(sources, modelOutput = undefined, claimSu
     claims: [...model.claims, ...fallbackClaims(selected)],
     recommendations: model.recommendations,
     claimSupportValidation: validation,
+    // This separately supplied context intentionally never enters `evidence`.
+    priorOutcomes,
     evidence,
   });
 }
 
-export function buildSynthesisPrompt(sources, { validateClaimSupport = false } = {}) {
+export function buildSynthesisPrompt(sources, { validateClaimSupport = false, priorOutcomes = undefined } = {}) {
   const selected = selectedSources(sources);
   const evidence = sourceEvidence(selected);
   const includedEvidence = evidence.filter((item) => item.availability !== "excluded");
@@ -281,13 +283,17 @@ export function buildSynthesisPrompt(sources, { validateClaimSupport = false } =
   const validationInstruction = validateClaimSupport
     ? "The user explicitly opted into a separate claim-support validation pass. Call hindsight_document_write first; its safe result will provide the only redacted excerpts permitted for the second pass."
     : "Do not request a claim-support validation pass unless the user explicitly opted in.";
+  const priorOutcomeInstruction = priorOutcomes === undefined
+    ? "No prior-outcome context was deliberately supplied."
+    : "The user deliberately supplied the prior-outcome context below. It is user-observed/user-confirmed context only, not source evidence: do not cite it, treat it as proof, or use it to support any claim outside its labeled context.";
+  const priorOutcomeBundle = priorOutcomes === undefined ? "" : `\n\nPRIOR-OUTCOME CONTEXT (not evidence; do not cite):\n${JSON.stringify(priorOutcomes)}`;
   return `Create a rigorous hindsight analysis from ONLY the selected conversation's redacted source bundle below. Identify evidence, friction/rework, recommendations, and confidence. Every material claim and recommendation must cite one or more exact included evidence references and be labeled direct evidence or inference where applicable. Do not invent facts or use any content outside this bundle.
 
-Do NOT write HTML or use a file-writing tool. Call hindsight_document_write exactly once with a short title, structured claims, and structured recommendations. Every recommendation must include: recommendation, priority (critical, high, medium, or low), expectedImpact, suggestedOwner, dependencies (an array, which may be empty), acceptanceCriteria (one or more measurable criteria), status "proposed", source "model-suggestion", and evidenceReferences. Status and source are fixed: a model must never claim that a user confirmed an owner, dependency, or recommendation. Owner and dependency text must be derived only from this reviewed, redacted source bundle. The tool rejects malformed recommendations rather than filling in missing values. It escapes model text and generates all citation anchors, redacted source sections, flow/map context, and excluded-source fallbacks in the requested standalone HTML output. Do not cite an excluded reference for a substantive claim or recommendation; the contract records its redaction-review fallback itself. ${validationInstruction}
+Do NOT write HTML or use a file-writing tool. Call hindsight_document_write exactly once with a short title, structured claims, and structured recommendations. Every recommendation must include: recommendation, priority (critical, high, medium, or low), expectedImpact, suggestedOwner, dependencies (an array, which may be empty), acceptanceCriteria (one or more measurable criteria), status "proposed", source "model-suggestion", and evidenceReferences. Status and source are fixed: a model must never claim that a user confirmed an owner, dependency, or recommendation. Owner and dependency text must be derived only from this reviewed, redacted source bundle. The tool rejects malformed recommendations rather than filling in missing values. It escapes model text and generates all citation anchors, redacted source sections, flow/map context, and excluded-source fallbacks in the requested standalone HTML output. Do not cite an excluded reference for a substantive claim or recommendation; the contract records its redaction-review fallback itself. ${validationInstruction} ${priorOutcomeInstruction}
 
 REDACTED SOURCE BUNDLE:
 ${JSON.stringify(includedEvidence)}
 
 EXCLUDED SELECTION REFERENCES (do not use for substantive claims or recommendations):
-${JSON.stringify(excludedEvidence)}`;
+${JSON.stringify(excludedEvidence)}${priorOutcomeBundle}`;
 }

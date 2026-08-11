@@ -41,7 +41,8 @@ In Pi, run:
 ```text
 /conversation-catalog [output-path]
 /conversation-flow <session-id> [output-path]
-/hindsight-document [--validate-claim-support] [output-path]
+/hindsight-document [--validate-claim-support] [--prior-outcomes <report.outcomes.json>] [output-path]
+/hindsight-outcome <report.dispositions.json>
 /hindsight-work <report.dispositions.json>
 ```
 
@@ -150,6 +151,37 @@ status, timestamp, action, and a SHA-256 payload digest. A duplicate local link
 is rejected before any remote request. A create timeout or transport ambiguity
 is reported as unknown and is never retried; resolve the issue manually and use
 the explicit link action instead.
+
+### Local recommendation outcomes
+
+`/hindsight-outcome <report.dispositions.json>` is an interactive, local-only
+follow-up workflow. It accepts only a schema-version-2 disposition export with
+an explicitly `accepted · user-confirmed` recommendation. For that exact
+recommendation it collects a bounded implementation status, observed result,
+measurement or user-supplied evidence, unexpected effects, and one follow-up
+decision. The final confirmation fixes provenance as
+`user-observed · user-confirmed`; the workflow never treats the text as model
+inference.
+
+Each append-only, schema-version-1 `<report>.outcomes.json` record carries an
+immutable origin (report ID, recommendation number, SHA-256 digest of the
+validated model suggestion, and its pseudonymous citations). If the existing
+local `<report>.work-links.json` has the same origin key, the outcome update
+copies that validated work-link snapshot. It makes no network request, does not
+read or modify a Pi session log, and does not accept arbitrary source IDs,
+recognizable raw-session identifiers, credentials, or source excerpts. JSON
+persistence is an atomic replacement; the safe outcome-history section in the
+originating report and an accessible, safely escaped `<report>.outcomes.html`
+history companion are then refreshed for inspection. If either HTML refresh
+fails, the confirmed JSON record remains the source of truth and Pi reports the
+limited failure.
+
+To deliberately carry one prior outcome history into a later hindsight report,
+pass `--prior-outcomes <report.outcomes.json>` to `/hindsight-document`. The
+safe renderer labels it **prior user-observed outcome context** and explicitly
+states that it is not source evidence; it never enters the citation/evidence
+index and generated claims or recommendations cannot cite it. Without that
+explicit flag, no outcome history is supplied to a later report flow.
 
 The flow document shows every persisted entry from all branches in timestamp
 order. Colored cards distinguish user, assistant, tool-call, tool-result,
