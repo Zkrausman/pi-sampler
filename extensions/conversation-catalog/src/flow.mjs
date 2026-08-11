@@ -211,10 +211,14 @@ export function generateConversationFlowHtml(session, projection) {
     ? '<p class="empty">No renderable conversation entries were found.</p>'
     : events.map((event, index) => {
       const links = (outgoing.get(event.id) || []).map((edge) => `<a class="connector" href="#${escapeHtml(edge.to)}">→ ${escapeHtml(edge.label)}</a>`).join("");
+      const evidence = event.evidence?.reference
+        ? `<p class="evidence-citation"><strong>${escapeHtml(event.evidence.classification || "direct evidence")}</strong> · <a href="#${escapeHtml(event.id)}">${escapeHtml(event.evidence.reference)}</a> <span>(this card is the inspectable source context)</span></p>`
+        : "";
       return `<article id="${escapeHtml(event.id)}" class="event event-${escapeHtml(event.category)}">
         <div class="event-head"><span class="sequence">${index + 1}</span><span class="kind">${escapeHtml(event.category.replace(/-/g, " "))}</span><time>${escapeHtml(event.timestamp)}</time></div>
         <h2>${escapeHtml(event.title)}</h2><p class="summary">${escapeHtml(event.summary)}</p>
         ${renderMetadata(Array.isArray(event.metadata) ? event.metadata : [])}
+        ${evidence}
         ${links ? `<nav class="connections" aria-label="Related events">${links}</nav>` : ""}
       </article>`;
     }).join("\n");
@@ -237,7 +241,7 @@ export function generateConversationFlowHtml(session, projection) {
     .event-head { align-items: center; display: flex; flex-wrap: wrap; gap: .45rem; color: #666; font-size: .85rem; } .sequence { font-weight: 700; }
     .event h2 { font-size: 1rem; margin: .55rem 0 .25rem; overflow-wrap: anywhere; } .summary { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
     .event-meta { display: grid; gap: .25rem; margin: .7rem 0 0; } .event-meta div { display: grid; gap: .5rem; grid-template-columns: 7rem minmax(0, 1fr); } dt { font-weight: 700; } dd { margin: 0; overflow-wrap: anywhere; }
-    .connections { border-top: 1px dashed #9998; display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; padding-top: .55rem; } .connector { color: inherit; font-size: .85rem; font-weight: 700; text-decoration: none; } .connector:hover, .connector:focus { text-decoration: underline; }
+    .evidence-citation { border-top: 1px dashed #9998; font-size: .85rem; margin: .75rem 0 0; padding-top: .55rem; } .evidence-citation span { color: #666; } .evidence-citation a { color: inherit; font-weight: 700; } .connections { border-top: 1px dashed #9998; display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; padding-top: .55rem; } .connector { color: inherit; font-size: .85rem; font-weight: 700; text-decoration: none; } .connector:hover, .connector:focus { text-decoration: underline; }
   </style>
 </head>
 <body>
