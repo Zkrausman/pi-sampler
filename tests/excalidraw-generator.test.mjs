@@ -66,6 +66,7 @@ test("writes a parseable diagram.excalidraw with bound rectangles, text, and arr
   assert.equal(rectangles.length, 2);
   assert.equal(texts.length, 2);
   assert.equal(arrows.length, 1);
+  assert.deepEqual(scene.elements.map((element) => element.index), ["a0", "a1", "a2", "a3", "a4"]);
 
   assertFiniteNumericFields(scene);
   for (const element of scene.elements) {
