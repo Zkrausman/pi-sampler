@@ -64,6 +64,9 @@ const DEFAULT_BACKGROUND = "#a5d8ff";
 const STROKE_COLOR = "#1e1e1e";
 const TEXT_FONT_SIZE = 20;
 const TEXT_LINE_HEIGHT = 1.25;
+const MAX_GENERATION_NODES = 50;
+const MAX_GENERATION_EDGES = 100;
+const MAX_GENERATION_LABEL_BYTES = 256;
 
 function assertFiniteNumber(value: unknown, name: string): asserts value is number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -81,12 +84,16 @@ function validateDiagram(diagram: Diagram): Map<string, SizedNode> {
   if (!diagram || !Array.isArray(diagram.nodes) || !Array.isArray(diagram.edges)) {
     throw new TypeError("diagram must contain nodes and edges arrays");
   }
+  if (diagram.nodes.length > MAX_GENERATION_NODES || diagram.edges.length > MAX_GENERATION_EDGES) {
+    throw new RangeError("diagram exceeds local generation limits");
+  }
 
   const nodes = new Map<string, SizedNode>();
   for (const node of diagram.nodes) {
     assertNonEmptyString(node.id, "node.id");
     if (nodes.has(node.id)) throw new TypeError(`duplicate node id: ${node.id}`);
     if (typeof node.label !== "string") throw new TypeError(`node ${node.id} label must be a string`);
+    if (Buffer.byteLength(node.label, "utf8") > MAX_GENERATION_LABEL_BYTES) throw new RangeError(`node ${node.id} label exceeds local generation limit`);
     assertFiniteNumber(node.x, `node ${node.id} x`);
     assertFiniteNumber(node.y, `node ${node.id} y`);
     const width = node.width ?? DEFAULT_WIDTH;
