@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { constants } from "node:fs";
-import { mkdir, open, realpath, rename, rmdir, unlink } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { lstat, mkdir, open, realpath, rename, rmdir, unlink } from "node:fs/promises";
+import { relative, resolve, sep, win32 } from "node:path";
 
 const SESSION_REFERENCE = /^session-[a-f0-9]{32}$/;
 const NOTE_ID = /^note-[a-f0-9]{32}$/;
@@ -10,7 +11,6 @@ const LOCK_TIMEOUT_MS = 10_000;
 const STALE_LOCK_MS = 60_000;
 const localLocks = new Map();
 const WINDOWS_REGISTRY_PREFIX = "HKCU\\Software\\Zkrausman\\PiConversationCatalog\\HindsightNotes\\v1";
-const WINDOWS_REGISTRY_EXECUTABLE = "C:\\Windows\\System32\\reg.exe";
 const WINDOWS_REGISTRY_RESPONSE_LIMIT = 64 * 1024;
 const WINDOWS_VALUE = /^n_[a-f0-9]{32}$/;
 
@@ -90,9 +90,16 @@ function parseRegistryRecord(value, sessionReference, expectedValueName) {
 /** Runs only the fixed Windows Registry utility with fixed command verbs and generated hash-only names. */
 async function directWindowsRegistry(args) {
   if (process.platform !== "win32") throw new HindsightNotesError("secure_storage_unavailable");
+  const suppliedRoot = process.env.SystemRoot || process.env.WINDIR;
+  if (typeof suppliedRoot !== "string" || suppliedRoot.includes("\0") || !win32.isAbsolute(suppliedRoot)) throw new HindsightNotesError("registry_unavailable");
+  const root = win32.resolve(suppliedRoot);
+  const executable = win32.join(root, "System32", "reg.exe");
+  if (!executable.toLowerCase().startsWith(`${root.toLowerCase()}\\`)) throw new HindsightNotesError("registry_unavailable");
+  try { const details = await lstat(executable); if (!details.isFile() || details.isSymbolicLink()) throw new HindsightNotesError("registry_unavailable"); }
+  catch (error) { if (error instanceof HindsightNotesError) throw error; throw new HindsightNotesError("registry_unavailable"); }
   return new Promise((resolveResult, reject) => {
     let child;
-    try { child = spawn(WINDOWS_REGISTRY_EXECUTABLE, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); }
+    try { child = spawn(executable, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); }
     catch { reject(new HindsightNotesError("registry_unavailable")); return; }
     let stdout = ""; let stderr = ""; let oversized = false;
     const collect = (target) => (chunk) => {
@@ -112,7 +119,7 @@ async function directWindowsRegistry(args) {
  * receives a registry path; root/session/note value names are fixed SHA-256
  * digests and every `reg.exe` invocation is direct (no shell or evaluator).
  */
-export function createWindowsRegistryBackend({ runRegistry = directWindowsRegistry } = {}) {
+function createWindowsRegistryBackendLegacy({ runRegistry = directWindowsRegistry } = {}) {
   const keyFor = async (projectRoot, sessionReference) => {
     emptyHindsightNotes(sessionReference);
     if (typeof projectRoot !== "string" || !projectRoot || projectRoot.includes("\0")) throw new HindsightNotesError("invalid_notes_path");
@@ -126,7 +133,8 @@ export function createWindowsRegistryBackend({ runRegistry = directWindowsRegist
       || Buffer.byteLength(result.stdout, "utf8") > WINDOWS_REGISTRY_RESPONSE_LIMIT || Buffer.byteLength(result.stderr, "utf8") > WINDOWS_REGISTRY_RESPONSE_LIMIT) throw new HindsightNotesError("registry_response_invalid");
     return result;
   };
-  const absent = (result) => result.code === 1 && /unable to find|cannot find/i.test(`${result.stdout}\n${result.stderr}`);
+  // `reg query` exit status 1 is the utility's missing-value contract. Never parse localized response text; other statuses fail closed.
+  const absent = (result) => result.code === 1;
   const list = async (projectRoot, sessionReference) => {
     const key = await keyFor(projectRoot, sessionReference);
     const result = await invoke(["query", key]);
@@ -181,6 +189,108 @@ export function createWindowsRegistryBackend({ runRegistry = directWindowsRegist
     }
   };
   return { list, put, remove };
+}
+
+const noteDigest = (note) => createHash("sha256").update(JSON.stringify(note)).digest("hex");
+const INDEX_VALUE = "__pi_hindsight_notes_index_v1";
+const INDEX_KIND = "pi-hindsight-session-note-index";
+const NOTE_KIND = "pi-hindsight-session-note";
+const indexValueName = (noteId) => `n_${createHash("sha256").update(`pi-hindsight-note:v1\0${noteId}`).digest("hex").slice(0, 32)}`;
+const encodeRegistry = (value, limit = 12_000) => { const encoded = Buffer.from(JSON.stringify(value), "utf8").toString("base64"); if (encoded.length > limit) throw new HindsightNotesError("malformed_notes"); return encoded; };
+
+async function namedPipeMutex(name, operation, { timeoutMs = LOCK_TIMEOUT_MS } = {}) {
+  if (process.platform !== "win32") throw new HindsightNotesError("secure_storage_unavailable");
+  const deadline = Date.now() + timeoutMs; let wait = 5;
+  while (true) {
+    const server = createServer();
+    try {
+      await new Promise((resolveListen, reject) => { server.once("error", reject); server.listen(name, () => { server.off("error", reject); resolveListen(); }); });
+      try { return await operation(); } finally { await new Promise((done) => server.close(done)); }
+    } catch (error) {
+      server.close(); if (error?.code !== "EADDRINUSE") throw new HindsightNotesError("registry_mutex_failed");
+      if (Date.now() >= deadline) throw new HindsightNotesError("notes_lock_timeout"); await delay(wait); wait = Math.min(wait * 2, 100);
+    }
+  }
+}
+
+/** Bounded-index Windows backend; it never performs a whole-key Registry query. */
+export function createWindowsRegistryBackend({ runRegistry = directWindowsRegistry, withMutex = namedPipeMutex } = {}) {
+  const scope = async (projectRoot, sessionReference) => {
+    emptyHindsightNotes(sessionReference); let root;
+    try { root = await realpath(projectRoot); } catch { throw new HindsightNotesError("invalid_notes_path"); }
+    const project = windowsProjectDigest(root);
+    return { key: `${WINDOWS_REGISTRY_PREFIX}\\${project}\\${sessionReference}`, mutex: `\\\\.\\pipe\\pi-hindsight-notes-${createHash("sha256").update(`${project}\0${sessionReference}`).digest("hex")}` };
+  };
+  const invoke = async (args) => {
+    const result = await runRegistry(args);
+    if (!result || !Number.isInteger(result.code) || typeof result.stdout !== "string" || typeof result.stderr !== "string" || Buffer.byteLength(result.stdout) > WINDOWS_REGISTRY_RESPONSE_LIMIT || Buffer.byteLength(result.stderr) > WINDOWS_REGISTRY_RESPONSE_LIMIT) throw new HindsightNotesError("registry_response_invalid");
+    return result;
+  };
+  const query = async (key, name) => {
+    const result = await invoke(["query", key, "/v", name]);
+    if (result.code === 1) return undefined;
+    if (result.code !== 0 || result.stderr.trim()) throw new HindsightNotesError("registry_query_failed");
+    const match = result.stdout.replace(/\r/g, "").split("\n").map((line) => new RegExp(`^\\s*${name}\\s+REG_SZ\\s+([A-Za-z0-9+/=]+)\\s*$`).exec(line)).find(Boolean);
+    if (!match) throw new HindsightNotesError("registry_response_invalid"); return match[1];
+  };
+  const write = async (key, name, encoded) => {
+    const result = await invoke(["add", key, "/v", name, "/t", "REG_SZ", "/d", encoded, "/f"]);
+    if (result.code !== 0 || result.stderr.trim() || (await query(key, name)) !== encoded) throw new HindsightNotesError("registry_write_failed");
+  };
+  const parseIndex = (encoded, ref) => {
+    let value; try { value = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")); } catch { throw new HindsightNotesError("malformed_notes"); }
+    if (!exactKeys(value, ["schemaVersion", "kind", "sessionReference", "revision", "entries"]) || value.schemaVersion !== 1 || value.kind !== INDEX_KIND || value.sessionReference !== ref || !Number.isInteger(value.revision) || value.revision < 0 || !Array.isArray(value.entries) || value.entries.length > 100) throw new HindsightNotesError("malformed_notes");
+    const entries = value.entries.map((entry) => { if (!exactKeys(entry, ["noteId", "valueName", "version"]) || typeof entry.noteId !== "string" || !NOTE_ID.test(entry.noteId) || entry.valueName !== indexValueName(entry.noteId) || !Number.isInteger(entry.version) || entry.version < 1) throw new HindsightNotesError("malformed_notes"); return entry; });
+    if (new Set(entries.map((entry) => entry.noteId)).size !== entries.length) throw new HindsightNotesError("malformed_notes"); return { ...value, entries };
+  };
+  const getIndex = async (key, ref) => { const encoded = await query(key, INDEX_VALUE); return encoded === undefined ? undefined : parseIndex(encoded, ref); };
+  const list = async (root, ref) => {
+    const { key } = await scope(root, ref); const index = await getIndex(key, ref); if (!index) return undefined;
+    const notes = [];
+    for (const entry of index.entries) {
+      const encoded = await query(key, entry.valueName); if (!encoded) throw new HindsightNotesError("malformed_notes");
+      let record; try { record = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")); } catch { throw new HindsightNotesError("malformed_notes"); }
+      if (!exactKeys(record, ["schemaVersion", "kind", "sessionReference", "version", "note"]) || record.schemaVersion !== 1 || record.kind !== NOTE_KIND || record.sessionReference !== ref || record.version !== entry.version) throw new HindsightNotesError("malformed_notes");
+      const note = normalizeNote(record.note); if (note.noteId !== entry.noteId) throw new HindsightNotesError("malformed_notes"); notes.push(note);
+    }
+    return { schemaVersion: 1, kind: "pi-hindsight-session-notes", sessionReference: ref, notes };
+  };
+  const put = async (root, ref, note) => {
+    const normalized = normalizeNote(note); const target = await scope(root, ref);
+    return withMutex(target.mutex, async () => {
+      const current = await getIndex(target.key, ref) || { schemaVersion: 1, kind: INDEX_KIND, sessionReference: ref, revision: 0, entries: [] };
+      const old = current.entries.find((entry) => entry.noteId === normalized.noteId); if (!old && current.entries.length >= 100) throw new HindsightNotesError("notes_limit_reached");
+      const entry = old ? { ...old, version: old.version + 1 } : { noteId: normalized.noteId, valueName: indexValueName(normalized.noteId), version: 1 };
+      await write(target.key, entry.valueName, encodeRegistry({ schemaVersion: 1, kind: NOTE_KIND, sessionReference: ref, version: entry.version, note: normalized }));
+      const entries = old ? current.entries.map((item) => item.noteId === entry.noteId ? entry : item) : [...current.entries, entry];
+      await write(target.key, INDEX_VALUE, encodeRegistry({ ...current, revision: current.revision + 1, entries }, 24_000));
+    });
+  };
+  const readEntry = async (key, ref, entry) => {
+    const encoded = await query(key, entry.valueName); if (!encoded) throw new HindsightNotesError("malformed_notes");
+    let record; try { record = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")); } catch { throw new HindsightNotesError("malformed_notes"); }
+    if (!exactKeys(record, ["schemaVersion", "kind", "sessionReference", "version", "note"]) || record.schemaVersion !== 1 || record.kind !== NOTE_KIND || record.sessionReference !== ref || record.version !== entry.version) throw new HindsightNotesError("malformed_notes");
+    return normalizeNote(record.note);
+  };
+  const edit = async (root, ref, noteId, text, expectedDigest, editedAt = new Date().toISOString()) => {
+    const target = await scope(root, ref); return withMutex(target.mutex, async () => {
+      const current = await getIndex(target.key, ref); const old = current?.entries.find((item) => item.noteId === noteId); if (!old) throw new HindsightNotesError("note_missing");
+      const prior = await readEntry(target.key, ref, old); if (expectedDigest && noteDigest(prior) !== expectedDigest) throw new HindsightNotesError("notes_conflict");
+      if (!validTimestamp(editedAt) || Date.parse(editedAt) < Date.parse(prior.provenance.createdAt)) throw new HindsightNotesError("malformed_notes");
+      const next = { ...prior, text: safeHindsightNoteText(text), provenance: { ...prior.provenance, editedAt } }; const entry = { ...old, version: old.version + 1 };
+      await write(target.key, entry.valueName, encodeRegistry({ schemaVersion: 1, kind: NOTE_KIND, sessionReference: ref, version: entry.version, note: next }));
+      await write(target.key, INDEX_VALUE, encodeRegistry({ ...current, revision: current.revision + 1, entries: current.entries.map((item) => item.noteId === noteId ? entry : item) })); return next;
+    });
+  };
+  const remove = async (root, ref, noteId, expectedDigest) => {
+    const target = await scope(root, ref); return withMutex(target.mutex, async () => {
+      const current = await getIndex(target.key, ref); const entry = current?.entries.find((item) => item.noteId === noteId); if (!entry) throw new HindsightNotesError("note_missing");
+      const prior = await readEntry(target.key, ref, entry); if (expectedDigest && noteDigest(prior) !== expectedDigest) throw new HindsightNotesError("notes_conflict");
+      await write(target.key, INDEX_VALUE, encodeRegistry({ ...current, revision: current.revision + 1, entries: current.entries.filter((item) => item.noteId !== noteId) }, 24_000));
+      const result = await invoke(["delete", target.key, "/v", entry.valueName, "/f"]); if (result.code !== 0 && result.code !== 1) throw new HindsightNotesError("registry_write_failed");
+    });
+  };
+  return { list, put, edit, remove };
 }
 
 const windowsRegistry = createWindowsRegistryBackend();
@@ -427,11 +537,7 @@ export async function editHindsightNote(projectRoot, sessionReference, noteId, t
     const current = await windowsRegistry.list(projectRoot, sessionReference);
     const prior = current?.notes.find((note) => note.noteId === noteId);
     if (!prior) throw new HindsightNotesError("note_missing");
-    const editedAt = now();
-    if (!validTimestamp(editedAt) || Date.parse(editedAt) < Date.parse(prior.provenance.createdAt)) throw new HindsightNotesError("malformed_notes");
-    const note = { ...prior, text: safeHindsightNoteText(text), provenance: { ...prior.provenance, editedAt } };
-    await windowsRegistry.put(projectRoot, sessionReference, note);
-    return note;
+    return windowsRegistry.edit(projectRoot, sessionReference, noteId, text, noteDigest(prior), now());
   }
   return withNotesLock(projectRoot, sessionReference, async (store) => {
     const current = await readStoreAt(store);
@@ -451,7 +557,7 @@ export async function deleteHindsightNote(projectRoot, sessionReference, noteId)
   if (process.platform === "win32") {
     const current = await windowsRegistry.list(projectRoot, sessionReference);
     if (!current?.notes.some((note) => note.noteId === noteId)) throw new HindsightNotesError("note_missing");
-    await windowsRegistry.remove(projectRoot, sessionReference, noteId);
+    await windowsRegistry.remove(projectRoot, sessionReference, noteId, noteDigest(current.notes.find((note) => note.noteId === noteId)));
     return;
   }
   return withNotesLock(projectRoot, sessionReference, async (store) => {

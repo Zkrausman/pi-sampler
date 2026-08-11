@@ -157,7 +157,7 @@ test("Windows Registry backend uses fixed hash-only keys, atomic per-note values
     throw new Error(`unexpected reg args: ${args.join(" ")}`);
   };
   try {
-    const backend = createWindowsRegistryBackend({ runRegistry: runner });
+    const backend = createWindowsRegistryBackend({ runRegistry: runner, withMutex: async (_name, operation) => operation() });
     const first = note("First registry note.");
     const second = { ...note("Second registry note."), noteId: "note-fedcba9876543210fedcba9876543210" };
     await Promise.all([backend.put(projectRoot, sessionReference, first), backend.put(projectRoot, sessionReference, second)]);
@@ -165,12 +165,15 @@ test("Windows Registry backend uses fixed hash-only keys, atomic per-note values
     assert.deepEqual(stored.notes.map((entry) => entry.noteId).sort(), [first.noteId, second.noteId].sort());
     await backend.remove(projectRoot, sessionReference, first.noteId);
     assert.deepEqual((await backend.list(projectRoot, sessionReference)).notes.map((entry) => entry.noteId), [second.noteId]);
+    for (let index = 1; index < 100; index += 1) await backend.put(projectRoot, sessionReference, { ...note(`bounded note ${index}`), noteId: `note-${index.toString(16).padStart(32, "0")}` });
+    await assert.rejects(() => backend.put(projectRoot, sessionReference, { ...note("over cap"), noteId: "note-ffffffffffffffffffffffffffffffff" }), /notes_limit_reached/);
+    assert.ok(calls.every((args) => args[0] !== "query" || args[2] === "/v"), "backend must never whole-key query");
     assert.ok(calls.every((args) => ["query", "add", "delete"].includes(args[0])));
     const serializedCalls = JSON.stringify(calls);
     assert.doesNotMatch(serializedCalls, new RegExp(projectRoot.replace(/[\\\\^$.*+?()[\]{}|]/g, "\\$&"), "i"));
     assert.doesNotMatch(serializedCalls, /notes50-current-session|First registry note|Second registry note/);
     assert.match(calls.find((args) => args[0] === "add")[1], /^HKCU\\Software\\Zkrausman\\PiConversationCatalog\\HindsightNotes\\v1\\[a-f0-9]{64}\\session-[a-f0-9]{32}$/);
-    const invalid = createWindowsRegistryBackend({ runRegistry: async () => ({ code: 0, stdout: "unexpected", stderr: "" }) });
+    const invalid = createWindowsRegistryBackend({ runRegistry: async () => ({ code: 0, stdout: "unexpected", stderr: "" }), withMutex: async (_name, operation) => operation() });
     await assert.rejects(() => invalid.list(projectRoot, sessionReference), /registry_response_invalid/);
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
