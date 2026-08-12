@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { request } from "node:http";
+import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -75,7 +76,7 @@ test("viewer renders transcript only after selection and reports in a sandboxed 
   } finally { viewer.close(); }
 });
 
-test("viewer reader has an accessible on-demand navigation drawer, handoff copy affordance, and full-fidelity filter", () => {
+test("viewer reader has an accessible on-demand navigation drawer, handoff copy affordance, and full-fidelity filter", async () => {
   const page = viewerPage(); const script = viewerScript();
   assert.match(page, /id="navigation-drawer"[^>]*role="dialog"[^>]*aria-modal="true"[^>]*aria-labelledby="drawer-title"/);
   assert.match(page, /id="drawer-toggle"[^>]*aria-controls="navigation-drawer"[^>]*aria-expanded="false"/);
@@ -91,6 +92,13 @@ test("viewer reader has an accessible on-demand navigation drawer, handoff copy 
   assert.match(script, /event\.key==='Tab'/);
   assert.match(script, /drawerFocusables/);
   assert.match(script, /opener&&typeof opener\.focus==='function'/);
+  const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-"));
+  const syntaxFile = join(syntaxDirectory, "viewer-script.mjs");
+  await writeFile(syntaxFile, script);
+  await new Promise((resolveCheck, rejectCheck) => {
+    const child = spawn(process.execPath, ["--check", syntaxFile]);
+    child.once("error", rejectCheck); child.once("exit", (code) => code === 0 ? resolveCheck() : rejectCheck(new Error("Viewer script has invalid syntax.")));
+  });
 });
 
 test("viewer rejects missing token, unexpected host and origin without echoing data", async () => {
