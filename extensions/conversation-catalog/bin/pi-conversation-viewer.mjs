@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const { startViewer } = await import(join(root, "src", "viewer.mjs"));
+const { startViewer } = await import(pathToFileURL(join(root, "src", "viewer.mjs")).href);
 
 function openBrowser(url) {
   const command = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
