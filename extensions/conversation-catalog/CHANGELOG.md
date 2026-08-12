@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.0
+
+### Minor Changes
+
+- 111a8f3: Add an on-demand, loopback-only standalone local conversation viewer.
+
 ## 0.4.0
 
 ### Minor Changes
