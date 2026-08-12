@@ -88,6 +88,9 @@ test("viewer reader has an accessible on-demand navigation drawer, handoff copy 
   assert.match(script, /q\('#handoff-command'\)\.textContent='\/hindsight-document '\+selected/);
   assert.match(script, /icon\.textContent='✓'/);
   assert.match(script, /event\.key==='Escape'/);
+  assert.match(script, /event\.key==='Tab'/);
+  assert.match(script, /drawerFocusables/);
+  assert.match(script, /opener&&typeof opener\.focus==='function'/);
 });
 
 test("viewer rejects missing token, unexpected host and origin without echoing data", async () => {

@@ -12,7 +12,7 @@ For local development, add `extensions/conversation-catalog/src/index.ts` to Pi'
 
 ## Standalone local viewer
 
-Run `pi-conversation-viewer` on demand to open a read-only browser viewer. It starts a temporary server bound only to `127.0.0.1` on a random port with a new unguessable URL token each launch, then opens that URL. It is not a startup or background service; use **Close Viewer**, `Ctrl+C`, or let the bounded heartbeat/idle timer stop it.
+Run `pi-conversation-viewer` on demand to open a read-only browser viewer. It starts a temporary server bound only to `127.0.0.1` on a random port with a new unguessable URL token each launch, then opens that URL. It is not a startup or background service; close its browser tab, use `Ctrl+C`, or let the bounded heartbeat/idle timer stop it.
 
 The viewer uses package-local assets only and makes no network request, Pi invocation, model call, report generation, or file modification. It discovers Pi sessions only from the default local Pi session directory and hindsight reports only from the default per-platform report directory documented below. The list exposes recognizable session metadata and its raw local session ID, but never storage paths or saved JSON. A selected transcript is rendered only after selection. Its copy control produces `/hindsight-document session-…`: a stable opaque reference for that exact current raw session ID, which Pi resolves before its required redaction review. The raw ID never appears in the copied handoff.
 
