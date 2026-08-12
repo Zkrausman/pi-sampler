@@ -3,6 +3,13 @@ import { normalizeHindsightNarrativeMap } from "./hindsight-narrative-map.mjs";
 import { HindsightNotesError, safeHindsightNoteText } from "./hindsight-notes.mjs";
 
 const text = (value) => typeof value === "string" ? value.trim() : "";
+
+// Treat every UTF-8 byte as a possible token. This deliberately conservative
+// guard avoids provider-specific tokenizers and prevents an evidence bundle
+// from being injected as an oversized user message.
+export const MAX_SYNTHESIS_PROMPT_BYTES = 24 * 1024;
+export const SYNTHESIS_RESPONSE_RESERVE_TOKENS = 8 * 1024;
+
 const MODEL_LIMITS = Object.freeze({
   title: 160,
   claim: 2000,
@@ -389,4 +396,29 @@ ${notesInstruction}
 
 USER-AUTHORED HINDSIGHT NOTES (context only; never evidence/citations):
 ${JSON.stringify(reviewedNotes)}`;
+}
+
+/**
+ * Build a synthesis prompt only when the selected source and the active
+ * session leave enough context for both the request and model response. Call
+ * this before narrowing tools or starting an agent turn.
+ */
+export function preflightSynthesisPrompt(sources, options, contextUsage) {
+  const prompt = buildSynthesisPrompt(sources, options);
+  const promptBytes = Buffer.byteLength(prompt, "utf8");
+  if (promptBytes > MAX_SYNTHESIS_PROMPT_BYTES) {
+    throw new Error(`Selected redacted evidence is ${promptBytes.toLocaleString()} bytes; hindsight submissions are limited to ${MAX_SYNTHESIS_PROMPT_BYTES.toLocaleString()} bytes. Select a shorter conversation, then retry.`);
+  }
+
+  const contextWindow = contextUsage?.contextWindow;
+  const usedTokens = contextUsage?.tokens;
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0 || !Number.isFinite(usedTokens) || usedTokens < 0) {
+    throw new Error("Unable to determine the active model's context capacity. Run /compact (or start a fresh session), send a short message, then retry hindsight generation.");
+  }
+
+  const availableTokens = Math.floor(contextWindow - usedTokens - SYNTHESIS_RESPONSE_RESERVE_TOKENS);
+  if (availableTokens < promptBytes) {
+    throw new Error(`Hindsight needs up to ${promptBytes.toLocaleString()} conservative context tokens, but only ${Math.max(0, availableTokens).toLocaleString()} are available after reserving room for the report. Run /compact or start a fresh session, then retry.`);
+  }
+  return prompt;
 }

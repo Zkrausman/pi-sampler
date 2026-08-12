@@ -234,3 +234,37 @@ test("citation anchors do not collide for distinct punctuation and duplicate evi
   assert.match(html, /id="citation-2"/);
   assert.throws(() => generateCitedHindsightDocumentHtml({ evidence: [{ reference: "same", context: "A" }, { reference: "same", context: "B" }] }), /unique and non-empty/);
 });
+
+test("reader-first layout provides TOC, deterministic top actions, closed appendix, citations, and safe fallbacks", () => {
+  const recommendation = (recommendationText, priority, reference) => ({
+    recommendation: recommendationText, priority, expectedImpact: "Reduce repeated work", suggestedOwner: "Support team",
+    dependencies: [], acceptanceCriteria: ["A cited check passes"], status: "proposed", source: "model-suggestion", evidenceReferences: [reference],
+  });
+  const html = generateCitedHindsightDocumentHtml({
+    title: '<img src=x onerror=alert(1)>',
+    claims: [{ statement: "A direct finding", classification: "direct evidence", evidenceReferences: ["event-1"] }],
+    recommendations: [
+      recommendation("Low priority", "low", "event-1"), recommendation("Critical first", "critical", "event-1"),
+      recommendation("High second", "high", "event-1"), recommendation("Medium omitted", "medium", "event-1"),
+    ],
+    evidence: [{ reference: "event-1", context: "Redacted <script>alert(1)</script> context" }],
+  });
+  for (const anchor of ["summary", "context", "top-actions", "what-happened", "what-worked", "lessons-risks", "visualizations", "evidence-appendix"]) {
+    assert.match(html, new RegExp(`href="#${anchor}"`));
+    assert.match(html, new RegExp(`id="${anchor}"`));
+  }
+  assert.match(html, /position:sticky/);
+  assert.match(html, /Model-generated reading summary/);
+  assert.match(html, /no raw session identity is displayed/);
+  assert.equal((html.match(/class="action-card"/g) || []).length, 3);
+  assert.ok(html.indexOf("Critical first") < html.indexOf("High second"));
+  assert.doesNotMatch(html.slice(html.indexOf('id="top-actions"'), html.indexOf('id="what-happened"')), /Low priority/);
+  assert.match(html, /<details><summary>Claims \(1\)<\/summary>/);
+  assert.match(html, /<details><summary>Embedded redacted evidence \(1\)<\/summary>/);
+  assert.match(html, /href="#citation-1">event-1<\/a>/);
+  assert.match(html, /Safe fallback assembled from cited claims/);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
+  assert.match(html, /default-src 'none'/);
+  assert.doesNotMatch(html, /(?:src|href)=["']https?:/i);
+});

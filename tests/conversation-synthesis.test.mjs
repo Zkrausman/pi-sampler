@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
+import { MAX_SYNTHESIS_PROMPT_BYTES, buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt, preflightSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
 import { createHindsightRecommendationDispositionMetadata } from "../extensions/conversation-catalog/src/evidence.mjs";
 import { restrictToolsForHindsightSynthesis } from "../extensions/conversation-catalog/src/hindsight-tools.mjs";
 
@@ -52,7 +52,7 @@ const generateRelationshipMapHtml = () => "";
 const projectRelationshipMap = (value) => value;
 const buildClaimSupportValidationPrompt = () => "Validate cited claim support";
 const buildHindsightDocument = (...args) => { globalThis.__hindsightDocumentArgs = args; return "<html></html>"; };
-const buildSynthesisPrompt = (...args) => { globalThis.__hindsightPromptArgs = args; return "Synthesize"; };
+const preflightSynthesisPrompt = (sources, options) => { globalThis.__hindsightPromptArgs = [sources, options]; return "Synthesize"; };
 const restrictToolsForHindsightSynthesis = (pi) => {
   const previousTools = pi.getActiveTools();
   let restored = false;
@@ -364,6 +364,24 @@ test("synthesis prompt includes redacted flow and relationship-map context", () 
   assert.match(prompt, /one:event-0001/);
   assert.match(prompt, /"flowContext":"user · 2025-01-01 · First"/);
   assert.match(prompt, /"mapContext":"parent entry → one:event-0002"/);
+});
+
+test("synthesis preflight rejects an oversized UTF-8 source bundle and exhausted context", () => {
+  const oversized = "🧠".repeat(Math.ceil(MAX_SYNTHESIS_PROMPT_BYTES / 2));
+  assert.throws(
+    () => preflightSynthesisPrompt([source("one", oversized)], {}, { tokens: 0, contextWindow: 1_000_000 }),
+    /limited to/,
+  );
+  const sources = [source("one", "First")];
+  const prompt = buildSynthesisPrompt(sources);
+  assert.throws(
+    () => preflightSynthesisPrompt(sources, {}, { tokens: 100_000, contextWindow: 100_000 + Buffer.byteLength(prompt, "utf8") + 8_191 }),
+    /only \d[\d,]* are available/,
+  );
+  assert.equal(
+    preflightSynthesisPrompt(sources, {}, { tokens: 100_000, contextWindow: 100_000 + Buffer.byteLength(prompt, "utf8") + 8_192 }),
+    prompt,
+  );
 });
 
 test("hindsight document accepts exactly one conversation and rejects zero or multiple sources", () => {

@@ -7,7 +7,7 @@ import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
 import { generateConversationFlowHtml, projectConversation } from "./flow.mjs";
 import { attachEvidenceReferences, createEvidenceManifest, createHindsightRecommendationDispositionMetadata } from "./evidence.mjs";
 import { generateRelationshipMapHtml, projectRelationshipMap, writeRelationshipMapExport } from "./map.mjs";
-import { buildClaimSupportValidationPrompt, buildHindsightDocument, buildSynthesisPrompt } from "./synthesis.mjs";
+import { buildClaimSupportValidationPrompt, buildHindsightDocument, preflightSynthesisPrompt } from "./synthesis.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { HINDSIGHT_WORK_CONFIG_PATH, HindsightWorkError, acceptedHindsightRecommendations, buildLinearIssueCreatePayload, digestHindsightWorkPayload, isValidExistingIssueId, parseHindsightWorkDispositions, readHindsightWorkLinks, requireFinalHindsightWorkConfirmation, validateHindsightLinearConfig, validateHindsightWorkContext, withHindsightWorkBacklinkLock, workLinkKey, workLinksPathForDispositionPath, writeHindsightWorkLink } from "./hindsight-work.mjs";
 import { HindsightOutcomeError, createHindsightOutcomeOrigin, hindsightReportPathForDispositionPath, outcomeHistoryPathForDispositionPath, outcomeHistoryReportPathForDispositionPath, readHindsightOutcomeHistory, recordHindsightOutcomeUpdate } from "./hindsight-outcomes.mjs";
@@ -647,12 +647,19 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         if (isTrustedProject(ctx)) noteStore = await readHindsightNotes(ctx.cwd, noteSessionReference);
         const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, noteReviewPatterns(patterns, session.id)) : [];
         const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
+        // This is an injected user message. Reject it before tools are narrowed
+        // or an agent turn starts if the source or session cannot fit safely.
+        const prompt = preflightSynthesisPrompt(
+          sources,
+          { validateClaimSupport: requested.validateClaimSupport, narrativeMapEnabled: requested.narrativeMapEnabled, hindsightNotes },
+          ctx.getContextUsage?.(),
+        );
         const restoreTools = restrictToolsForHindsightSynthesis(pi);
         try {
           pendingHindsight = { sources, outputPath, restoreTools, validateClaimSupport: requested.validateClaimSupport, narrativeMapEnabled: requested.narrativeMapEnabled, priorOutcomes, hindsightNotes, phase: "draft" };
           // Prior outcomes remain in pending state for safe post-model rendering;
           // they are deliberately never placed in a model synthesis prompt.
-          pi.sendUserMessage(buildSynthesisPrompt(sources, { validateClaimSupport: requested.validateClaimSupport, narrativeMapEnabled: requested.narrativeMapEnabled, hindsightNotes }));
+          pi.sendUserMessage(prompt);
         } catch (error) {
           pendingHindsight = undefined;
           restoreTools();
