@@ -94,6 +94,8 @@ test("viewer reader has an accessible on-demand navigation drawer, handoff copy 
   assert.match(script, /event\.key==='Tab'/);
   assert.match(script, /drawerFocusables/);
   assert.match(script, /opener&&typeof opener\.focus==='function'/);
+  assert.match(script, /editingSessionIndex/);
+  assert.match(script, /noteIndex!==selectedIndex/);
   const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-"));
   const syntaxFile = join(syntaxDirectory, "viewer-script.mjs");
   await writeFile(syntaxFile, script);
@@ -127,6 +129,12 @@ test("viewer note API validates, isolates selected sessions, mutates immediately
     const invalid = await get(viewer.url, "api/sessions/0/notes/not-a-note", { method: "DELETE" }); assert.equal(invalid.status, 404);
     const deleted = await get(viewer.url, `api/sessions/0/notes/${noteId}`, { method: "DELETE" }); assert.equal(deleted.status, 200, await deleted.text());
   } finally { viewer.close(); }
+});
+
+test("hindsight and viewer use the selected session project root and unsupported note backends do not block hindsight", async () => {
+  const extension = await readFile(new URL("../extensions/conversation-catalog/src/index.ts", import.meta.url), "utf8");
+  assert.match(extension, /readHindsightNotes\(session\.cwd, hindsightNotesSessionReference\(session\.id\)\)/);
+  assert.match(extension, /error\.code !== "secure_storage_unavailable"/);
 });
 
 test("viewer binds loopback and close, heartbeat, idle, and maximum lifetime rules are bounded", async () => {

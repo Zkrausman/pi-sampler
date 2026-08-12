@@ -127,7 +127,13 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     const projection = projectConversation((await SessionManager.open(session.path)).getEntries());
     const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd)); const review = await reviewRedactionChoices(ctx, findings); const reference = pseudonymizeSession(session);
     const sources = review.excluded ? [{ reference, excluded: true }] : [{ reference, ...attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions)) }];
-    const noteStore = isTrustedProject(ctx) ? await readHindsightNotes(ctx.cwd, hindsightNotesSessionReference(session.id)) : undefined;
+    // Notes are scoped to the selected session's own project root, matching the standalone viewer.
+    // An unavailable secure backend must not block a normal hindsight document with no notes.
+    let noteStore;
+    if (isTrustedProject(ctx) && typeof session.cwd === "string" && session.cwd) {
+      try { noteStore = await readHindsightNotes(session.cwd, hindsightNotesSessionReference(session.id)); }
+      catch (error) { if (!(error instanceof HindsightNotesError) || error.code !== "secure_storage_unavailable") throw error; }
+    }
     const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, noteReviewPatterns(await configuredPatterns(ctx.cwd), session.id)) : [];
     const outputPath = requested.outputPath ? resolveExplicitHindsightOutputPath(requested.outputPath, ctx.cwd) : undefined;
     const defaultDirectory = outputPath ? undefined : defaultHindsightReportDirectory({ home: homedir() });
