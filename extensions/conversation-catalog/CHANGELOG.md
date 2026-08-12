@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.1
+
+### Patch Changes
+
+- Fix the standalone viewer launcher on Windows by importing its package-local ESM module through a file URL.
+
 ## 0.5.0
 
 ### Minor Changes
