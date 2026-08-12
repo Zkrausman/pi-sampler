@@ -150,14 +150,30 @@ export function redactProjection(projection, findings, decisions) {
   // This prevents a secret-looking ID from bypassing content redaction in anchors or metadata.
   const eventIds = new Map(sourceEvents.map((event, index) => [event.id, `event-${index + 1}`]));
   const events = sourceEvents.map((event) => {
-    const copy = { ...event, id: eventIds.get(event.id), metadata: (Array.isArray(event.metadata) ? event.metadata : []).map((item) => ({ ...item })) };
+    // Keep only renderer-safe fields. Raw entry/call/parent IDs are useful while
+    // projecting relationships but must not survive into the reviewed bundle.
+    const copy = {
+      id: eventIds.get(event.id),
+      category: text(event.category),
+      timestamp: text(event.timestamp),
+      title: text(event.title),
+      summary: text(event.summary),
+      metadata: (Array.isArray(event.metadata) ? event.metadata : [])
+        .map((item, sourceIndex) => ({ label: text(item?.label), value: text(item?.value), sourceIndex }))
+        .filter((item) => !["Entry", "Parent", "Call ID"].includes(item.label)),
+      ...(event.subagentActivity ? { subagentActivity: event.subagentActivity } : {}),
+    };
     for (const field of visibleFields(event)) {
       const relevant = byEventAndField.get(`${event.id}\u0000${field.key}`);
       if (!relevant) continue;
       if (field.key === "summary") copy.summary = replaceRanges(fieldValue(event, field.key), relevant);
-      else copy.metadata[Number(field.key.slice("metadata:".length))].value = replaceRanges(fieldValue(event, field.key), relevant);
+      else {
+        const metadataIndex = Number(field.key.slice("metadata:".length));
+        const target = copy.metadata.find((item) => item.sourceIndex === metadataIndex);
+        if (target) target.value = replaceRanges(fieldValue(event, field.key), relevant);
+      }
     }
-    return copy;
+    return { ...copy, metadata: copy.metadata.map(({ label, value }) => ({ label, value })) };
   });
   const edges = (Array.isArray(projection?.edges) ? projection.edges : [])
     .map((edge) => ({ ...edge, from: eventIds.get(edge.from), to: eventIds.get(edge.to) }))

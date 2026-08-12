@@ -109,6 +109,7 @@ export function projectConversation(entries) {
   const events = [];
   const primaryByEntryId = new Map();
   const callsById = new Map();
+  const delegationCallsById = new Map();
   const results = [];
 
   for (const { entry, sourceIndex } of ordered) {
@@ -139,8 +140,12 @@ export function projectConversation(entries) {
         ]);
         tool.id = `${primary.id}-call-${toolIndex++}`;
         tool.callId = callId;
+        // Only Pi's exact saved-session `subagent` tool denotes delegated work.
+        // Similar tool names and text content remain ordinary tool activity.
+        if (toolName === "subagent") tool.subagentActivity = "delegation-call";
         events.push(tool);
         if (callId && !callsById.has(callId)) callsById.set(callId, tool);
+        if (callId && tool.subagentActivity && !delegationCallsById.has(callId)) delegationCallsById.set(callId, tool);
       }
     } else if (message.role === "toolResult") {
       const callId = text(message.toolCallId);
@@ -153,6 +158,9 @@ export function projectConversation(entries) {
       ]);
       primary.callId = callId;
       primary.isResult = true;
+      // A result is delegation evidence only when it matches an exact `subagent`
+      // call, never merely because its own name resembles that tool.
+      if (toolName === "subagent" && callId && delegationCallsById.has(callId)) primary.subagentActivity = "delegation-result";
       events.push(primary);
       results.push(primary);
     } else if (message.role === "custom" && isSkill(message.customType)) {
