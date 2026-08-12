@@ -140,12 +140,12 @@ export function projectConversation(entries) {
         ]);
         tool.id = `${primary.id}-call-${toolIndex++}`;
         tool.callId = callId;
-        // Only Pi's exact saved-session `subagent` tool denotes delegated work.
-        // Similar tool names and text content remain ordinary tool activity.
-        if (toolName === "subagent") tool.subagentActivity = "delegation-call";
+        // Keep exact `subagent` calls private until an exact same-ID result
+        // proves this is a complete delegation pair. Similar tool names and
+        // text content remain ordinary tool activity.
         events.push(tool);
         if (callId && !callsById.has(callId)) callsById.set(callId, tool);
-        if (callId && tool.subagentActivity && !delegationCallsById.has(callId)) delegationCallsById.set(callId, tool);
+        if (toolName === "subagent" && callId && !delegationCallsById.has(callId)) delegationCallsById.set(callId, tool);
       }
     } else if (message.role === "toolResult") {
       const callId = text(message.toolCallId);
@@ -158,9 +158,13 @@ export function projectConversation(entries) {
       ]);
       primary.callId = callId;
       primary.isResult = true;
-      // A result is delegation evidence only when it matches an exact `subagent`
-      // call, never merely because its own name resembles that tool.
-      if (toolName === "subagent" && callId && delegationCallsById.has(callId)) primary.subagentActivity = "delegation-result";
+      // Delegation evidence requires both exact `subagent` names and one
+      // same-ID call/result pair. Mark both sides only after that match.
+      const delegationCall = toolName === "subagent" && callId ? delegationCallsById.get(callId) : undefined;
+      if (delegationCall) {
+        delegationCall.subagentActivity = "delegation-call";
+        primary.subagentActivity = "delegation-result";
+      }
       events.push(primary);
       results.push(primary);
     } else if (message.role === "custom" && isSkill(message.customType)) {
@@ -193,9 +197,13 @@ export function projectConversation(entries) {
     if (call) addEdge(call, result, "tool result");
     else result.metadata.push({ label: "Connection", value: "No matching tool call" });
 
-    const nextAssistant = events.find((event) => event.category === "assistant" && event.order > result.order);
-    if (nextAssistant) addEdge(result, nextAssistant, "next assistant (chronological)");
-    else result.metadata.push({ label: "Next response", value: "No later assistant entry" });
+    const nextAssistant = events.find((event) => event.isPrimary && event.category === "assistant" && event.order > result.order);
+    if (nextAssistant) {
+      addEdge(result, nextAssistant, "next assistant (chronological)");
+      // This is chronological follow-up only, not proof that the assistant
+      // acted because of the delegation result.
+      if (result.subagentActivity === "delegation-result") nextAssistant.subagentActivity = "delegation-follow-up";
+    } else result.metadata.push({ label: "Next response", value: "No later assistant entry" });
   }
   return { events, edges };
 }
