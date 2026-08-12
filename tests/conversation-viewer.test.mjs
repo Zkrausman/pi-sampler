@@ -114,3 +114,9 @@ test("viewer package assets are local and read-only implementation has no write,
   for (const forbidden of ["writeFile", "mkdir", "SessionManager", "sendUserMessage", "node:https", "https://"]) assert.doesNotMatch(source, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(source, /createServer/); assert.match(source, /readFile/);
 });
+
+test("Windows launcher imports its package-local ESM module using a file URL", async () => {
+  const launcher = await readFile(new URL("../extensions/conversation-catalog/bin/pi-conversation-viewer.mjs", import.meta.url), "utf8");
+  assert.match(launcher, /pathToFileURL/);
+  assert.match(launcher, /import\(pathToFileURL\(join\(root, "src", "viewer\.mjs"\)\)\.href\)/);
+});
