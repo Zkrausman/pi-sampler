@@ -17,7 +17,16 @@ For local development, add `extensions/conversation-catalog/src/index.ts` to Pi'
 /hindsight-document [output-path]
 ```
 
-`/conversation-catalog` writes a read-only catalog of session metadata.
+`/conversation-catalog` writes a read-only catalog of session metadata. Its local HTML page renders only a title (or bounded first-prompt fallback), recorded location, modified time, and message count. It does not include transcripts, raw session data, session paths, or session IDs.
+
+## Catalog to hindsight workflow
+
+1. Run `/conversation-catalog [output-path]`, then open the generated local HTML file in a browser.
+2. Browse the metadata to recognize a conversation. The session cards are for recognition only; they cannot select or launch a session.
+3. Use the catalog's **Copy command** button (or select the visible command box if clipboard access is unavailable), then paste and run the literal `/hindsight-document` command in Pi.
+4. In Pi's picker, select exactly one conversation and finish the interactive redaction review.
+
+A static local page cannot run Pi commands. Selection and redaction remain in Pi.
 
 `/hindsight-document` asks you to select exactly one saved conversation, requires an interactive redaction review, and submits only the reviewed/redacted evidence to the active model. The model can call one safe structured writer with claims, optional story steps, and Fix or Harden proposals. The extension validates and escapes that structure, then generates reader-first HTML with cited evidence snippets in every surfaced strength and lesson, matching proposals, and a closed full cited-evidence appendix. Citations link locally to embedded redacted source context. An excluded conversation produces only a content-free redaction fallback.
 

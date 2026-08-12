@@ -94,7 +94,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
   pi.registerCommand("conversation-catalog", { description: "Write a standalone HTML catalog of saved Pi sessions", async handler(args, ctx) {
     try {
       const outputPath = resolveOutputPath(args, ctx.cwd);
-      const metadata = (await SessionManager.listAll()).map((session) => ({ id: session.id, name: session.name, firstMessage: session.firstMessage, cwd: session.cwd, modified: session.modified, messageCount: session.messageCount }));
+      const metadata = (await SessionManager.listAll()).map((session) => ({ name: session.name, firstMessage: session.firstMessage, cwd: session.cwd, modified: session.modified, messageCount: session.messageCount }));
       await mkdir(dirname(outputPath), { recursive: true }); await writeFile(outputPath, generateCatalogHtml(groupSessions(metadata)), "utf8");
       ctx.ui.notify(`Conversation catalog written to ${outputPath}. Open this .html file directly in your browser.`, "info");
     } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to write the conversation catalog.", "error"); }
