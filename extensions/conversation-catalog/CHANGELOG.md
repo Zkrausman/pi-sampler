@@ -1,5 +1,15 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.3.0
+
+### Minor Changes
+
+- 380e1ef: Add cited, redaction-safe subagent efficiency findings for delegation timing and delivery quality in hindsight reports.
+
+### Patch Changes
+
+- 421fe61: Turn the local conversation catalog into a responsive metadata-only launcher for the existing redaction-reviewed hindsight workflow, with a safe copy affordance for `/hindsight-document`.
+
 ## 0.2.0
 
 ### Minor Changes
