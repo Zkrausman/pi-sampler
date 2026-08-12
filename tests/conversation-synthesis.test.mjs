@@ -12,9 +12,16 @@ const recommendation = { recommendation: "Improve the handoff", priority: "high"
 
 test("safe report is reader-first, cited, escaped, CSP-restricted, and has no lifecycle UI", () => {
   const html = buildHindsightDocument(source(), { title: "<unsafe>", claims: [{ statement: "<img src=x>", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], storySteps: [{ title: "Start", body: "The reviewed conversation began.", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], recommendations: [recommendation] });
-  for (const heading of ["Summary", "Context", "Top three actions", "Timeline", "Strengths", "Lessons", "Evidence appendix"]) assert.match(html, new RegExp(heading));
+  for (const heading of ["Summary", "Context", "Do these first", "A compact delivery story", "Keep these strengths", "Lessons and risks", "Evidence appendix"]) assert.match(html, new RegExp(heading));
   assert.match(html, /href="#citation-1"/); assert.match(html, /default-src 'none'/); assert.match(html, /&lt;unsafe&gt;|&lt;img src=x&gt;/);
   assert.doesNotMatch(html, /Visualizations|narrative map|localStorage|disposition|feedback|outcome|linear|<script/i);
+});
+
+test("safe report uses the approved reader-first visual structure and action detail", () => {
+  const html = buildHindsightDocument(source(), { title: "A focused headline", claims: [{ statement: "Evidence-supported strength", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }, { statement: "An inferred lesson", classification: "inference", evidenceReferences: ["session-one:event-0001"] }], storySteps: [{ title: "Start", body: "The reviewed conversation began.", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], recommendations: [recommendation] });
+  for (const marker of ["--bg:#171923", "grid-template-columns:17rem minmax(0,1fr)", 'aside class="toc"', 'main class="content"', 'class="headline"', 'class="lede"', 'class="verdict"', 'class="context-grid"', 'class="timeline"', 'class="step"', 'class="split"', '@media(max-width:760px)']) assert.ok(html.includes(marker), marker);
+  for (const detail of ["Expected impact:", "Suggested owner:", "Done when:", "1 / 1", "All 2 claims", "All 1 structured recommendations"]) assert.ok(html.includes(detail), detail);
+  assert.doesNotMatch(html, /<script/i);
 });
 
 test("safe writer rejects old output fields and unsafe citations", () => {
