@@ -10,6 +10,12 @@ pi install -l npm:@zkrausman/pi-conversation-catalog
 
 For local development, add `extensions/conversation-catalog/src/index.ts` to Pi's extensions setting and reload Pi.
 
+## Standalone local viewer
+
+Run `pi-conversation-viewer` on demand to open a read-only browser viewer. It starts a temporary server bound only to `127.0.0.1` on a random port with a new unguessable URL token each launch, then opens that URL. It is not a startup or background service; use **Close Viewer**, `Ctrl+C`, or let the bounded heartbeat/idle timer stop it.
+
+The viewer uses package-local assets only and makes no network request, Pi invocation, model call, report generation, or file modification. It discovers Pi sessions only from the default local Pi session directory and hindsight reports only from the default per-platform report directory documented below. The list exposes recognizable session metadata and its raw local session ID, but never storage paths or saved JSON. A selected transcript is rendered only after selection. Its copy control produces exactly `/hindsight-document <session-id>` as a Pi-only handoff; Pi's existing redaction review remains the boundary before any model submission.
+
 ## Commands
 
 ```text
