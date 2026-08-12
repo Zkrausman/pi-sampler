@@ -11,7 +11,7 @@ function reviewedUserAuthoredNotes(notes) {
   if (!Array.isArray(notes) || notes.length > 100) throw new Error("Reviewed hindsight notes are malformed.");
   try { return notes.map((note) => {
     if (!note || typeof note !== "object" || Array.isArray(note) || typeof note.noteId !== "string" || !/^note-[a-f0-9]{32}$/.test(note.noteId) || note.provenance?.source !== "user-authored" || note.provenance?.confirmation !== "user-confirmed") throw new Error("invalid note");
-    return { noteId: note.noteId, text: safeHindsightNoteText(note.text), provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: note.provenance.createdAt, ...(note.provenance.editedAt ? { editedAt: note.provenance.editedAt } : {}) } };
+    if (!/^event-[a-f0-9]{32}$/.test(note.eventReference || "") || typeof note.eventLabel !== "string" || !note.eventLabel.trim() || Array.from(note.eventLabel).length > 240) throw new Error("invalid note"); return { noteId: note.noteId, eventLabel: note.eventLabel.trim(), text: safeHindsightNoteText(note.text), provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: note.provenance.createdAt, ...(note.provenance.editedAt ? { editedAt: note.provenance.editedAt } : {}) } };
   }); } catch (error) { if (error instanceof HindsightNotesError || error?.message === "invalid note") throw new Error("Reviewed hindsight notes are malformed or unsafe."); throw error; }
 }
 function selectedSources(sources) {

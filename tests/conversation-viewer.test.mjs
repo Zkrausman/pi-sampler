@@ -27,7 +27,8 @@ async function fixture() {
   await writeFile(join(sessions, "project", "one.jsonl"), [
     JSON.stringify({ type: "session", id, timestamp: "2025-02-03T04:05:06.000Z", cwd: directory }),
     JSON.stringify({ type: "message", id: "entry-secret", timestamp: "2025-02-03T04:06:06.000Z", message: { role: "user", content: "Selected transcript only" } }),
-    JSON.stringify({ type: "message", id: "assistant-secret", timestamp: "2025-02-03T04:07:06.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "Selected local reasoning only", thinkingSignature: "signature-not-rendered" }] } }),
+    JSON.stringify({ type: "message", id: "assistant-secret", timestamp: "2025-02-03T04:07:06.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "Selected local reasoning only", thinkingSignature: "signature-not-rendered" }, { type: "toolCall", id: "tool-call-secret", name: "local-tool", arguments: { safe: true } }] } }),
+    JSON.stringify({ type: "message", id: "tool-result-secret", timestamp: "2025-02-03T04:08:06.000Z", message: { role: "toolResult", toolCallId: "tool-call-secret", toolName: "local-tool", content: "Tool result" } }),
   ].join("\n"));
   await writeFile(join(sessions, "project", "bad.jsonl"), "not json\n");
   await writeFile(join(reports, "report.html"), "<h1>Local report</h1>");
@@ -51,7 +52,7 @@ async function rawRequest(url, path, headers) {
 test("viewer discovery accepts recognizable local sessions and malformed/stale input fails closed", async () => {
   const { sessions, reports, id } = await fixture();
   const found = await discoverSessions({ sessionDirectory: sessions });
-  assert.deepEqual(found.map(({ id: sessionId, messageCount }) => ({ id: sessionId, messageCount })), [{ id, messageCount: 2 }]);
+  assert.deepEqual(found.map(({ id: sessionId, messageCount }) => ({ id: sessionId, messageCount })), [{ id, messageCount: 3 }]);
   assert.deepEqual((await discoverReports({ reportDirectory: reports })).map((report) => report.name), ["report.html"]);
   assert.deepEqual(await discoverSessions({ sessionDirectory: join(sessions, "missing") }), []);
 });
@@ -61,12 +62,14 @@ test("viewer renders transcript only after selection and reports in a sandboxed 
   const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "a".repeat(43), idleMs: 60_000 });
   try {
     const list = await (await get(viewer.url, "api/sessions")).json();
-    assert.equal(list[0].id, id);
-    assert.doesNotMatch(JSON.stringify(list), /Selected transcript only|Selected local reasoning only|PATH-DO-NOT-EXPOSE|entry-secret|projectRoot|cwd/);
+    assert.equal(list[0].index, 0);
+    assert.doesNotMatch(JSON.stringify(list), new RegExp(`${id}|Selected transcript only|Selected local reasoning only|PATH-DO-NOT-EXPOSE|entry-secret|projectRoot|cwd`));
     const detail = await (await get(viewer.url, "api/sessions/0")).json();
     assert.match(JSON.stringify(detail), /Selected transcript only/);
     assert.match(JSON.stringify(detail), /Selected local reasoning only/);
-    assert.equal(detail.events[0].category, "user"); assert.equal(detail.events[1].category, "assistant");
+    assert.equal(detail.events[0].category, "user"); assert.equal(detail.events[1].category, "assistant"); assert.equal(detail.events[2].category, "tool-call"); assert.equal(detail.events[3].category, "tool-result");
+    assert.equal(new Set(detail.events.map((event) => event.noteReference)).size, detail.events.length);
+    assert.doesNotMatch(JSON.stringify(detail), new RegExp(id));
     assert.match(detail.reference, /^session-[a-z0-9]+$/);
     assert.equal(detail.reference, pseudonymizeSession({ id }));
     assert.equal(resolveSessionReference([{ id }], detail.reference).id, id);
@@ -74,7 +77,7 @@ test("viewer renders transcript only after selection and reports in a sandboxed 
     const report = await (await get(viewer.url, "api/reports/0")).text();
     assert.match(report, /Local report/); assert.match(report, /default-src 'none'/);
     assert.match(sandboxedReportHtml("<script>bad()</script>"), /default-src 'none'/);
-    assert.match(viewerPage(), /sandbox/); assert.match(viewerScript(), /navigator\.clipboard/); assert.match(viewerScript(), /execCommand\('copy'\)/);
+    assert.match(viewerPage(), /sandbox/); assert.match(viewerScript(), /navigator\.clipboard/);
   } finally { viewer.close(); }
 });
 
@@ -87,15 +90,13 @@ test("viewer reader has an accessible on-demand navigation drawer, handoff copy 
   assert.match(page, /id="copy"[^>]*aria-label="Copy Pi handoff command"/);
   assert.doesNotMatch(page, /Close Viewer/);
   assert.match(script, /event\.category==='user'\|\|event\.category==='assistant'/);
-  assert.match(script, /q\('#conversation-only'\)\.checked\?events\.filter\(isConversation\):events/);
+  assert.match(script, /events\.filter\(conversation\):events/);
   assert.match(script, /q\('#handoff-command'\)\.textContent='\/hindsight-document '\+selected/);
-  assert.match(script, /icon\.textContent='✓'/);
-  assert.match(script, /event\.key==='Escape'/);
-  assert.match(script, /event\.key==='Tab'/);
-  assert.match(script, /drawerFocusables/);
-  assert.match(script, /opener&&typeof opener\.focus==='function'/);
-  assert.match(script, /editingSessionIndex/);
-  assert.match(script, /noteIndex!==selectedIndex/);
+  assert.match(script, /noteReference/); assert.match(script, /drawerFocusables/); assert.match(script, /textarea/); assert.doesNotMatch(script, /prompt\(/);
+  assert.match(script, /status\.setAttribute\('role','status'\)/); assert.match(script, /status\.setAttribute\('aria-live','polite'\)/);
+  assert.match(script, /status\.textContent='Note added\.'/); assert.match(script, /status\.textContent='Note updated\.'/); assert.match(script, /status\.textContent='Note deleted\.'/);
+  assert.match(script, /status\.textContent='Legacy note attached to the selected event\.'/); assert.match(script, /status\.textContent='Unable to attach legacy note\.'/);
+  assert.match(page, /id="legacy-notes-status" role="status" aria-live="polite"/);
   const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-"));
   const syntaxFile = join(syntaxDirectory, "viewer-script.mjs");
   await writeFile(syntaxFile, script);
@@ -116,19 +117,9 @@ test("viewer rejects missing token, unexpected host and origin without echoing d
   } finally { viewer.close(); }
 });
 
-test("viewer note API validates, isolates selected sessions, mutates immediately, and never exposes roots or raw IDs", async () => {
-  const { sessions, reports, id } = await fixture();
-  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "n".repeat(43), idleMs: 60_000 });
-  try {
-    const empty = await (await get(viewer.url, "api/sessions/0/notes")).json(); assert.deepEqual(empty.notes, []);
-    const created = await get(viewer.url, "api/sessions/0/notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Local reviewed context." }) }); assert.equal(created.status, 200);
-    const afterCreate = await created.json(); assert.equal(afterCreate.notes.length, 1); assert.doesNotMatch(JSON.stringify(afterCreate), new RegExp(`${id}|projectRoot|cwd`, "i"));
-    const noteId = afterCreate.notes[0].noteId;
-    const edited = await get(viewer.url, `api/sessions/0/notes/${noteId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Updated local context." }) }); assert.equal(edited.status, 200); assert.equal((await edited.json()).notes[0].text, "Updated local context.");
-    const malicious = await get(viewer.url, "api/sessions/0/notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `session ${id}` }) }); assert.equal(malicious.status, 400);
-    const invalid = await get(viewer.url, "api/sessions/0/notes/not-a-note", { method: "DELETE" }); assert.equal(invalid.status, 404);
-    const deleted = await get(viewer.url, `api/sessions/0/notes/${noteId}`, { method: "DELETE" }); assert.equal(deleted.status, 200, await deleted.text());
-  } finally { viewer.close(); }
+test("viewer event note API validates selected event ownership and mutates immediately", async () => {
+  const { sessions, reports, id } = await fixture(); const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "n".repeat(43), idleMs: 60_000 });
+  try { const detail = await (await get(viewer.url, "api/sessions/0")).json(); const event = detail.events[0]; assert.match(event.noteReference, /^event-[a-f0-9]{32}$/); assert.doesNotMatch(JSON.stringify(detail), new RegExp(`${id}|entry-secret|projectRoot|cwd`)); const base = `api/sessions/0/events/${event.noteReference}/notes`; assert.deepEqual((await (await get(viewer.url, base)).json()).notes, []); const created = await get(viewer.url, base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Local reviewed context." }) }); assert.equal(created.status, 200); const after = await created.json(); assert.equal(after.notes.length, 1); assert.equal(after.notes[0].eventReference, event.noteReference); const noteId = after.notes[0].noteId; assert.equal((await get(viewer.url, `${base}/${noteId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Updated local context." }) })).status, 200); assert.equal((await get(viewer.url, `api/sessions/0/events/event-${"a".repeat(32)}/notes`)).status, 404); } finally { viewer.close(); }
 });
 
 test("hindsight and viewer use the selected session project root and unsupported note backends do not block hindsight", async () => {

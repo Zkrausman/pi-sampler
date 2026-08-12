@@ -13,7 +13,9 @@ import {
   deleteHindsightNote,
   editHindsightNote,
   emptyHindsightNotes,
+  hindsightNotesEventReference,
   hindsightNotesPath,
+  migrateLegacyHindsightNote,
   hindsightNotesSessionReference,
   parseHindsightNotes,
   readHindsightNotes,
@@ -27,8 +29,9 @@ const source = [{ events: [{ id: "event-1", summary: "Reviewed conversation evid
 const model = { claims: [{ statement: "The conversation has reviewed evidence.", classification: "direct evidence", evidenceReferences: ["session-evidence:event-0001"] }], recommendations: [{ recommendation: "Preserve the reviewed evidence path.", actionType: "harden", priority: "low", expectedImpact: "Keeps review behavior visible.", suggestedOwner: "Maintainer", dependencies: [], acceptanceCriteria: ["Review path remains available."], status: "proposed", source: "model-suggestion", evidenceReferences: ["session-evidence:event-0001"] }] };
 const now = "2026-09-01T12:00:00.000Z";
 
+const eventReference = hindsightNotesEventReference(sessionId, "event-fixture");
 function note(text = "User observed a delayed handoff.") {
-  return { noteId: "note-0123456789abcdef0123456789abcdef", text, provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: now } };
+  return { noteId: "note-0123456789abcdef0123456789abcdef", eventReference, eventLabel: "2026-09-01 UTC � User", text, provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: now } };
 }
 
 function runWriter(projectRoot, index) {
@@ -48,11 +51,25 @@ test("notes schema is pseudonymous, provenance-bound, and rejects session IDs, c
   assert.throws(() => parseHindsightNotes({ ...valid, schemaVersion: 0 }), /malformed_notes/);
   assert.throws(() => parseHindsightNotes({ ...valid, sessionReference: "raw-session-id" }), /malformed_notes/);
   assert.throws(() => parseHindsightNotes({ ...valid, rawSessionId: "019fedfb-fe61-7431-b0b6-07033b14d64c" }), /malformed_notes/);
-  for (const unsafe of ["raw session id: secret", "Authorization: Bearer local-secret-value", "AKIAIOSFODNN7EXAMPLE", "session 019fedfb-fe61-7431-b0b6-07033b14d64c", "credential: local-value"]) {
+  for (const unsafe of ["raw session id: secret", "Authorization: Bearer local-secret-value", "AKIAIOSFODNN7EXAMPLE", "session 019fedfb-fe61-7431-b0b6-07033b14d64c", "credential: local-value", String.raw`C:\Users\private`, String.raw`\\server\private`, "/home/private/session.json"]) {
     assert.throws(() => parseHindsightNotes({ ...valid, notes: [note(unsafe)] }), /unsafe_note_text/);
   }
   assert.throws(() => parseHindsightNotes({ ...valid, notes: [{ ...note(), provenance: { ...note().provenance, source: "model-generated" } }] }), /malformed_notes/);
   assert.throws(() => parseHindsightNotes({ ...valid, notes: [{ ...note(), noteId: "note-evil" }] }), /malformed_notes/);
+  const legacy = { schemaVersion: 1, kind: "pi-hindsight-session-notes", sessionReference, notes: [{ noteId: note().noteId, text: note().text, provenance: note().provenance }] };
+  const recovered = parseHindsightNotes(legacy); assert.equal(recovered.legacyNotes.length, 1); assert.equal(recovered.notes.length, 0);
+});
+
+test("legacy notes require explicit attachment before becoming event notes", async (t) => {
+  if (process.platform !== "linux") { t.skip("descriptor-relative migration is Linux only"); return; }
+  const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-legacy-"));
+  try {
+    const path = hindsightNotesPath(projectRoot, sessionReference); await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify({ schemaVersion: 1, kind: "pi-hindsight-session-notes", sessionReference, notes: [{ noteId: note().noteId, text: note().text, provenance: note().provenance }] }));
+    const before = await readHindsightNotes(projectRoot, sessionReference); assert.equal(before.notes.length, 0); assert.equal(before.legacyNotes.length, 1);
+    await migrateLegacyHindsightNote(projectRoot, sessionReference, note().noteId, eventReference, "Fixture event", { actualSessionId: sessionId, eventIdentity: "event-fixture" });
+    const after = await readHindsightNotes(projectRoot, sessionReference); assert.equal(after.legacyNotes.length, 0); assert.equal(after.notes[0].eventReference, eventReference);
+  } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
 
 test("SHA-256 note references are session-ID-only and split known legacy FNV collision-style inputs", () => {
@@ -64,6 +81,14 @@ test("SHA-256 note references are session-ID-only and split known legacy FNV col
   assert.doesNotMatch(hindsightNotesSessionReference(first.id), /mcru1l2z|abgujexihn/);
 });
 
+test("event note storage requires a session-owned trusted event identity", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hindsight-event-owner-"));
+  try {
+    const other = hindsightNotesEventReference("other-session", "event-fixture");
+    await assert.rejects(() => addHindsightNote(root, sessionReference, other, "Fixture event", "Cross-session note.", { actualSessionId: sessionId, eventIdentity: "event-fixture" }), /invalid_event_reference/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("descriptor-relative persistence derives the only store and fails closed where Node lacks secure directory handles", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-"));
   try {
@@ -72,16 +97,16 @@ test("descriptor-relative persistence derives the only store and fails closed wh
     assert.throws(() => hindsightNotesPath(projectRoot, "../raw"), /invalid_session_reference/);
     if (process.platform === "win32") return;
     if (process.platform !== "linux") {
-      await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, "Must fail closed."), /secure_storage_unavailable/);
+      await assert.rejects(() => addHindsightNote(projectRoot, sessionReference, eventReference, "Fixture event", "Must fail closed.", { actualSessionId: sessionId, eventIdentity: "event-fixture" }), /secure_storage_unavailable/);
       await assert.rejects(() => readHindsightNotes(projectRoot, sessionReference), /secure_storage_unavailable/);
       return;
     }
-    const added = await addHindsightNote(projectRoot, sessionReference, "Initial user-authored context.", { now: () => now });
+    const added = await addHindsightNote(projectRoot, sessionReference, eventReference, "Fixture event", "Initial user-authored context.", { now: () => now, actualSessionId: sessionId, eventIdentity: "event-fixture" });
     assert.match(added.noteId, /^note-[a-f0-9]{32}$/);
-    const edited = await editHindsightNote(projectRoot, sessionReference, added.noteId, "Reviewed replacement context.", { now: () => "2026-09-01T12:01:00.000Z" });
+    const edited = await editHindsightNote(projectRoot, sessionReference, added.noteId, "Reviewed replacement context.", { now: () => "2026-09-01T12:01:00.000Z", actualSessionId: sessionId });
     assert.equal(edited.provenance.editedAt, "2026-09-01T12:01:00.000Z");
     await deleteHindsightNote(projectRoot, sessionReference, added.noteId);
-    assert.deepEqual((await readHindsightNotes(projectRoot, sessionReference)).notes, []);
+    assert.deepEqual((await readHindsightNotes(projectRoot, sessionReference)).notes, []); assert.deepEqual((await readHindsightNotes(projectRoot, sessionReference)).legacyNotes, []);
     assert.equal(await readHindsightNotes(projectRoot, hindsightNotesSessionReference("other-session")), undefined, "another session cannot select this keyed file");
     const outside = await mkdtemp(join(tmpdir(), "hindsight-notes-outside-"));
     const escapedRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-symlink-"));
@@ -89,7 +114,7 @@ test("descriptor-relative persistence derives the only store and fails closed wh
       await mkdir(join(escapedRoot, ".pi"));
       try { await symlink(outside, join(escapedRoot, ".pi", "hindsight-notes"), "dir"); }
       catch (error) { t.diagnostic(`symlink setup unavailable: ${error.code || error}`); return; }
-      await assert.rejects(() => addHindsightNote(escapedRoot, sessionReference, "Must not escape root."), /unsafe_notes_path/);
+      await assert.rejects(() => addHindsightNote(escapedRoot, sessionReference, eventReference, "Fixture event", "Must not escape root."), /unsafe_notes_path/);
     } finally { await rm(outside, { recursive: true, force: true }); await rm(escapedRoot, { recursive: true, force: true }); }
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
@@ -183,12 +208,12 @@ test("adversarial symlink swaps cannot redirect note read, lock, temp, rename, o
     await writeFile(sentinel, "outside-must-not-change", "utf8");
     if (process.platform === "win32") return;
     if (process.platform !== "linux") {
-      const attempts = [readHindsightNotes(projectRoot, sessionReference), acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference), addHindsightNote(projectRoot, sessionReference, "blocked")];
+      const attempts = [readHindsightNotes(projectRoot, sessionReference), acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference), addHindsightNote(projectRoot, sessionReference, eventReference, "Fixture event", "blocked", { actualSessionId: sessionId, eventIdentity: "event-fixture" })];
       for (const attempt of attempts) await assert.rejects(() => attempt, /secure_storage_unavailable/);
       assert.equal(await readFile(sentinel, "utf8"), "outside-must-not-change");
       return;
     }
-    const initial = await addHindsightNote(projectRoot, sessionReference, "Initial protected note.", { now: () => now });
+    const initial = await addHindsightNote(projectRoot, sessionReference, eventReference, "Fixture event", "Initial protected note.", { now: () => now, actualSessionId: sessionId, eventIdentity: "event-fixture" });
     const notesDir = join(projectRoot, ".pi", "hindsight-notes");
     const parked = join(projectRoot, ".pi", "hindsight-notes-parked");
     let swapping = true;
@@ -205,7 +230,7 @@ test("adversarial symlink swaps cannot redirect note read, lock, temp, rename, o
     const operations = await Promise.allSettled([
       readHindsightNotes(projectRoot, sessionReference),
       acquireCrossProcessHindsightNotesLock(projectRoot, sessionReference),
-      addHindsightNote(projectRoot, sessionReference, "Concurrent protected add."),
+      addHindsightNote(projectRoot, sessionReference, eventReference, "Fixture event", "Concurrent protected add.", { actualSessionId: sessionId, eventIdentity: "event-fixture" }),
       editHindsightNote(projectRoot, sessionReference, initial.noteId, "Concurrent protected edit."),
       deleteHindsightNote(projectRoot, sessionReference, initial.noteId),
     ]);

@@ -94,6 +94,9 @@ function eventFor(entry, sourceIndex, category, title, summary, message, extras)
   const entryId = text(entry.id);
   return {
     id: `event-${sourceIndex}-${safeToken(entryId)}`,
+    // This source tuple stays internal; callers derive the browser-safe opaque
+    // note reference from it with a domain-separated hash.
+    noteIdentity: `entry:${sourceIndex}:${entryId || "missing"}:${category}`,
     entryId,
     parentId: text(entry.parentId),
     sourceIndex,
@@ -164,7 +167,7 @@ export function projectConversation(entries, { includeThinking = false, includeL
           ...(callId ? [{ label: "Call ID", value: bounded(callId) }] : []),
           { label: "Arguments", value: argumentSummary(block.arguments) },
         ]);
-        tool.id = `${primary.id}-call-${toolIndex++}`;
+        tool.id = `${primary.id}-call-${toolIndex}`; tool.noteIdentity = `${primary.noteIdentity}:tool-call:${toolIndex++}`;
         tool.callId = callId;
         // Keep exact `subagent` calls private until an exact same-ID result
         // proves this is a complete delegation pair. Similar tool names and
@@ -182,6 +185,7 @@ export function projectConversation(entries, { includeThinking = false, includeL
         ...(callId ? [{ label: "Call ID", value: bounded(callId) }] : []),
         ...(message.isError === true ? [{ label: "Status", value: "Error" }] : []),
       ]);
+      primary.noteIdentity = `${primary.noteIdentity}:tool-result:${callId || "missing"}`;
       primary.callId = callId;
       primary.isResult = true;
       // Delegation evidence requires both exact `subagent` names and one

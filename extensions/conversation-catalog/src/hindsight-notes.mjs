@@ -6,6 +6,7 @@ import { relative, resolve, sep } from "node:path";
 
 const SESSION_REFERENCE = /^session-[a-f0-9]{32}$/;
 const NOTE_ID = /^note-[a-f0-9]{32}$/;
+const EVENT_REFERENCE = /^event-[a-f0-9]{32}$/;
 const LOCK_TIMEOUT_MS = 10_000;
 const STALE_LOCK_MS = 60_000;
 const localLocks = new Map();
@@ -31,7 +32,7 @@ function boundedText(value, code = "malformed_notes") {
   return trimmed;
 }
 
-const UNSAFE_NOTE_TEXT = /\b(?:raw[- ]?session(?:[- ]?id)?|session[_-]?id|pi_session_file|bearer\s+|api[_-]?key|authorization\s*:|gh[pousr]_[A-Za-z0-9_]{20,}|(?:akia|asia|aida|aroa)[a-z0-9]{16}|(?:aws_)?(?:secret_access_key|access_key_id)\s*[:=]|(?:password|secret|token|credential)s?\s*(?:=|:)\s*\S+)\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+const UNSAFE_NOTE_TEXT = /\b(?:raw[- ]?session(?:[- ]?id)?|session[_-]?id|pi_session_file|bearer\s+|api[_-]?key|authorization\s*:|gh[pousr]_[A-Za-z0-9_]{20,}|(?:akia|asia|aida|aroa)[a-z0-9]{16}|(?:aws_)?(?:secret_access_key|access_key_id)\s*[:=]|(?:password|secret|token|credential)s?\s*(?:=|:)\s*\S+)\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b[A-Za-z]:[\\/]\S*|\\\\[^\s]+|(?:^|\s)\/(?:[A-Za-z0-9._-]+\/)+\S*|\\[^\s]+/i;
 
 export function safeHindsightNoteText(value) {
   const note = boundedText(value);
@@ -50,22 +51,38 @@ function normalizeProvenance(value) {
     || !validTimestamp(value.createdAt) || (value.editedAt !== undefined && (!validTimestamp(value.editedAt) || Date.parse(value.editedAt) < Date.parse(value.createdAt)))) throw new HindsightNotesError("malformed_notes");
   return { source: "user-authored", confirmation: "user-confirmed", createdAt: value.createdAt, ...(value.editedAt === undefined ? {} : { editedAt: value.editedAt }) };
 }
+export function hindsightNotesEventReference(sessionId, eventIdentity) {
+  if (typeof sessionId !== "string" || !sessionId || typeof eventIdentity !== "string" || !eventIdentity || eventIdentity.includes("\0")) throw new HindsightNotesError("invalid_event_reference");
+  return `event-${createHash("sha256").update("pi-hindsight-event-notes:v1\0").update(sessionId).update("\0").update(eventIdentity).digest("hex").slice(0, 32)}`;
+}
+function normalizeEventReference(value) { if (typeof value !== "string" || !EVENT_REFERENCE.test(value)) throw new HindsightNotesError("invalid_event_reference"); return value; }
+function normalizeEventLabel(value) { return boundedText(value, "malformed_notes").slice(0, 240); }
 function normalizeNote(value) {
+  if (!exactKeys(value, ["noteId", "eventReference", "eventLabel", "text", "provenance"]) || typeof value.noteId !== "string" || !NOTE_ID.test(value.noteId)) throw new HindsightNotesError("malformed_notes");
+  return { noteId: value.noteId, eventReference: normalizeEventReference(value.eventReference), eventLabel: normalizeEventLabel(value.eventLabel), text: safeHindsightNoteText(value.text), provenance: normalizeProvenance(value.provenance) };
+}
+function normalizeLegacyNote(value) {
   if (!exactKeys(value, ["noteId", "text", "provenance"]) || typeof value.noteId !== "string" || !NOTE_ID.test(value.noteId)) throw new HindsightNotesError("malformed_notes");
   return { noteId: value.noteId, text: safeHindsightNoteText(value.text), provenance: normalizeProvenance(value.provenance) };
 }
 export function emptyHindsightNotes(sessionReference) {
   if (typeof sessionReference !== "string" || !SESSION_REFERENCE.test(sessionReference)) throw new HindsightNotesError("invalid_session_reference");
-  return { schemaVersion: 1, kind: "pi-hindsight-session-notes", sessionReference, notes: [] };
+  return { schemaVersion: 2, kind: "pi-hindsight-event-notes", sessionReference, notes: [], legacyNotes: [] };
 }
 export function parseHindsightNotes(value) {
-  if (!exactKeys(value, ["schemaVersion", "kind", "sessionReference", "notes"])
-    || value.schemaVersion !== 1 || value.kind !== "pi-hindsight-session-notes"
+  if (ownObject(value) && value.schemaVersion === 1 && value.kind === "pi-hindsight-session-notes") {
+    if (typeof value.sessionReference !== "string" || !SESSION_REFERENCE.test(value.sessionReference) || !Array.isArray(value.notes) || value.notes.length > 100) throw new HindsightNotesError("malformed_notes");
+    const legacyNotes = value.notes.map(normalizeLegacyNote);
+    if (new Set(legacyNotes.map((note) => note.noteId)).size !== legacyNotes.length) throw new HindsightNotesError("malformed_notes");
+    return { schemaVersion: 2, kind: "pi-hindsight-event-notes", sessionReference: value.sessionReference, notes: [], legacyNotes };
+  }
+  if (!exactKeys(value, ["schemaVersion", "kind", "sessionReference", "notes", "legacyNotes"])
+    || value.schemaVersion !== 2 || value.kind !== "pi-hindsight-event-notes"
     || typeof value.sessionReference !== "string" || !SESSION_REFERENCE.test(value.sessionReference)
-    || !Array.isArray(value.notes) || value.notes.length > 100) throw new HindsightNotesError("malformed_notes");
-  const notes = value.notes.map(normalizeNote);
-  if (new Set(notes.map((note) => note.noteId)).size !== notes.length) throw new HindsightNotesError("malformed_notes");
-  return { schemaVersion: 1, kind: "pi-hindsight-session-notes", sessionReference: value.sessionReference, notes };
+    || !Array.isArray(value.notes) || !Array.isArray(value.legacyNotes) || value.notes.length + value.legacyNotes.length > 100) throw new HindsightNotesError("malformed_notes");
+  const notes = value.notes.map(normalizeNote); const legacyNotes = value.legacyNotes.map(normalizeLegacyNote);
+  if (new Set([...notes, ...legacyNotes].map((note) => note.noteId)).size !== notes.length + legacyNotes.length) throw new HindsightNotesError("malformed_notes");
+  return { schemaVersion: 2, kind: "pi-hindsight-event-notes", sessionReference: value.sessionReference, notes, legacyNotes };
 }
 
 function windowsProjectDigest(canonicalRoot) {
@@ -75,16 +92,17 @@ function windowsValueName(noteId) {
   return `n_${createHash("sha256").update("pi-hindsight-note:v1\0").update(noteId).digest("hex").slice(0, 32)}`;
 }
 function registryRecord(sessionReference, note) {
-  return { schemaVersion: 1, kind: "pi-hindsight-session-note", sessionReference, note };
+  return { schemaVersion: 2, kind: "pi-hindsight-event-note", sessionReference, note };
 }
 function parseRegistryRecord(value, sessionReference, expectedValueName) {
   let parsed;
   try { parsed = JSON.parse(Buffer.from(value, "base64").toString("utf8")); } catch { throw new HindsightNotesError("malformed_notes"); }
-  if (!exactKeys(parsed, ["schemaVersion", "kind", "sessionReference", "note"])
-    || parsed.schemaVersion !== 1 || parsed.kind !== "pi-hindsight-session-note" || parsed.sessionReference !== sessionReference) throw new HindsightNotesError("malformed_notes");
-  const note = normalizeNote(parsed.note);
+  if (!exactKeys(parsed, ["schemaVersion", "kind", "sessionReference", "note"]) || parsed.sessionReference !== sessionReference) throw new HindsightNotesError("malformed_notes");
+  const legacy = parsed.schemaVersion === 1 && parsed.kind === "pi-hindsight-session-note";
+  if (!legacy && (parsed.schemaVersion !== 2 || parsed.kind !== "pi-hindsight-event-note")) throw new HindsightNotesError("malformed_notes");
+  const note = legacy ? normalizeLegacyNote(parsed.note) : normalizeNote(parsed.note);
   if (windowsValueName(note.noteId) !== expectedValueName) throw new HindsightNotesError("malformed_notes");
-  return note;
+  return legacy ? { ...note, legacy: true } : note;
 }
 
 /** Runs only the fixed Windows Registry utility with fixed command verbs and generated hash-only names. */
@@ -142,7 +160,9 @@ export function createWindowsRegistryBackend({ runRegistry = directWindowsRegist
       notes.push(parseRegistryRecord(match[2], sessionReference, match[1]));
     }
     if (new Set(notes.map((note) => note.noteId)).size !== notes.length || notes.length > 100) throw new HindsightNotesError("malformed_notes");
-    return { schemaVersion: 1, kind: "pi-hindsight-session-notes", sessionReference, notes: notes.sort((left, right) => left.noteId.localeCompare(right.noteId)) };
+    const legacyNotes = notes.filter((note) => note.legacy).map(({ legacy: _legacy, ...note }) => note);
+    const eventNotes = notes.filter((note) => !note.legacy);
+    return { schemaVersion: 2, kind: "pi-hindsight-event-notes", sessionReference, notes: eventNotes.sort((left, right) => left.noteId.localeCompare(right.noteId)), legacyNotes: legacyNotes.sort((left, right) => left.noteId.localeCompare(right.noteId)) };
   };
   const readValue = async (key, valueName) => {
     const result = await invoke(["query", key, "/v", valueName]);
@@ -179,7 +199,15 @@ export function createWindowsRegistryBackend({ runRegistry = directWindowsRegist
     // emit non-data footer text for an empty key, which is intentionally not
     // accepted by the strict query parser.
   };
-  return { list, put, remove };
+  const migrate = async (projectRoot, sessionReference, noteId, eventReference, eventLabel) => {
+    const current = await list(projectRoot, sessionReference);
+    const legacy = current?.legacyNotes.find((note) => note.noteId === noteId);
+    if (!legacy) throw new HindsightNotesError("note_missing");
+    const note = { ...legacy, eventReference: normalizeEventReference(eventReference), eventLabel: normalizeEventLabel(eventLabel) };
+    await put(projectRoot, sessionReference, note);
+    return note;
+  };
+  return { list, put, remove, migrate };
 }
 
 const windowsRegistry = createWindowsRegistryBackend();
@@ -395,23 +423,34 @@ async function atomicWriteAt(store, value) {
   catch (error) { await unlink(fdPath(store.notes, temporary)).catch(() => undefined); throw new HindsightNotesError("unsafe_notes_path"); }
 }
 
-function newNote(text, timestamp) {
+function newNote(eventReference, eventLabel, text, timestamp) {
   if (!validTimestamp(timestamp)) throw new HindsightNotesError("malformed_notes");
-  return { noteId: `note-${randomUUID().replace(/-/g, "")}`, text: safeHindsightNoteText(text), provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: timestamp } };
+  return { noteId: `note-${randomUUID().replace(/-/g, "")}`, eventReference: normalizeEventReference(eventReference), eventLabel: normalizeEventLabel(eventLabel), text: safeHindsightNoteText(text), provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: timestamp } };
+}
+function migrateLegacy(current, noteId, eventReference, eventLabel) {
+  const index = current.legacyNotes.findIndex((note) => note.noteId === noteId);
+  if (index < 0) throw new HindsightNotesError("note_missing");
+  const legacy = current.legacyNotes[index];
+  const migrated = { ...legacy, eventReference: normalizeEventReference(eventReference), eventLabel: normalizeEventLabel(eventLabel) };
+  return { ...current, notes: [...current.notes, migrated], legacyNotes: current.legacyNotes.filter((_note, legacyIndex) => legacyIndex !== index) };
 }
 
 function validateActualSession(sessionReference, text, actualSessionId) {
   if (actualSessionId === undefined) return;
   if (typeof actualSessionId !== "string" || hindsightNotesSessionReference(actualSessionId) !== sessionReference || text.includes(actualSessionId)) throw new HindsightNotesError("unsafe_note_text");
 }
-export async function addHindsightNote(projectRoot, sessionReference, text, { now = () => new Date().toISOString(), actualSessionId } = {}) {
-  validateActualSession(sessionReference, text, actualSessionId);
+function validateEvent(eventReference, eventLabel, actualSessionId, eventIdentity) {
+  normalizeEventReference(eventReference); normalizeEventLabel(eventLabel);
+  if (typeof actualSessionId !== "string" || !actualSessionId || typeof eventIdentity !== "string" || !eventIdentity || eventIdentity.includes("\0") || hindsightNotesEventReference(actualSessionId, eventIdentity) !== eventReference || eventLabel.includes(actualSessionId)) throw new HindsightNotesError("invalid_event_reference");
+}
+export async function addHindsightNote(projectRoot, sessionReference, eventReference, eventLabel, text, { now = () => new Date().toISOString(), actualSessionId, eventIdentity } = {}) {
+  validateActualSession(sessionReference, text, actualSessionId); validateEvent(eventReference, eventLabel, actualSessionId, eventIdentity);
   if (process.platform === "win32") {
     const current = await windowsRegistry.list(projectRoot, sessionReference);
-    if ((current?.notes.length || 0) >= 100) throw new HindsightNotesError("notes_limit_reached");
+    if (((current?.notes.length || 0) + (current?.legacyNotes.length || 0)) >= 100) throw new HindsightNotesError("notes_limit_reached");
     // UUID note identities make independent concurrent adds distinct registry values.
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const note = newNote(text, now());
+      const note = newNote(eventReference, eventLabel, text, now());
       try { await windowsRegistry.put(projectRoot, sessionReference, note); return note; }
       catch (error) { if (!(error instanceof HindsightNotesError) || error.code !== "notes_conflict" || attempt === 2) throw error; }
     }
@@ -419,10 +458,22 @@ export async function addHindsightNote(projectRoot, sessionReference, text, { no
   return withNotesLock(projectRoot, sessionReference, async (store) => {
     const prior = await readStoreAt(store);
     const current = prior || emptyHindsightNotes(sessionReference);
-    if (current.notes.length >= 100) throw new HindsightNotesError("notes_limit_reached");
-    const note = newNote(text, now());
+    if (current.notes.length + current.legacyNotes.length >= 100) throw new HindsightNotesError("notes_limit_reached");
+    const note = newNote(eventReference, eventLabel, text, now());
     await atomicWriteAt(store, { ...current, notes: [...current.notes, note] });
     return note;
+  });
+}
+export async function migrateLegacyHindsightNote(projectRoot, sessionReference, noteId, eventReference, eventLabel, { actualSessionId, eventIdentity } = {}) {
+  if (typeof noteId !== "string" || !NOTE_ID.test(noteId)) throw new HindsightNotesError("invalid_note_id");
+  validateActualSession(sessionReference, "", actualSessionId); validateEvent(eventReference, eventLabel, actualSessionId, eventIdentity);
+  if (process.platform === "win32") return windowsRegistry.migrate(projectRoot, sessionReference, noteId, eventReference, eventLabel);
+  return withNotesLock(projectRoot, sessionReference, async (store) => {
+    const current = await readStoreAt(store);
+    if (!current) throw new HindsightNotesError("notes_missing");
+    const migrated = migrateLegacy(current, noteId, eventReference, eventLabel);
+    await atomicWriteAt(store, migrated);
+    return migrated.notes.find((note) => note.noteId === noteId);
   });
 }
 export async function editHindsightNote(projectRoot, sessionReference, noteId, text, { now = () => new Date().toISOString(), actualSessionId } = {}) {
