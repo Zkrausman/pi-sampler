@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,50 +8,46 @@ import { buildHindsightDocument, buildSynthesisPrompt, MAX_SYNTHESIS_PROMPT_BYTE
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = (summary = "First redacted event") => [{ reference: "session-one", events: [{ id: "event-one", category: "user", timestamp: "2025-01-01", summary, evidence: { reference: "session-one:event-0001" } }], edges: [] }];
-const recommendation = { recommendation: "Improve the handoff", priority: "high", expectedImpact: "Reduce rework", suggestedOwner: "Delivery", dependencies: [], acceptanceCriteria: ["Handoff is reviewed"], status: "proposed", source: "model-suggestion", evidenceReferences: ["session-one:event-0001"] };
+const proposal = (actionType = "harden") => ({ recommendation: `${actionType} the handoff`, actionType, priority: "high", expectedImpact: "Reduce rework", suggestedOwner: "Delivery", dependencies: [], acceptanceCriteria: ["Handoff is reviewed"], status: "proposed", source: "model-suggestion", evidenceReferences: ["session-one:event-0001"] });
+const fullOutput = () => ({ title: "A focused headline", claims: [{ statement: "Evidence-supported strength", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }, { statement: "An inferred lesson", classification: "inference", evidenceReferences: ["session-one:event-0001"] }], storySteps: [{ title: "Start", body: "The reviewed conversation began.", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], recommendations: [proposal("harden"), proposal("fix")] });
 
-test("safe report is reader-first, cited, escaped, CSP-restricted, and has no lifecycle UI", () => {
-  const html = buildHindsightDocument(source(), { title: "<unsafe>", claims: [{ statement: "<img src=x>", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], storySteps: [{ title: "Start", body: "The reviewed conversation began.", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], recommendations: [recommendation] });
+test("safe report makes cited evidence and matching Fix/Harden proposals inspectable in finding cards", () => {
+  const html = buildHindsightDocument(source(), fullOutput());
   for (const heading of ["Summary", "Context", "Do these first", "A compact delivery story", "Keep these strengths", "Lessons and risks", "Evidence appendix"]) assert.match(html, new RegExp(heading));
-  assert.match(html, /href="#citation-1"/); assert.match(html, /default-src 'none'/); assert.match(html, /&lt;unsafe&gt;|&lt;img src=x&gt;/);
-  assert.doesNotMatch(html, /Visualizations|narrative map|localStorage|disposition|feedback|outcome|linear|<script/i);
+  for (const marker of ["HARDEN", "FIX", "Matching harden proposals", "Matching fix proposals", "Evidence-supported strength", "An inferred lesson", "First redacted event", 'href="#citation-1"', "Expected impact:", "Suggested owner:", "Done when:"]) assert.ok(html.includes(marker), marker);
+  assert.match(html, /default-src 'none'/); assert.match(html, /model suggestions and require human review/); assert.doesNotMatch(html, /Visualizations|narrative map|localStorage|disposition|feedback|outcome|linear|<script/i);
 });
 
-test("safe report uses the approved reader-first visual structure and action detail", () => {
-  const html = buildHindsightDocument(source(), { title: "A focused headline", claims: [{ statement: "Evidence-supported strength", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }, { statement: "An inferred lesson", classification: "inference", evidenceReferences: ["session-one:event-0001"] }], storySteps: [{ title: "Start", body: "The reviewed conversation began.", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], recommendations: [recommendation] });
-  for (const marker of ["--bg:#171923", "grid-template-columns:17rem minmax(0,1fr)", 'aside class="toc"', 'main class="content"', 'class="headline"', 'class="lede"', 'class="verdict"', 'class="context-grid"', 'class="timeline"', 'class="step"', 'class="split"', '@media(max-width:760px)']) assert.ok(html.includes(marker), marker);
-  for (const detail of ["Expected impact:", "Suggested owner:", "Done when:", "1 / 1", "All 2 claims", "All 1 structured recommendations"]) assert.ok(html.includes(detail), detail);
-  assert.doesNotMatch(html, /<script/i);
-});
-
-test("safe writer rejects old output fields and unsafe citations", () => {
+test("safe writer validates action types, citations, and matching cited findings", () => {
+  assert.throws(() => buildHindsightDocument(source(), { claims: [], recommendations: [{ ...proposal(), actionType: "ship" }] }), /actionType/);
+  assert.throws(() => buildHindsightDocument(source(), { claims: [{ statement: "x", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], recommendations: [proposal("fix")] }), /matching harden/);
+  assert.throws(() => buildHindsightDocument(source(), { claims: [{ statement: "x", classification: "inference", evidenceReferences: ["session-one:event-0001"] }], recommendations: [proposal("fix"), { ...proposal("harden"), evidenceReferences: ["outside"] }] }), /outside the selected/);
   assert.throws(() => buildHindsightDocument(source(), { claims: [], recommendations: [], narrativeMap: {} }), /unsupported fields/);
-  assert.throws(() => buildHindsightDocument(source(), { claims: [{ statement: "x", classification: "direct evidence", evidenceReferences: ["outside"] }], recommendations: [] }), /outside the selected/);
-  assert.throws(() => buildHindsightDocument(source(), { claims: [], recommendations: [{ ...recommendation, status: "accepted" }] }), /status/);
+  assert.throws(() => buildHindsightDocument(source(), { claims: [], recommendations: [{ ...proposal(), status: "accepted" }] }), /status/);
 });
 
-test("excluded conversation renders only a cited redaction fallback", () => {
+test("omitted model output and excluded redaction fallback remain safe", () => {
+  const defaultHtml = buildHindsightDocument(source()); assert.match(defaultHtml, /Selected conversation contains 1 inspectable events/);
   const html = buildHindsightDocument([{ reference: "session-hidden", excluded: true }], { claims: [], recommendations: [] });
   assert.match(html, /session-hidden:excluded/); assert.match(html, /excluded during redaction review/); assert.doesNotMatch(html, /event-one/);
 });
 
-test("synthesis prompt is scoped to one redacted conversation and preflight retains safeguards", () => {
-  const prompt = buildSynthesisPrompt(source()); assert.match(prompt, /hindsight_document_write/); assert.doesNotMatch(prompt, /narrativeMap|claim-support|prior outcomes|notes/i);
+test("synthesis prompt requires matching Fix/Harden proposals and retains preflight safeguards", () => {
+  const prompt = buildSynthesisPrompt(source()); assert.match(prompt, /actionType \("fix" or "harden"\)/); assert.match(prompt, /Harden proposal/); assert.match(prompt, /Fix proposal/); assert.doesNotMatch(prompt, /narrativeMap|prior outcomes|notes/i);
   assert.throws(() => buildHindsightDocument([]), /exactly one/); assert.throws(() => buildHindsightDocument([...source(), ...source()]), /exactly one/);
   assert.throws(() => preflightSynthesisPrompt(source("🧠".repeat(MAX_SYNTHESIS_PROMPT_BYTES)), {}, { tokens: 0, contextWindow: 1_000_000 }), /limited to/);
 });
 
-test("only approved commands and one hindsight tool remain public", () => {
+test("only two public commands remain and flow/map modules are deleted", () => {
   const index = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
-  for (const command of ["conversation-catalog", "conversation-flow", "conversation-map", "hindsight-document"]) assert.ok(index.includes(`registerCommand("${command}"`));
-  assert.equal((index.match(/registerCommand\(/g) || []).length, 4); assert.equal((index.match(/registerTool\(/g) || []).length, 1);
-  for (const removed of ["hindsight-notes", "hindsight-feedback", "hindsight-outcome", "hindsight-work", "Linear"]) assert.doesNotMatch(index, new RegExp(removed, "i"));
-  assert.match(index, /Unsupported hindsight option/);
+  assert.equal((index.match(/registerCommand\(/g) || []).length, 2); assert.equal((index.match(/registerTool\(/g) || []).length, 1);
+  for (const command of ["conversation-catalog", "hindsight-document"]) assert.ok(index.includes(`registerCommand("${command}"`));
+  for (const removed of ["conversation-flow", "conversation-map", "flow.mjs", "map.mjs", "createRedactionMetadata", "generateExcludedConversationHtml", "writeRelationshipMapExport"]) assert.doesNotMatch(index, new RegExp(removed, "i"));
+  assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/flow.mjs")), false); assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/map.mjs")), false);
 });
 
 test("unsupported hindsight flags are rejected before a session is selected", async () => {
-  let extension = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8").replace(/^import[^\n]+;\r?\n/gm, "");
-  extension += "\nexport { hindsightArguments };";
+  const extension = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8").replace(/^import[^\n]+;\r?\n/gm, "");
   const compiled = ts.transpileModule(extension, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   const { hindsightArguments } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
   for (const flag of ["--narrative-map", "--validate-claim-support", "--prior-outcomes old.outcomes.json"]) assert.throws(() => hindsightArguments(flag), /Unsupported hindsight option/);
