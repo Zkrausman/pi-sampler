@@ -109,6 +109,8 @@ export function projectConversation(entries) {
   const events = [];
   const primaryByEntryId = new Map();
   const callsById = new Map();
+  const delegationCallsById = new Map();
+  const matchedDelegationCalls = new Map();
   const results = [];
 
   for (const { entry, sourceIndex } of ordered) {
@@ -139,8 +141,12 @@ export function projectConversation(entries) {
         ]);
         tool.id = `${primary.id}-call-${toolIndex++}`;
         tool.callId = callId;
+        // Keep exact `subagent` calls private until an exact same-ID result
+        // proves this is a complete delegation pair. Similar tool names and
+        // text content remain ordinary tool activity.
         events.push(tool);
         if (callId && !callsById.has(callId)) callsById.set(callId, tool);
+        if (toolName === "subagent" && callId && !delegationCallsById.has(callId)) delegationCallsById.set(callId, tool);
       }
     } else if (message.role === "toolResult") {
       const callId = text(message.toolCallId);
@@ -153,6 +159,12 @@ export function projectConversation(entries) {
       ]);
       primary.callId = callId;
       primary.isResult = true;
+      // Delegation evidence requires both exact `subagent` names and one
+      // same-ID call/result pair. Mark both sides only after that match.
+      const delegationCall = toolName === "subagent" && callId ? delegationCallsById.get(callId) : undefined;
+      // Correlate privately first. Pair labels are assigned only after all
+      // events are ordered, so no source identifier becomes report evidence.
+      if (delegationCall) matchedDelegationCalls.set(primary, delegationCall);
       events.push(primary);
       results.push(primary);
     } else if (message.role === "custom" && isSkill(message.customType)) {
@@ -167,6 +179,21 @@ export function projectConversation(entries) {
   }
 
   events.forEach((event, order) => { event.order = order; });
+  // A call can form only one delegation pair. When duplicate exact results
+  // exist, the earliest ordered result wins deterministically; later ones are
+  // ordinary tool results rather than a second association with that call.
+  const pairedCalls = new Set();
+  let pairOrdinal = 0;
+  for (const result of results) {
+    const call = matchedDelegationCalls.get(result);
+    if (!call || pairedCalls.has(call)) continue;
+    pairedCalls.add(call);
+    const delegationPair = `delegation-${++pairOrdinal}`;
+    call.subagentActivity = "delegation-call";
+    call.delegationPair = delegationPair;
+    result.subagentActivity = "delegation-result";
+    result.delegationPair = delegationPair;
+  }
   const edges = [];
   const seen = new Set();
   const addEdge = (from, to, label) => {
@@ -180,14 +207,23 @@ export function projectConversation(entries) {
   for (const event of events) {
     if (event.isPrimary && event.parentId) addEdge(primaryByEntryId.get(event.parentId), event, "parent entry");
   }
+  const pairedFollowUps = new Set();
   for (const result of results) {
     const call = result.callId ? callsById.get(result.callId) : undefined;
     if (call) addEdge(call, result, "tool result");
     else result.metadata.push({ label: "Connection", value: "No matching tool call" });
 
-    const nextAssistant = events.find((event) => event.category === "assistant" && event.order > result.order);
-    if (nextAssistant) addEdge(result, nextAssistant, "next assistant (chronological)");
-    else result.metadata.push({ label: "Next response", value: "No later assistant entry" });
+    const nextAssistant = events.find((event) => event.isPrimary && event.category === "assistant" && event.order > result.order);
+    if (nextAssistant) {
+      addEdge(result, nextAssistant, "next assistant (chronological)");
+      // A chronological assistant event may belong to only one pair. Results
+      // are ordered, so the earliest qualifying result wins this association.
+      if (result.delegationPair && !pairedFollowUps.has(nextAssistant)) {
+        pairedFollowUps.add(nextAssistant);
+        nextAssistant.subagentActivity = "delegation-follow-up";
+        nextAssistant.delegationPair = result.delegationPair;
+      }
+    } else result.metadata.push({ label: "Next response", value: "No later assistant entry" });
   }
   return { events, edges };
 }

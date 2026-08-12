@@ -34,3 +34,43 @@ test("conversation projection retains usable source evidence without rendering a
   const cited = attachEvidenceReferences("conversation-1", redactProjection(projected, findSensitiveContent(projected), {}));
   assert.equal(cited.events.length, 1); assert.equal(cited.events[0].id, "event-1"); assert.equal(cited.events[0].evidence.reference, "conversation-1:event-0001");
 });
+
+test("only exact matched subagent pairs and their immediate chronological assistant follow-up become safely remapped delegation evidence", () => {
+  const rawCallId = "raw-call-secret"; const rawEntryId = "raw-entry-secret";
+  const entries = [
+    { id: rawEntryId, type: "message", timestamp: "2025-01-01T00:00:00Z", message: { role: "assistant", content: [{ type: "toolCall", id: rawCallId, name: "subagent", arguments: { task: "Review safely" } }] } },
+    { id: "near", type: "message", timestamp: "2025-01-01T00:01:00Z", message: { role: "assistant", content: [{ type: "toolCall", id: "near-call", name: "subagent_helper", arguments: { task: "not delegation" } }] } },
+    { id: "result", type: "message", timestamp: "2025-01-01T00:02:00Z", message: { role: "toolResult", toolCallId: rawCallId, toolName: "subagent", content: "Reviewed result", isError: false } },
+    { id: "mismatch", type: "message", timestamp: "2025-01-01T00:03:00Z", message: { role: "toolResult", toolCallId: "missing-call", toolName: "subagent", content: "Unmatched result" } },
+    { id: "wrong-name", type: "message", timestamp: "2025-01-01T00:03:30Z", message: { role: "toolResult", toolCallId: rawCallId, toolName: "subagent_helper", content: "Wrong tool name" } },
+    { id: "follow-up", type: "message", timestamp: "2025-01-01T00:03:45Z", message: { role: "assistant", content: "Chronological follow-up" } },
+    { id: "prose", type: "message", timestamp: "2025-01-01T00:04:00Z", message: { role: "user", content: "please subagent this" } },
+  ];
+  const projected = projectConversation(entries); const activities = projected.events.filter((event) => event.subagentActivity);
+  assert.deepEqual(activities.map((event) => event.subagentActivity), ["delegation-call", "delegation-result", "delegation-follow-up"]);
+  assert.deepEqual(activities.map((event) => event.delegationPair), ["delegation-1", "delegation-1", "delegation-1"]);
+  const redacted = redactProjection(projected, findSensitiveContent(projected), {}); const cited = attachEvidenceReferences("safe", redacted);
+  assert.deepEqual(cited.events.filter((event) => event.subagentActivity).map((event) => event.evidence.reference), ["safe:event-0002", "safe:event-0005", "safe:event-0008"]);
+  assert.deepEqual(cited.events.filter((event) => event.subagentActivity).map((event) => event.delegationPair), ["delegation-1", "delegation-1", "delegation-1"]);
+  const serialized = JSON.stringify(cited); assert.doesNotMatch(serialized, /raw-call-secret|raw-entry-secret|near-call/); assert.doesNotMatch(serialized, /Call ID|Entry|Parent/);
+});
+
+test("ambiguous immediate follow-up is assigned only to the earliest qualifying result", () => {
+  const entries = [
+    { id: "call-one", type: "message", timestamp: "2025-01-01T00:00:00Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call-one-secret", name: "subagent", arguments: {} }] } },
+    { id: "call-two", type: "message", timestamp: "2025-01-01T00:00:01Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call-two-secret", name: "subagent", arguments: {} }] } },
+    { id: "result-one", type: "message", timestamp: "2025-01-01T00:00:02Z", message: { role: "toolResult", toolCallId: "call-one-secret", toolName: "subagent", content: "First result" } },
+    { id: "result-two", type: "message", timestamp: "2025-01-01T00:00:03Z", message: { role: "toolResult", toolCallId: "call-two-secret", toolName: "subagent", content: "Second result" } },
+    { id: "follow-up", type: "message", timestamp: "2025-01-01T00:00:04Z", message: { role: "assistant", content: "One follow-up" } },
+  ];
+  const activities = projectConversation(entries).events.filter((event) => event.subagentActivity);
+  assert.deepEqual(activities.map((event) => [event.subagentActivity, event.delegationPair]), [["delegation-call", "delegation-1"], ["delegation-call", "delegation-2"], ["delegation-result", "delegation-1"], ["delegation-result", "delegation-2"], ["delegation-follow-up", "delegation-1"]]);
+});
+
+test("lone exact calls and unmatched results never receive delegation markers", () => {
+  const entries = [
+    { id: "call", type: "message", timestamp: "2025-01-01", message: { role: "assistant", content: [{ type: "toolCall", id: "lone", name: "subagent", arguments: { task: "private" } }] } },
+    { id: "result", type: "message", timestamp: "2025-01-02", message: { role: "toolResult", toolCallId: "missing", toolName: "subagent", content: "Unmatched" } },
+  ];
+  assert.deepEqual(projectConversation(entries).events.filter((event) => event.subagentActivity), []);
+});

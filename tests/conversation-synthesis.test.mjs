@@ -10,6 +10,18 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = (summary = "First redacted event") => [{ reference: "session-one", events: [{ id: "event-one", category: "user", timestamp: "2025-01-01", summary, evidence: { reference: "session-one:event-0001" } }], edges: [] }];
 const proposal = (actionType = "harden") => ({ recommendation: `${actionType} the handoff`, actionType, priority: "high", expectedImpact: "Reduce rework", suggestedOwner: "Delivery", dependencies: [], acceptanceCriteria: ["Handoff is reviewed"], status: "proposed", source: "model-suggestion", evidenceReferences: ["session-one:event-0001"] });
 const fullOutput = () => ({ title: "A focused headline", claims: [{ statement: "Evidence-supported strength", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }, { statement: "An inferred lesson", classification: "inference", evidenceReferences: ["session-one:event-0001"] }], storySteps: [{ title: "Start", body: "The reviewed conversation began.", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], recommendations: [proposal("harden"), proposal("fix")] });
+const subagentSource = ({ followUp = true } = {}) => [{ reference: "session-one", events: [
+  { id: "event-call", category: "tool-call", timestamp: "2025-01-01", summary: "subagent", metadata: [{ label: "Tool", value: "subagent" }], subagentActivity: "delegation-call", delegationPair: "delegation-1", evidence: { reference: "session-one:event-0001" } },
+  { id: "event-result", category: "tool-result", timestamp: "2025-01-01", summary: "Reviewed output", metadata: [{ label: "Tool", value: "subagent" }], subagentActivity: "delegation-result", delegationPair: "delegation-1", evidence: { reference: "session-one:event-0002" } },
+  ...(followUp ? [{ id: "event-other", category: "assistant", timestamp: "2025-01-01", summary: "Follow-up accepted", subagentActivity: "delegation-follow-up", delegationPair: "delegation-1", evidence: { reference: "session-one:event-0003" } }] : []),
+], edges: [] }];
+const subagentOutput = () => ({ claims: [], recommendations: [
+  { ...proposal("harden"), evidenceReferences: ["session-one:event-0001"] },
+  { ...proposal("fix"), evidenceReferences: ["session-one:event-0002", "session-one:event-0003"] },
+], subagentEfficiency: {
+  delegationTiming: [{ statement: "Delegation was explicitly initiated.", findingKind: "strength", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }],
+  deliveryQuality: [{ statement: "The result and chronological follow-up support reviewing delivery quality.", findingKind: "risk", classification: "inference", evidenceReferences: ["session-one:event-0002", "session-one:event-0003"] }],
+} });
 
 test("safe report makes cited evidence and matching Fix/Harden proposals inspectable in finding cards", () => {
   const html = buildHindsightDocument(source(), fullOutput());
@@ -24,6 +36,48 @@ test("safe writer validates action types, citations, and matching cited findings
   assert.throws(() => buildHindsightDocument(source(), { claims: [{ statement: "x", classification: "inference", evidenceReferences: ["session-one:event-0001"] }], recommendations: [proposal("fix"), { ...proposal("harden"), evidenceReferences: ["outside"] }] }), /outside the selected/);
   assert.throws(() => buildHindsightDocument(source(), { claims: [], recommendations: [], narrativeMap: {} }), /unsupported fields/);
   assert.throws(() => buildHindsightDocument(source(), { claims: [], recommendations: [{ ...proposal(), status: "accepted" }] }), /status/);
+});
+
+test("subagent efficiency validates matched delegation, follow-up delivery evidence, and shared Fix/Harden citations", () => {
+  const html = buildHindsightDocument(subagentSource(), subagentOutput());
+  for (const marker of ["Subagent efficiency", "Timing", "Delivery", "Delegation was explicitly initiated.", "Reviewed output", "Follow-up accepted", "Matching harden proposals", "Matching fix proposals", "follow-up are cited"]) assert.ok(html.includes(marker), marker);
+  assert.match(buildSynthesisPrompt(subagentSource()), /exact same-ID results/);
+  assert.throws(() => buildHindsightDocument(subagentSource(), { ...subagentOutput(), subagentEfficiency: { ...subagentOutput().subagentEfficiency, delegationTiming: [{ ...subagentOutput().subagentEfficiency.delegationTiming[0], evidenceReferences: ["session-one:event-0003"] }] } }), /call or result/);
+  assert.throws(() => buildHindsightDocument(subagentSource(), { ...subagentOutput(), subagentEfficiency: { ...subagentOutput().subagentEfficiency, deliveryQuality: [{ ...subagentOutput().subagentEfficiency.deliveryQuality[0], classification: "direct evidence" }] } }), /requires inference/);
+  assert.throws(() => buildHindsightDocument(subagentSource(), { ...subagentOutput(), subagentEfficiency: { ...subagentOutput().subagentEfficiency, deliveryQuality: [{ ...subagentOutput().subagentEfficiency.deliveryQuality[0], evidenceReferences: ["session-one:event-0001", "session-one:event-0003"] }] } }), /result and its own chronological follow-up/);
+  assert.throws(() => buildHindsightDocument(subagentSource({ followUp: false }), { claims: [], recommendations: [{ ...proposal("fix"), evidenceReferences: ["session-one:event-0002"] }], subagentEfficiency: { delegationTiming: [], deliveryQuality: [{ statement: "A result alone cannot assess quality.", findingKind: "risk", classification: "inference", evidenceReferences: ["session-one:event-0002"] }] } }), /result and its own chronological follow-up/);
+  assert.throws(() => buildHindsightDocument(subagentSource(), { ...subagentOutput(), recommendations: [proposal("fix")], subagentEfficiency: { ...subagentOutput().subagentEfficiency, delegationTiming: [] } }), /matching fix proposal/);
+  assert.throws(() => buildHindsightDocument(source(), { claims: [], recommendations: [], subagentEfficiency: { delegationTiming: [], deliveryQuality: [] } }), /must be omitted/);
+  assert.doesNotThrow(() => buildHindsightDocument(subagentSource({ followUp: false }), { claims: [], recommendations: [], subagentEfficiency: { delegationTiming: [], deliveryQuality: [] } }));
+});
+
+test("lone calls are no activity while a matched result without follow-up permits timing only", () => {
+  const loneCall = [{ reference: "session-one", events: [{ id: "event-call", subagentActivity: "delegation-call", delegationPair: "delegation-1", evidence: { reference: "session-one:event-0001" } }], edges: [] }];
+  assert.match(buildHindsightDocument(loneCall, { claims: [], recommendations: [] }), /No inspectable subagent activity/);
+  assert.throws(() => buildHindsightDocument(loneCall, { claims: [], recommendations: [], subagentEfficiency: { delegationTiming: [], deliveryQuality: [] } }), /must be omitted/);
+  const timingOnly = { claims: [], recommendations: [{ ...proposal("harden"), evidenceReferences: ["session-one:event-0002"] }], subagentEfficiency: { delegationTiming: [{ statement: "A matched result is available for timing review.", findingKind: "strength", classification: "direct evidence", evidenceReferences: ["session-one:event-0002"] }], deliveryQuality: [] } };
+  assert.doesNotThrow(() => buildHindsightDocument(subagentSource({ followUp: false }), timingOnly));
+});
+
+test("delivery quality rejects cross-pair citations while accepting one qualified pair", () => {
+  const paired = [{ reference: "session-one", events: [
+    { id: "call-one", subagentActivity: "delegation-call", delegationPair: "delegation-1", evidence: { reference: "session-one:event-0001" } },
+    { id: "result-one", subagentActivity: "delegation-result", delegationPair: "delegation-1", evidence: { reference: "session-one:event-0002" } },
+    { id: "follow-one", subagentActivity: "delegation-follow-up", delegationPair: "delegation-1", evidence: { reference: "session-one:event-0003" } },
+    { id: "call-two", subagentActivity: "delegation-call", delegationPair: "delegation-2", evidence: { reference: "session-one:event-0004" } },
+    { id: "result-two", subagentActivity: "delegation-result", delegationPair: "delegation-2", evidence: { reference: "session-one:event-0005" } },
+    { id: "follow-two", subagentActivity: "delegation-follow-up", delegationPair: "delegation-2", evidence: { reference: "session-one:event-0006" } },
+  ], edges: [] }];
+  const output = (refs) => ({ claims: [], recommendations: [{ ...proposal("fix"), evidenceReferences: refs }], subagentEfficiency: { delegationTiming: [], deliveryQuality: [{ statement: "Review delivery evidence.", findingKind: "risk", classification: "inference", evidenceReferences: refs }] } });
+  assert.throws(() => buildHindsightDocument(paired, output(["session-one:event-0002", "session-one:event-0006"])), /its own chronological follow-up/);
+  assert.doesNotThrow(() => buildHindsightDocument(paired, output(["session-one:event-0005", "session-one:event-0006"])));
+  const prompt = buildSynthesisPrompt(paired); assert.match(prompt, /Qualified delivery pairs \(evidence-reference arrays only\)/); assert.doesNotMatch(prompt, /delegation-[12]/);
+});
+
+test("no delegated activity has a deterministic concise state and prompt forbids invented assessment", () => {
+  const html = buildHindsightDocument(source(), { claims: [], recommendations: [] });
+  assert.match(html, /No inspectable subagent activity in this selected conversation\./);
+  assert.match(buildSynthesisPrompt(source()), /Omit subagentEfficiency entirely/);
 });
 
 test("omitted model output and excluded redaction fallback remain safe", () => {
