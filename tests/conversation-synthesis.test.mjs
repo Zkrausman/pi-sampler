@@ -106,4 +106,6 @@ test("unsupported hindsight flags are rejected before a session is selected", as
   const { hindsightArguments } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
   for (const flag of ["--narrative-map", "--validate-claim-support", "--prior-outcomes old.outcomes.json"]) assert.throws(() => hindsightArguments(flag), /Unsupported hindsight option/);
   assert.deepEqual(hindsightArguments("reports/one.html"), { outputPath: "reports/one.html" });
+  assert.deepEqual(hindsightArguments("session-ab12 reports/one.html"), { reference: "session-ab12", outputPath: "reports/one.html" });
+  assert.throws(() => hindsightArguments("session-invalid!"), /identifier is invalid/);
 });

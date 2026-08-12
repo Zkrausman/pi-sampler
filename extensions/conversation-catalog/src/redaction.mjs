@@ -112,7 +112,9 @@ function replaceRanges(value, findings) {
 
 /** Deterministic local-only label that prevents opaque source IDs/names leaking into exports. */
 export function pseudonymizeSession(session) {
-  const value = `${text(session?.id)}\u0000${text(session?.name)}`;
+  // Session IDs are immutable whereas display names can change. Hash only the
+  // ID so a browser handoff remains stable without exposing storage details.
+  const value = text(session?.id);
   let hash = 2166136261;
   for (const character of value) {
     hash ^= character.codePointAt(0);
