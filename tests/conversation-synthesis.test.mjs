@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { buildHindsightDocument, buildSynthesisPrompt, MAX_SYNTHESIS_PROMPT_BYTES, preflightSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -39,4 +40,13 @@ test("only approved commands and one hindsight tool remain public", () => {
   assert.equal((index.match(/registerCommand\(/g) || []).length, 4); assert.equal((index.match(/registerTool\(/g) || []).length, 1);
   for (const removed of ["hindsight-notes", "hindsight-feedback", "hindsight-outcome", "hindsight-work", "Linear"]) assert.doesNotMatch(index, new RegExp(removed, "i"));
   assert.match(index, /Unsupported hindsight option/);
+});
+
+test("unsupported hindsight flags are rejected before a session is selected", async () => {
+  let extension = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8").replace(/^import[^\n]+;\r?\n/gm, "");
+  extension += "\nexport { hindsightArguments };";
+  const compiled = ts.transpileModule(extension, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const { hindsightArguments } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
+  for (const flag of ["--narrative-map", "--validate-claim-support", "--prior-outcomes old.outcomes.json"]) assert.throws(() => hindsightArguments(flag), /Unsupported hindsight option/);
+  assert.deepEqual(hindsightArguments("reports/one.html"), { outputPath: "reports/one.html" });
 });
