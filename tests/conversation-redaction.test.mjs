@@ -41,6 +41,21 @@ test("hindsight projection omits thinking by default while the local viewer may 
   assert.match(projectConversation(entries, { includeThinking: true }).events[0].summary, /Private local reasoning/);
 });
 
+test("Pi session events have recognizable replay labels and reveal extension state only in local viewer mode", () => {
+  const entries = [
+    { id: "level", type: "thinking_level_change", timestamp: "2025-01-01", thinkingLevel: "high" },
+    { id: "model", type: "model_change", timestamp: "2025-01-02", provider: "openai", modelId: "gpt-5" },
+    { id: "name", type: "session_info", timestamp: "2025-01-03", name: "Release review" },
+    { id: "compact", type: "compaction", timestamp: "2025-01-04", summary: "Earlier work summarized", tokensBefore: 2000 },
+    { id: "extension-message", type: "custom_message", timestamp: "2025-01-05", customType: "example-extension", content: "Extension context", display: false },
+    { id: "state", type: "custom", timestamp: "2025-01-06", customType: "example-extension", data: { local: "state value" } },
+  ];
+  const standard = projectConversation(entries); const local = projectConversation(entries, { includeLocalEntries: true });
+  assert.deepEqual(local.events.map((event) => [event.category, event.title]), [["thinking-level", "Thinking level changed"], ["model-change", "Model changed"], ["session-info", "Session named"], ["compaction", "Context compacted"], ["extension-message", "Extension message"], ["extension-state", "Extension state"]]);
+  assert.match(local.events[4].summary, /Extension context/); assert.match(local.events[5].summary, /state value/);
+  assert.doesNotMatch(standard.events[5].summary, /state value/);
+});
+
 test("only exact matched subagent pairs and their immediate chronological assistant follow-up become safely remapped delegation evidence", () => {
   const rawCallId = "raw-call-secret"; const rawEntryId = "raw-entry-secret";
   const entries = [

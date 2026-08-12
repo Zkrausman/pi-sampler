@@ -46,6 +46,17 @@ function argumentSummary(argumentsValue) {
   }
 }
 
+function localValueSummary(value, fallback) {
+  if (typeof value === "string") return bounded(value, fallback);
+  if (typeof value === "number" || typeof value === "boolean") return bounded(String(value), fallback);
+  if (!isObject(value) && !Array.isArray(value)) return fallback;
+  try {
+    return bounded(JSON.stringify(value), fallback);
+  } catch {
+    return fallback;
+  }
+}
+
 function contentSummary(content, fallback, { includeThinking = false } = {}) {
   if (typeof content === "string") return bounded(content, fallback);
   if (!Array.isArray(content)) return fallback;
@@ -100,7 +111,7 @@ function eventFor(entry, sourceIndex, category, title, summary, message, extras)
  * All persisted branches are shown. The "next assistant" connection is a labeled,
  * chronological inference rather than a claim about tree-branch causality.
  */
-export function projectConversation(entries, { includeThinking = false } = {}) {
+export function projectConversation(entries, { includeThinking = false, includeLocalEntries = false } = {}) {
   const ordered = (Array.isArray(entries) ? entries : [])
     .map((entry, sourceIndex) => ({ entry: isObject(entry) ? entry : {}, sourceIndex }))
     .sort((left, right) => timeValue(left.entry.timestamp) - timeValue(right.entry.timestamp) || left.sourceIndex - right.sourceIndex);
@@ -115,9 +126,25 @@ export function projectConversation(entries, { includeThinking = false } = {}) {
     const message = isObject(entry.message) ? entry.message : undefined;
     let primary;
     if (entry.type !== "message" || !message) {
-      const customType = text(entry.customType) || text(message?.customType);
-      const category = isSkill(customType) ? "skill" : "unsupported";
-      primary = eventFor(entry, sourceIndex, category, category === "skill" ? "Skill activity" : "Unsupported entry", contentSummary(entry.content, "This entry cannot be rendered as a Pi message."), message, customType ? [{ label: "Custom type", value: bounded(customType) }] : []);
+      const customType = text(entry.customType);
+      const extras = customType ? [{ label: "Custom type", value: bounded(customType) }] : [];
+      if (entry.type === "custom_message") {
+        const category = isSkill(customType) ? "skill" : "extension-message";
+        primary = eventFor(entry, sourceIndex, category, category === "skill" ? "Skill activity" : "Extension message", contentSummary(entry.content, "Extension message has no readable text.", { includeThinking }), message, extras.concat([{ label: "Display", value: entry.display === false ? "Hidden in Pi" : "Visible in Pi" }]));
+      } else if (entry.type === "thinking_level_change") {
+        primary = eventFor(entry, sourceIndex, "thinking-level", "Thinking level changed", bounded(entry.thinkingLevel, "Unknown thinking level"), message);
+      } else if (entry.type === "model_change") {
+        const model = [text(entry.provider), text(entry.modelId)].filter(Boolean).join("/");
+        primary = eventFor(entry, sourceIndex, "model-change", "Model changed", bounded(model, "Unknown model"), message);
+      } else if (entry.type === "session_info") {
+        primary = eventFor(entry, sourceIndex, "session-info", "Session named", bounded(entry.name, "Session information updated"), message);
+      } else if (entry.type === "compaction") {
+        primary = eventFor(entry, sourceIndex, "compaction", "Context compacted", bounded(entry.summary, "Context compacted without a readable summary"), message, Number.isFinite(entry.tokensBefore) ? [{ label: "Tokens before", value: String(entry.tokensBefore) }] : []);
+      } else if (entry.type === "custom") {
+        primary = eventFor(entry, sourceIndex, "extension-state", "Extension state", includeLocalEntries ? localValueSummary(entry.data, "No extension state recorded.") : "Extension state recorded locally.", message, extras);
+      } else {
+        primary = eventFor(entry, sourceIndex, "unsupported", "Unrecognized Pi entry", includeLocalEntries ? localValueSummary(entry.content ?? entry.data ?? entry, "This local Pi entry type has no renderer yet.") : "This Pi entry type has no renderer yet.", message, extras.concat(text(entry.type) ? [{ label: "Entry type", value: bounded(entry.type) }] : []));
+      }
       events.push(primary);
     } else if (message.role === "user") {
       primary = eventFor(entry, sourceIndex, "user", "User", contentSummary(message.content, "User message has no readable text."), message);
