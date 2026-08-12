@@ -1,5 +1,3 @@
-import { escapeHtml } from "./catalog.mjs";
-
 const MAX_SUMMARY_LENGTH = 480;
 const UNKNOWN_TIME = "Unknown time";
 

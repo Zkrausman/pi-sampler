@@ -1,144 +1,68 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
-import {
-  escapeHtml,
-  generateCatalogHtml,
-  groupSessions,
-  normalizeSession,
-} from "../extensions/conversation-catalog/src/catalog.mjs";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+import { browserLabel, browserSession, formatConversationForLocalRead, hindsightCommand, resolveHindsightRequest, sessionById } from "../extensions/conversation-catalog/src/conversation-browser.mjs";
 
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const modified = new Date("2025-02-03T04:05:06.000Z");
 
-function inlineContent(html, tag) {
-  const start = `<${tag}>`;
-  const end = `</${tag}>`;
-  return html.slice(html.indexOf(start) + start.length, html.indexOf(end));
-}
-
-function cspHash(text) {
-  return `sha256-${createHash("sha256").update(text).digest("base64")}`;
-}
-
-test("normalization prefers names, bounds first prompts, and supplies safe fallbacks", () => {
-  assert.deepEqual(normalizeSession({
-    name: "  Saved name  ", firstMessage: "ignored", cwd: "  E:/work  ", modified, messageCount: 4,
-  }), {
-    title: "Saved name",
-    modified: "2025-02-03 04:05:06 UTC",
-    location: "E:/work",
-    messageCount: 4,
-  });
-
-  const longPrompt = "x".repeat(205);
-  assert.equal(normalizeSession({ name: " ", firstMessage: `  ${longPrompt}  ` }).title, `${"x".repeat(200)}…`);
-  assert.deepEqual(normalizeSession({ cwd: " ", modified: "not a date", messageCount: -2 }), {
-    title: "Untitled session",
-    modified: "Unknown time",
-    location: "Unknown location",
-    messageCount: 0,
-  });
+test("browser session metadata is bounded and keeps the local selection identifier", () => {
+  const session = browserSession({ id: "session-opaque-1", name: "  Saved name  ", firstMessage: "ignored", cwd: "  E:/work  ", modified, messageCount: 4 });
+  assert.deepEqual(session, { key: 0, id: "session-opaque-1", title: "Saved name", location: "E:/work", modified: "2025-02-03 04:05:06 UTC", messageCount: 4 });
+  assert.match(browserLabel({ id: "session-opaque-1", name: "Saved name", cwd: "E:/work", modified, messageCount: 4 }), /Saved name.*E:\/work.*4 messages/);
+  assert.equal(browserSession({ firstMessage: "x".repeat(205) }).title, `${"x".repeat(200)}…`);
 });
 
-test("sessions group by normalized location and sort predictably without retaining identifiers", () => {
-  const groups = groupSessions([
-    { id: "z", name: "later title", cwd: "Beta", modified: "2024-01-01T00:00:00Z", messageCount: 1 },
-    { id: "a", name: "earlier title", cwd: "Beta", modified: "2024-01-01T00:00:00Z", messageCount: 1 },
-    { id: "missing", name: "unknown", cwd: " ", modified: "invalid", messageCount: 1 },
-    { id: "new", name: "newest", cwd: "Alpha", modified: "2025-01-01T00:00:00Z", messageCount: 2 },
-    { id: "old", name: "older", cwd: "Alpha", modified: "2023-01-01T00:00:00Z", messageCount: 2 },
+test("exact local IDs resolve a selected session without accepting partial or stale identifiers", () => {
+  const sessions = [{ id: "session-one", path: "private-one" }, { id: "session-two", path: "private-two" }];
+  assert.equal(sessionById(sessions, "session-two"), sessions[1]);
+  assert.equal(sessionById(sessions, "session"), undefined);
+  assert.equal(sessionById(sessions, "missing"), undefined);
+  assert.equal(sessionById([{ id: "duplicate" }, { id: "duplicate" }], "duplicate"), undefined);
+  assert.equal(sessionById(sessions, ""), undefined);
+  assert.equal(hindsightCommand("session-two"), "/hindsight-document session-two");
+  assert.equal(hindsightCommand("session-two", "reports/final.html"), "/hindsight-document session-two reports/final.html");
+  assert.throws(() => hindsightCommand(""), /identifier/);
+  assert.deepEqual(resolveHindsightRequest(sessions, { sessionId: "session-two", outputPath: "reports/one.html" }), { session: sessions[1], outputPath: "reports/one.html", unavailable: false });
+  assert.deepEqual(resolveHindsightRequest(sessions, { raw: "reports/final report.html", sessionId: "reports/final", outputPath: "report.html" }), { session: undefined, outputPath: "reports/final report.html", unavailable: false });
+  assert.deepEqual(resolveHindsightRequest(sessions, { raw: "stale-session", sessionId: "stale-session", outputPath: "" }), { session: undefined, outputPath: "", unavailable: true });
+});
+
+test("local reader formats saved messages without persisting or sending their content", () => {
+  const transcriptSentinel = "TRANSCRIPT-ONLY-IN-TUI";
+  const output = formatConversationForLocalRead([
+    { type: "message", timestamp: "2025-01-01T00:00:00.000Z", message: { role: "user", content: transcriptSentinel } },
+    { type: "message", timestamp: "2025-01-01T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "Assistant reply" }, { type: "thinking", thinking: "secret chain" }, { type: "toolCall", name: "read", arguments: { path: "private.txt" } }] } },
+    { type: "message", timestamp: "2025-01-01T00:00:02.000Z", message: { role: "toolResult", toolName: "read", content: [{ type: "text", text: "Tool output" }] } },
+    { type: "message", timestamp: "2025-01-01T00:00:03.000Z", message: { role: "bashExecution", command: "git status", output: "clean" } },
   ]);
-
-  assert.deepEqual(groups.map((group) => group.location), ["Alpha", "Beta", "Unknown location"]);
-  assert.deepEqual(groups[0].sessions.map((session) => session.title), ["newest", "older"]);
-  assert.deepEqual(groups[1].sessions.map((session) => session.title), ["earlier title", "later title"]);
-  assert.equal(groups[2].sessions[0].location, "Unknown location");
-  assert.deepEqual(Object.keys(groups[0].sessions[0]), ["title", "modified", "location", "messageCount"]);
+  for (const expected of [transcriptSentinel, "Assistant reply", "Tool call: read", "private.txt", "Tool result: read", "Tool output", "$ git status", "clean"]) assert.ok(output.includes(expected), expected);
+  assert.match(output, /Thinking omitted/);
+  assert.doesNotMatch(output, /secret chain/);
 });
 
-test("HTML catalog is a responsive reader-first metadata launcher", () => {
-  const html = generateCatalogHtml(groupSessions([{
-    id: "one", name: "Named session", cwd: "E:/project", modified, messageCount: 7,
-  }]));
-
-  assert.match(html, /^<!doctype html>/i);
-  assert.match(html, /<meta name="viewport"/);
-  assert.match(html, /<style>/);
-  assert.match(html, /Generate a hindsight report/);
-  assert.match(html, /value="\/hindsight-document" readonly/);
-  assert.match(html, /Browse\/identify a session here/);
-  assert.match(html, /Copy\/run <strong>\/hindsight-document<\/strong> in Pi/);
-  assert.match(html, /Select exactly one session and finish the redaction review/);
-  assert.match(html, /A static local page cannot run Pi commands\. Selection and redaction stay in Pi/);
-  assert.match(html, /Selection happens in Pi&apos;s picker, not on this page/);
-  assert.match(html, /Named session/);
-  assert.match(html, /2025-02-03 04:05:06 UTC/);
-  assert.match(html, /E:\/project/);
-  assert.match(html, />7</);
-  assert.match(html, /@media \(max-width: 34rem\)/);
-  assert.match(generateCatalogHtml([]), /No saved Pi sessions were found/);
+test("extension exposes only native browsing and hindsight commands with no generated catalog website", () => {
+  const index = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
+  assert.equal((index.match(/registerCommand\(/g) || []).length, 2);
+  for (const command of ["conversation-catalog", "hindsight-document"]) assert.ok(index.includes(`registerCommand("${command}"`));
+  assert.match(index, /SessionManager\.listAll\(\)/);
+  assert.match(index, /formatConversationForLocalRead/);
+  assert.match(index, /ctx\.ui\.editor\(/);
+  assert.match(index, /hindsightCommand\(session\.id\)/);
+  assert.doesNotMatch(index, /writeFile|generateCatalogHtml|pi-conversation-catalog\.html/);
+  assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/catalog.mjs")), false);
 });
 
-test("launcher CSP permits only its exact local inline assets and has no remote capability", () => {
-  const html = generateCatalogHtml([]);
-  const style = inlineContent(html, "style");
-  const script = inlineContent(html, "script");
-  const csp = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
-
-  assert.ok(csp);
-  assert.match(csp, /default-src 'none'/);
-  assert.match(csp, /connect-src 'none'/);
-  assert.match(csp, /base-uri 'none'/);
-  assert.match(csp, /form-action 'none'/);
-  assert.ok(csp.includes(`style-src '${cspHash(style)}'`));
-  assert.ok(csp.includes(`script-src '${cspHash(script)}'`));
-  assert.doesNotMatch(csp, /unsafe-inline|https?:|\*/i);
-  assert.doesNotMatch(html, /<(?:link|img|iframe|form)\b/i);
-  assert.doesNotMatch(html, /https?:\/\//i);
-});
-
-test("copy control is keyboard-accessible and safely uses clipboard then a selectable fallback", () => {
-  const html = generateCatalogHtml([]);
-  const script = inlineContent(html, "script");
-
-  assert.match(html, /<button id="copy-command" type="button">Copy command<\/button>/);
-  assert.match(html, /<input class="command-box" id="hindsight-command" type="text" value="\/hindsight-document" readonly aria-label="Hindsight command">/);
-  assert.match(html, /id="copy-status" class="copy-status" role="status" aria-live="polite"/);
-  assert.match(script, /navigator\.clipboard\.writeText\(command\)/);
-  assert.match(script, /typeof navigator\.clipboard\.writeText === "function"/);
-  assert.match(script, /try \{[\s\S]*?await navigator\.clipboard\.writeText\(command\)[\s\S]*?\} catch \(_\) \{\}/);
-  assert.match(script, /commandBox\.focus\(\);[\s\S]*?commandBox\.select\(\);[\s\S]*?document\.execCommand\("copy"\)/);
-  assert.match(script, /Clipboard access is unavailable\. Select and copy the command box/);
-  assert.match(script, /Command copied\. Paste and run it in Pi/);
-  assert.doesNotMatch(script, /innerHTML|outerHTML|insertAdjacentHTML|eval\(|Function\(|<\/script/i);
-  assert.doesNotMatch(script, /fetch\(|XMLHttpRequest|WebSocket|window\.open/i);
-});
-
-test("HTML escapes hostile allowed metadata and excludes session IDs, paths, and transcript content", () => {
-  const transcriptSentinel = "TRANSCRIPT-DO-NOT-RENDER";
-  const rawJsonSentinel = "RAW-SESSION-JSON-DO-NOT-RENDER";
-  const pathSentinel = "PATH-DO-NOT-RENDER";
-  const idSentinel = "SESSION-ID-DO-NOT-RENDER";
-  const html = generateCatalogHtml(groupSessions([
-    {
-      id: idSentinel, name: '<img src=x onerror="alert(1)">',
-      firstMessage: "ignored prompt", cwd: 'x"><svg onload="alert(2)">',
-      modified, messageCount: 1, allMessagesText: transcriptSentinel, path: pathSentinel, raw: rawJsonSentinel,
-    },
-    {
-      id: "prompt-id", name: " ", firstMessage: '<script>alert("prompt")</script>',
-      cwd: 'x"><svg onload="alert(2)">', modified, messageCount: 1,
-    },
-  ]));
-
-  assert.match(escapeHtml(`&<>"'`), /&amp;&lt;&gt;&quot;&#39;/);
-  assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
-  assert.match(html, /&lt;script&gt;alert\(&quot;prompt&quot;\)&lt;\/script&gt;/);
-  assert.match(html, /x&quot;&gt;&lt;svg onload=&quot;alert\(2\)&quot;&gt;/);
-  assert.doesNotMatch(html, /<img src=x/);
-  assert.doesNotMatch(html, /<script>alert/);
-  assert.doesNotMatch(html, /<svg onload/);
-  for (const forbidden of [transcriptSentinel, rawJsonSentinel, pathSentinel, idSentinel, "prompt-id"]) {
-    assert.doesNotMatch(html, new RegExp(forbidden));
-  }
+test("hindsight arguments accept the native selected-session handoff and preserve legacy output paths", async () => {
+  const extension = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8").replace(/^import[^\n]+;\r?\n/gm, "");
+  const compiled = ts.transpileModule(extension, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const { hindsightArguments } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
+  assert.deepEqual(hindsightArguments(""), {});
+  assert.deepEqual(hindsightArguments("reports/final report.html"), { raw: "reports/final report.html", sessionId: "reports/final", outputPath: "report.html" });
+  assert.deepEqual(hindsightArguments("session-opaque-1"), { raw: "session-opaque-1", sessionId: "session-opaque-1", outputPath: "" });
+  assert.deepEqual(hindsightArguments("session-opaque-1 reports/one.html"), { raw: "session-opaque-1 reports/one.html", sessionId: "session-opaque-1", outputPath: "reports/one.html" });
+  assert.throws(() => hindsightArguments("--narrative-map"), /Unsupported hindsight option/);
 });

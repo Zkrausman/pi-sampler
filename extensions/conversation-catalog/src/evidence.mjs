@@ -1,4 +1,4 @@
-import { escapeHtml } from "./catalog.mjs";
+const escapeHtml = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 const text = (value) => typeof value === "string" ? value.trim() : "";
 const bounded = (value, fallback = "No readable source context", max = 480) => { const chars = Array.from(text(value)); return chars.length ? (chars.length > max ? `${chars.slice(0, max).join("")}…` : chars.join("")) : fallback; };

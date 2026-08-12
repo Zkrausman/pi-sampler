@@ -1,9 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, extname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { generateCatalogHtml, groupSessions } from "./catalog.mjs";
+import { browserLabel, formatConversationForLocalRead, hindsightCommand, resolveHindsightRequest } from "./conversation-browser.mjs";
 import { projectConversation } from "./conversation.mjs";
 import { attachEvidenceReferences } from "./evidence.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
@@ -11,28 +11,18 @@ import { buildHindsightDocument, preflightSynthesisPrompt } from "./synthesis.mj
 import { compileSensitivePatterns, findSensitiveContent, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 import { defaultHindsightReportDirectory, resolveExplicitHindsightOutputPath, writeDefaultHindsightReport, writeHindsightReport } from "./hindsight-output.mjs";
 
-const DEFAULT_FILENAME = "pi-conversation-catalog.html";
-
-function resolveOutputPath(args: string, cwd: string, defaultFilename = DEFAULT_FILENAME, label = "catalog") {
-  const requestedPath = args.trim() || defaultFilename;
-  if (requestedPath.includes("\0")) throw new Error("The output path is invalid.");
-  const outputPath = resolve(cwd, requestedPath);
-  if (extname(outputPath).toLowerCase() !== ".html") throw new Error(`The ${label} output path must end in .html.`);
-  return outputPath;
-}
 function hindsightArguments(args: string) {
-  const outputPath = args.trim();
-  if (/(?:^|\s)--\S+/.test(outputPath)) throw new Error("Unsupported hindsight option. Usage: /hindsight-document [output-path]");
-  return { outputPath };
+  const value = args.trim();
+  if (/(?:^|\s)--\S+/.test(value)) throw new Error("Unsupported hindsight option. Usage: /hindsight-document [session-id] [output-path]");
+  if (!value) return {};
+  const [sessionId, ...rest] = value.split(/\s+/);
+  // Preserve the former one-token output-path contract. For multi-token input,
+  // the command handler resolves an exact session ID before treating the full
+  // argument as a legacy output path containing spaces.
+  if (!rest.length && /\.html$/i.test(value)) return { outputPath: value };
+  return { raw: value, sessionId, outputPath: rest.join(" ").trim() };
 }
-function pickerDescription(value: unknown) {
-  const words = typeof value === "string" ? value.trim().split(/\s+/).filter(Boolean) : [];
-  return words.length > 10 ? `${words.slice(0, 10).join(" ")}…` : words.join(" ");
-}
-function pickerLabel(session: any) {
-  const description = pickerDescription(session.name || session.firstMessage) || "Untitled session";
-  return `${session.cwd || "Unknown location"} — ${description} (${typeof session.id === "string" ? session.id.slice(0, 8) : "unknown"})`;
-}
+function pickerLabel(session: any, index: number) { return browserLabel(session, index); }
 async function configuredPatterns(cwd: string) {
   try {
     const parsed = JSON.parse(await readFile(resolve(cwd, ".pi", "conversation-redaction-patterns.json"), "utf8"));
@@ -91,32 +81,63 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       catch (error) { return { content: [{ type: "text", text: error instanceof Error ? `Unable to write hindsight document: ${error.message}` : "Unable to write hindsight document." }] }; }
     },
   });
-  pi.registerCommand("conversation-catalog", { description: "Write a standalone HTML catalog of saved Pi sessions", async handler(args, ctx) {
+  const selectedEntries = (session: any) => {
+    try { return SessionManager.open(session.path).getEntries(); }
+    catch { throw new Error("Unable to open the selected conversation."); }
+  };
+  const startHindsight = async (session: any, outputPathArgument: string | undefined, ctx: any) => {
+    const projection = projectConversation(selectedEntries(session));
+    const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd));
+    const review = await reviewRedactionChoices(ctx, findings); const reference = pseudonymizeSession(session);
+    const sources = review.excluded ? [{ reference, excluded: true }] : [{ reference, ...attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions)) }];
+    const outputPath = outputPathArgument ? resolveExplicitHindsightOutputPath(outputPathArgument, ctx.cwd) : undefined;
+    const defaultDirectory = outputPath ? undefined : defaultHindsightReportDirectory({ home: homedir() });
+    const prompt = preflightSynthesisPrompt(sources, {}, ctx.getContextUsage?.()); const restoreTools = restrictToolsForHindsightSynthesis(pi);
+    try { pendingHindsight = { sources, outputPath, defaultDirectory, reference, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
+    const destination = outputPath || defaultDirectory;
+    ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${destination}.`, "info");
+  };
+  pi.registerCommand("conversation-catalog", { description: "Browse and locally read saved Pi conversations", async handler(args, ctx) {
     try {
-      const outputPath = resolveOutputPath(args, ctx.cwd);
-      const metadata = (await SessionManager.listAll()).map((session) => ({ name: session.name, firstMessage: session.firstMessage, cwd: session.cwd, modified: session.modified, messageCount: session.messageCount }));
-      await mkdir(dirname(outputPath), { recursive: true }); await writeFile(outputPath, generateCatalogHtml(groupSessions(metadata)), "utf8");
-      ctx.ui.notify(`Conversation catalog written to ${outputPath}. Open this .html file directly in your browser.`, "info");
-    } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to write the conversation catalog.", "error"); }
+      if (args.trim()) throw new Error("Usage: /conversation-catalog");
+      if (ctx.mode !== "tui") throw new Error("Conversation browsing requires Pi's interactive terminal UI.");
+      const sessions = await SessionManager.listAll();
+      if (!sessions.length) throw new Error("No saved conversations are available to browse.");
+      while (true) {
+        const options = sessions.map((session, index) => pickerLabel(session, index));
+        const choice = await ctx.ui.select("Browse saved conversations", ["Close", ...options]);
+        if (!choice || choice === "Close") return;
+        const index = options.indexOf(choice); if (index < 0) continue;
+        const session = sessions[index];
+        const entries = selectedEntries(session);
+        await ctx.ui.editor("Local conversation reader — changes are discarded; Escape when finished", formatConversationForLocalRead(entries));
+        const action = await ctx.ui.select("Selected conversation", ["Start hindsight with required redaction review", "Put its hindsight command in the Pi editor", "Back to saved conversations", "Close"]);
+        if (action === "Start hindsight with required redaction review") { await startHindsight(session, undefined, ctx); return; }
+        if (action === "Put its hindsight command in the Pi editor") {
+          ctx.ui.setEditorText(hindsightCommand(session.id));
+          ctx.ui.notify("The exact selected-conversation hindsight command is ready in the Pi editor.", "info");
+          return;
+        }
+        if (action === "Close" || !action) return;
+      }
+    } catch (_error) { ctx.ui.notify("Unable to browse saved conversations.", "error"); }
   }});
-  pi.registerCommand("hindsight-document", { description: "Interactively select one conversation and write a cited hindsight document", async handler(args, ctx) {
+  pi.registerCommand("hindsight-document", { description: "Write a cited hindsight document for one saved conversation", async handler(args, ctx) {
     try {
       if (!ctx.hasUI) throw new Error("Hindsight generation requires Pi's interactive UI.");
       const requested = hindsightArguments(args); const sessions = await SessionManager.listAll();
       if (!sessions.length) throw new Error("No saved conversations are available for hindsight generation.");
-      const options = sessions.map((session, index) => `${index + 1}. ${pickerLabel(session)}`);
-      const choice = await ctx.ui.select("Select one conversation for hindsight", ["Cancel", ...options]);
-      if (!choice || choice === "Cancel") throw new Error("Hindsight generation canceled.");
-      const index = options.indexOf(choice); if (index < 0) throw new Error("Select exactly one conversation for hindsight generation.");
-      const session = sessions[index]; const projection = projectConversation((await SessionManager.open(session.path)).getEntries());
-      const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd)); const review = await reviewRedactionChoices(ctx, findings); const reference = pseudonymizeSession(session);
-      const sources = review.excluded ? [{ reference, excluded: true }] : [{ reference, ...attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions)) }];
-      const outputPath = requested.outputPath ? resolveExplicitHindsightOutputPath(requested.outputPath, ctx.cwd) : undefined;
-      const defaultDirectory = outputPath ? undefined : defaultHindsightReportDirectory({ home: homedir() });
-      const prompt = preflightSynthesisPrompt(sources, {}, ctx.getContextUsage?.()); const restoreTools = restrictToolsForHindsightSynthesis(pi);
-      try { pendingHindsight = { sources, outputPath, defaultDirectory, reference, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
-      const destination = outputPath || defaultDirectory;
-      ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${destination}.`, "info");
+      const resolved = resolveHindsightRequest(sessions, requested);
+      let session = resolved.session;
+      if (resolved.unavailable) throw new Error("The selected conversation is no longer available.");
+      if (!session) {
+        const options = sessions.map((candidate, index) => pickerLabel(candidate, index));
+        const choice = await ctx.ui.select("Select one conversation for hindsight", ["Cancel", ...options]);
+        if (!choice || choice === "Cancel") throw new Error("Hindsight generation canceled.");
+        const index = options.indexOf(choice); if (index < 0) throw new Error("Select exactly one conversation for hindsight generation.");
+        session = sessions[index];
+      }
+      await startHindsight(session, resolved.outputPath, ctx);
     } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
   }});
 }
