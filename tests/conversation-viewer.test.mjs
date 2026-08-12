@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { request } from "node:http";
+import { createConnection } from "node:net";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,8 @@ import {
   viewerShouldClose,
   sandboxedReportHtml,
 } from "../extensions/conversation-catalog/src/viewer.mjs";
+import { pseudonymizeSession } from "../extensions/conversation-catalog/src/redaction.mjs";
+import { resolveSessionReference } from "../extensions/conversation-catalog/src/browser.mjs";
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "pi-viewer-"));
@@ -60,6 +63,9 @@ test("viewer renders transcript only after selection and reports in a sandboxed 
     assert.doesNotMatch(JSON.stringify(list), /Selected transcript only|PATH-DO-NOT-EXPOSE|entry-secret/);
     const detail = await (await get(viewer.url, "api/sessions/0")).json();
     assert.match(JSON.stringify(detail), /Selected transcript only/);
+    assert.match(detail.reference, /^session-[a-z0-9]+$/);
+    assert.equal(detail.reference, pseudonymizeSession({ id }));
+    assert.equal(resolveSessionReference([{ id }], detail.reference).id, id);
     assert.doesNotMatch(JSON.stringify(detail), /PATH-DO-NOT-EXPOSE|entry-secret/);
     const report = await (await get(viewer.url, "api/reports/0")).text();
     assert.match(report, /Local report/); assert.match(report, /default-src 'none'/);
@@ -89,6 +95,18 @@ test("viewer binds loopback and close, heartbeat, idle, and maximum lifetime rul
   assert.equal(viewerShouldClose({ started: 0, lastHeartbeat: 999, now: 1001, idleMs: 10_000, maxLifetimeMs: 1000 }), true);
   const closed = new Promise((resolve) => viewer.server.once("close", resolve));
   await get(viewer.url, "api/close", { method: "POST" }); await closed;
+});
+
+test("viewer teardown destroys an incomplete retained loopback connection", async () => {
+  const { sessions, reports } = await fixture();
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "d".repeat(43), idleMs: 60_000 });
+  const address = viewer.server.address();
+  const socket = createConnection({ host: "127.0.0.1", port: address.port });
+  await new Promise((resolveConnection, reject) => { socket.once("connect", resolveConnection); socket.once("error", reject); });
+  const socketClosed = new Promise((resolveClose) => socket.once("close", resolveClose));
+  const serverClosed = new Promise((resolveClose) => viewer.server.once("close", resolveClose));
+  viewer.close();
+  await Promise.all([socketClosed, serverClosed]);
 });
 
 test("viewer package assets are local and read-only implementation has no write, model, or network client", async () => {
