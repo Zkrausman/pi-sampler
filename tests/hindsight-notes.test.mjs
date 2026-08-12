@@ -37,7 +37,7 @@ function note(text = "User observed a delayed handoff.") {
 function runWriter(projectRoot, index) {
   const fixture = fileURLToPath(new URL("./fixtures/hindsight-notes-process-writer.mjs", import.meta.url));
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [fixture, projectRoot, sessionReference, String(index)], { stdio: "pipe" });
+    const child = spawn(process.execPath, [fixture, projectRoot, sessionId, sessionReference, String(index)], { stdio: "pipe" });
     let stderr = "";
     child.stderr.on("data", (value) => { stderr += value; });
     child.on("error", reject);
@@ -114,7 +114,7 @@ test("descriptor-relative persistence derives the only store and fails closed wh
       await mkdir(join(escapedRoot, ".pi"));
       try { await symlink(outside, join(escapedRoot, ".pi", "hindsight-notes"), "dir"); }
       catch (error) { t.diagnostic(`symlink setup unavailable: ${error.code || error}`); return; }
-      await assert.rejects(() => addHindsightNote(escapedRoot, sessionReference, eventReference, "Fixture event", "Must not escape root."), /unsafe_notes_path/);
+      await assert.rejects(() => addHindsightNote(escapedRoot, sessionReference, eventReference, "Fixture event", "Must not escape root.", { actualSessionId: sessionId, eventIdentity: "event-fixture" }), /unsafe_notes_path/);
     } finally { await rm(outside, { recursive: true, force: true }); await rm(escapedRoot, { recursive: true, force: true }); }
   } finally { await rm(projectRoot, { recursive: true, force: true }); }
 });
