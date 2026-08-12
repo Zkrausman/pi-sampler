@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, extname, resolve } from "node:path";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -9,6 +9,7 @@ import { attachEvidenceReferences } from "./evidence.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { buildHindsightDocument, preflightSynthesisPrompt } from "./synthesis.mjs";
 import { compileSensitivePatterns, findSensitiveContent, pseudonymizeSession, redactProjection } from "./redaction.mjs";
+import { defaultHindsightReportDirectory, resolveExplicitHindsightOutputPath, writeDefaultHindsightReport, writeHindsightReport } from "./hindsight-output.mjs";
 
 const DEFAULT_FILENAME = "pi-conversation-catalog.html";
 
@@ -23,13 +24,6 @@ function hindsightArguments(args: string) {
   const outputPath = args.trim();
   if (/(?:^|\s)--\S+/.test(outputPath)) throw new Error("Unsupported hindsight option. Usage: /hindsight-document [output-path]");
   return { outputPath };
-}
-async function writeHindsightReport(outputPath: string, html: string) {
-  await mkdir(dirname(outputPath), { recursive: true });
-  const temporaryPath = `${outputPath}.${randomUUID()}.tmp`;
-  await writeFile(temporaryPath, html, "utf8");
-  try { await rename(temporaryPath, outputPath); }
-  catch (error) { await rm(temporaryPath, { force: true }).catch(() => undefined); throw error; }
 }
 function pickerDescription(value: unknown) {
   const words = typeof value === "string" ? value.trim().split(/\s+/).filter(Boolean) : [];
@@ -70,7 +64,7 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
 
 /** Read-only catalog and redaction-reviewed hindsight reports of saved Pi conversations. */
 export default function conversationCatalog(pi: ExtensionAPI) {
-  let pendingHindsight: { sources: any[]; outputPath: string; restoreTools: () => void } | undefined;
+  let pendingHindsight: { sources: any[]; outputPath?: string; defaultDirectory?: string; reference: string; restoreTools: () => void } | undefined;
   pi.on("agent_settled", () => { const pending = pendingHindsight; if (pending) { pendingHindsight = undefined; pending.restoreTools(); } });
   pi.registerTool({
     name: "hindsight_document_write", label: "Write safe hindsight document",
@@ -83,7 +77,13 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
       if (!pendingHindsight) return { content: [{ type: "text", text: "No hindsight document draft is awaiting generation." }] };
-      try { await writeHindsightReport(pendingHindsight.outputPath, buildHindsightDocument(pendingHindsight.sources, params)); return { content: [{ type: "text", text: `Hindsight document written to ${pendingHindsight.outputPath}.` }] }; }
+      try {
+        const html = buildHindsightDocument(pendingHindsight.sources, params);
+        const outputPath = pendingHindsight.outputPath
+          ? (await writeHindsightReport(pendingHindsight.outputPath, html), pendingHindsight.outputPath)
+          : await writeDefaultHindsightReport({ directory: pendingHindsight.defaultDirectory!, reference: pendingHindsight.reference, html });
+        return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}.` }] };
+      }
       catch (error) { return { content: [{ type: "text", text: error instanceof Error ? `Unable to write hindsight document: ${error.message}` : "Unable to write hindsight document." }] }; }
     },
   });
@@ -107,10 +107,12 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       const session = sessions[index]; const projection = projectConversation((await SessionManager.open(session.path)).getEntries());
       const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd)); const review = await reviewRedactionChoices(ctx, findings); const reference = pseudonymizeSession(session);
       const sources = review.excluded ? [{ reference, excluded: true }] : [{ reference, ...attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions)) }];
-      const outputPath = resolveOutputPath(requested.outputPath, ctx.cwd, "pi-hindsight-document.html", "hindsight document");
+      const outputPath = requested.outputPath ? resolveExplicitHindsightOutputPath(requested.outputPath, ctx.cwd) : undefined;
+      const defaultDirectory = outputPath ? undefined : defaultHindsightReportDirectory({ home: homedir() });
       const prompt = preflightSynthesisPrompt(sources, {}, ctx.getContextUsage?.()); const restoreTools = restrictToolsForHindsightSynthesis(pi);
-      try { pendingHindsight = { sources, outputPath, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
-      ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${outputPath}.`, "info");
+      try { pendingHindsight = { sources, outputPath, defaultDirectory, reference, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
+      const destination = outputPath || defaultDirectory;
+      ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${destination}.`, "info");
     } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to generate hindsight document.", "error"); }
   }});
 }
