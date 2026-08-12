@@ -63,6 +63,7 @@ test("viewer renders transcript only after selection and reports in a sandboxed 
     assert.doesNotMatch(JSON.stringify(list), /Selected transcript only|PATH-DO-NOT-EXPOSE|entry-secret/);
     const detail = await (await get(viewer.url, "api/sessions/0")).json();
     assert.match(JSON.stringify(detail), /Selected transcript only/);
+    assert.equal(detail.events[0].category, "user");
     assert.match(detail.reference, /^session-[a-z0-9]+$/);
     assert.equal(detail.reference, pseudonymizeSession({ id }));
     assert.equal(resolveSessionReference([{ id }], detail.reference).id, id);
@@ -72,6 +73,21 @@ test("viewer renders transcript only after selection and reports in a sandboxed 
     assert.match(sandboxedReportHtml("<script>bad()</script>"), /default-src 'none'/);
     assert.match(viewerPage(), /sandbox/); assert.match(viewerScript(), /navigator\.clipboard/); assert.match(viewerScript(), /execCommand\('copy'\)/);
   } finally { viewer.close(); }
+});
+
+test("viewer reader has an accessible on-demand navigation drawer, handoff copy affordance, and full-fidelity filter", () => {
+  const page = viewerPage(); const script = viewerScript();
+  assert.match(page, /id="navigation-drawer"[^>]*role="dialog"[^>]*aria-modal="true"[^>]*aria-labelledby="drawer-title"/);
+  assert.match(page, /id="drawer-toggle"[^>]*aria-controls="navigation-drawer"[^>]*aria-expanded="false"/);
+  assert.match(page, /id="conversation-only" type="checkbox"/);
+  assert.match(page, /id="handoff-command">\/hindsight-document session-reference/);
+  assert.match(page, /id="copy"[^>]*aria-label="Copy Pi handoff command"/);
+  assert.doesNotMatch(page, /Close Viewer/);
+  assert.match(script, /event\.category==='user'\|\|event\.category==='assistant'/);
+  assert.match(script, /q\('#conversation-only'\)\.checked\?events\.filter\(isConversation\):events/);
+  assert.match(script, /q\('#handoff-command'\)\.textContent='\/hindsight-document '\+selected/);
+  assert.match(script, /icon\.textContent='✓'/);
+  assert.match(script, /event\.key==='Escape'/);
 });
 
 test("viewer rejects missing token, unexpected host and origin without echoing data", async () => {
