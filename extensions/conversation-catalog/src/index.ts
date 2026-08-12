@@ -8,6 +8,7 @@ import { projectConversation } from "./conversation.mjs";
 import { attachEvidenceReferences } from "./evidence.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
 import { buildHindsightDocument, preflightSynthesisPrompt } from "./synthesis.mjs";
+import { HindsightNotesError, addHindsightNote, deleteHindsightNote, editHindsightNote, hindsightNotesSessionReference, readHindsightNotes } from "./hindsight-notes.mjs";
 import { compileSensitivePatterns, findSensitiveContent, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 import { defaultHindsightReportDirectory, resolveExplicitHindsightOutputPath, writeDefaultHindsightReport, writeHindsightReport } from "./hindsight-output.mjs";
 
@@ -33,6 +34,31 @@ async function configuredPatterns(cwd: string) {
     throw new Error("Unable to read .pi/conversation-redaction-patterns.json.");
   }
 }
+function hindsightNotesErrorMessage(error: unknown) {
+  const code = error instanceof HindsightNotesError ? error.code : "operation_failed";
+  const messages: Record<string, string> = { ui_required: "Hindsight notes require Pi's interactive UI.", untrusted_project: "Hindsight notes require a trusted project root.", current_session_unavailable: "Pi did not expose the active session identity; no note was read or changed.", unsafe_note_text: "Notes must not include raw session identifiers or credentials; nothing was saved.", invalid_note_id: "The selected local note identity is invalid; it was not changed.", note_missing: "That local note no longer exists; it was not changed.", notes_missing: "No local notes exist for this session.", notes_limit_reached: "This session already has the maximum number of local notes.", confirmation_required: "Hindsight notes canceled." };
+  return messages[code] || "Unable to update local hindsight notes.";
+}
+function isTrustedProject(ctx: any) { return typeof ctx?.isProjectTrusted === "function" && ctx.isProjectTrusted() === true; }
+function currentHindsightSession(ctx: any) {
+  const current = ctx?.session || ctx?.currentSession;
+  const managedId = typeof ctx?.sessionManager?.getSessionId === "function" ? ctx.sessionManager.getSessionId() : undefined;
+  const actualSessionId = typeof managedId === "string" ? managedId : typeof current?.id === "string" ? current.id : typeof ctx?.sessionId === "string" ? ctx.sessionId : "";
+  if (!actualSessionId) throw new HindsightNotesError("current_session_unavailable");
+  return { actualSessionId, sessionReference: hindsightNotesSessionReference(actualSessionId) };
+}
+function noteReviewPatterns(patterns: any[], actualSessionId: string) { return [...patterns, { name: "active Pi session ID", regex: new RegExp(actualSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), requiredRedaction: true }]; }
+async function reviewHindsightNotes(ctx: any, notes: any[], patterns: any[]) {
+  const included: any[] = [];
+  for (const [index, note] of notes.entries()) {
+    const projection = { events: [{ id: note.noteId, summary: note.text, metadata: [] }], edges: [] }; const findings = findSensitiveContent(projection, patterns); const decisions: Record<string, string> = {};
+    if (!findings.length) { const choice = await ctx.ui.select(`Hindsight note ${index + 1}: no sensitive content detected`, ["Include as user-authored context", "Exclude this note", "Cancel"]); if (!choice || choice === "Cancel") throw new HindsightNotesError("confirmation_required"); if (choice === "Exclude this note") continue; }
+    else { const begin = await ctx.ui.select(`Hindsight note ${index + 1}: sensitive content detected`, ["Review findings", "Exclude this note", "Cancel"]); if (!begin || begin === "Cancel") throw new HindsightNotesError("confirmation_required"); if (begin === "Exclude this note") continue; let excluded = false; for (const [findingIndex, finding] of findings.entries()) { const choice = await ctx.ui.select(`Note finding ${findingIndex + 1}/${findings.length}: ${finding.pattern} — ${finding.preview}`, finding.requiredRedaction ? ["Redact (required)", "Exclude this note", "Cancel"] : ["Redact (recommended)", "Retain", "Exclude this note", "Cancel"]); if (!choice || choice === "Cancel") throw new HindsightNotesError("confirmation_required"); if (choice === "Exclude this note") { excluded = true; break; } if (finding.requiredRedaction && choice !== "Redact (required)") throw new HindsightNotesError("required_redaction"); decisions[finding.id] = choice === "Retain" ? "retain" : "redact"; } if (excluded) continue; }
+    included.push({ noteId: note.noteId, text: redactProjection(projection, findings, decisions).events[0]?.summary, provenance: note.provenance });
+  }
+  return included;
+}
+
 async function reviewRedactionChoices(ctx: any, findings: any[]) {
   if (!ctx.hasUI) throw new Error("Conversation export requires an interactive Pi UI so redaction choices can be reviewed.");
   if (findings.length === 0) {
@@ -55,7 +81,7 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
 
 /** Read-only catalog and redaction-reviewed hindsight reports of saved Pi conversations. */
 export default function conversationCatalog(pi: ExtensionAPI) {
-  let pendingHindsight: { sources: any[]; outputPath?: string; defaultDirectory?: string; reference: string; restoreTools: () => void } | undefined;
+  let pendingHindsight: { sources: any[]; hindsightNotes: any[]; outputPath?: string; defaultDirectory?: string; reference: string; restoreTools: () => void } | undefined;
   pi.on("agent_settled", () => { const pending = pendingHindsight; if (pending) { pendingHindsight = undefined; pending.restoreTools(); } });
   pi.registerTool({
     name: "hindsight_document_write", label: "Write safe hindsight document",
@@ -73,7 +99,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     async execute(_toolCallId, params) {
       if (!pendingHindsight) return { content: [{ type: "text", text: "No hindsight document draft is awaiting generation." }] };
       try {
-        const html = buildHindsightDocument(pendingHindsight.sources, params);
+        const html = buildHindsightDocument(pendingHindsight.sources, params, pendingHindsight.hindsightNotes);
         const outputPath = pendingHindsight.outputPath
           ? (await writeHindsightReport(pendingHindsight.outputPath, html), pendingHindsight.outputPath)
           : await writeDefaultHindsightReport({ directory: pendingHindsight.defaultDirectory!, reference: pendingHindsight.reference, html });
@@ -101,10 +127,12 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     const projection = projectConversation((await SessionManager.open(session.path)).getEntries());
     const findings = findSensitiveContent(projection, await configuredPatterns(ctx.cwd)); const review = await reviewRedactionChoices(ctx, findings); const reference = pseudonymizeSession(session);
     const sources = review.excluded ? [{ reference, excluded: true }] : [{ reference, ...attachEvidenceReferences(reference, redactProjection(projection, findings, review.decisions)) }];
+    const noteStore = isTrustedProject(ctx) ? await readHindsightNotes(ctx.cwd, hindsightNotesSessionReference(session.id)) : undefined;
+    const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, noteReviewPatterns(await configuredPatterns(ctx.cwd), session.id)) : [];
     const outputPath = requested.outputPath ? resolveExplicitHindsightOutputPath(requested.outputPath, ctx.cwd) : undefined;
     const defaultDirectory = outputPath ? undefined : defaultHindsightReportDirectory({ home: homedir() });
-    const prompt = preflightSynthesisPrompt(sources, {}, ctx.getContextUsage?.()); const restoreTools = restrictToolsForHindsightSynthesis(pi);
-    try { pendingHindsight = { sources, outputPath, defaultDirectory, reference, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
+    const prompt = preflightSynthesisPrompt(sources, { hindsightNotes }, ctx.getContextUsage?.()); const restoreTools = restrictToolsForHindsightSynthesis(pi);
+    try { pendingHindsight = { sources, hindsightNotes, outputPath, defaultDirectory, reference, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
     const destination = outputPath || defaultDirectory;
     ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${destination}.`, "info");
   }
@@ -130,6 +158,20 @@ export default function conversationCatalog(pi: ExtensionAPI) {
         return;
       }
     } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Unable to browse saved conversations.", "error"); }
+  }});
+  pi.registerCommand("hindsight-notes", { description: "Add, view, edit, or delete local user-authored notes for the current Pi session", async handler(_args, ctx) {
+    try {
+      if (!ctx.hasUI || typeof ctx.ui.input !== "function") throw new HindsightNotesError("ui_required");
+      if (!isTrustedProject(ctx)) throw new HindsightNotesError("untrusted_project");
+      const { actualSessionId, sessionReference } = currentHindsightSession(ctx); const notes = (await readHindsightNotes(ctx.cwd, sessionReference))?.notes || [];
+      const action = await ctx.ui.select("Current-session hindsight notes", ["Add note", "View notes", "Edit note", "Delete note", "Cancel"]);
+      if (!action || action === "Cancel") throw new HindsightNotesError("confirmation_required");
+      if (action === "View notes") { if (!notes.length) { ctx.ui.notify("No local hindsight notes exist for this current session.", "info"); return; } await ctx.ui.select("Current-session hindsight notes (user-authored context)", ["Close", ...notes.map((note, index) => `${index + 1}. ${note.text.slice(0, 120)}`)]); return; }
+      if (action === "Add note") { const text = await ctx.ui.input("Add hindsight note", "User-authored context only. Do not paste session logs, session IDs, or credentials."); if (text === undefined || !await ctx.ui.confirm("Final confirmation: save local hindsight note", "Save this local user-authored note?")) throw new HindsightNotesError("confirmation_required"); await addHindsightNote(ctx.cwd, sessionReference, text, { actualSessionId }); ctx.ui.notify("Local user-authored hindsight note saved.", "info"); return; }
+      if (!notes.length) throw new HindsightNotesError("notes_missing"); const options = ["Cancel", ...notes.map((note, index) => `${index + 1}. ${note.text.slice(0, 120)}`)]; const choice = await ctx.ui.select(`Select a current-session note to ${action === "Edit note" ? "edit" : "delete"}`, options); const note = notes[options.indexOf(choice) - 1]; if (!choice || choice === "Cancel" || !note) throw new HindsightNotesError("confirmation_required");
+      if (action === "Edit note") { const text = await ctx.ui.input("Edit hindsight note", "Replace with user-authored context only."); if (text === undefined || !await ctx.ui.confirm("Final confirmation: edit local hindsight note", "Save this edit?")) throw new HindsightNotesError("confirmation_required"); await editHindsightNote(ctx.cwd, sessionReference, note.noteId, text, { actualSessionId }); ctx.ui.notify("Local user-authored hindsight note updated.", "info"); return; }
+      if (!await ctx.ui.confirm("Final confirmation: delete local hindsight note", "Permanently delete this local note?")) throw new HindsightNotesError("confirmation_required"); await deleteHindsightNote(ctx.cwd, sessionReference, note.noteId); ctx.ui.notify("Local user-authored hindsight note deleted.", "info");
+    } catch (error) { ctx.ui.notify(hindsightNotesErrorMessage(error), "error"); }
   }});
   pi.registerCommand("hindsight-document", { description: "Write a cited hindsight document for one selected conversation", async handler(args, ctx) {
     try { await beginHindsight(args, ctx); }

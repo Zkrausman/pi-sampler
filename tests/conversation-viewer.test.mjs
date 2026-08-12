@@ -25,7 +25,7 @@ async function fixture() {
   await mkdir(join(sessions, "project"), { recursive: true }); await mkdir(reports);
   const id = "019fd4f3-b574-7953-a984-ffb49a519207";
   await writeFile(join(sessions, "project", "one.jsonl"), [
-    JSON.stringify({ type: "session", id, timestamp: "2025-02-03T04:05:06.000Z", cwd: "PATH-DO-NOT-EXPOSE" }),
+    JSON.stringify({ type: "session", id, timestamp: "2025-02-03T04:05:06.000Z", cwd: directory }),
     JSON.stringify({ type: "message", id: "entry-secret", timestamp: "2025-02-03T04:06:06.000Z", message: { role: "user", content: "Selected transcript only" } }),
     JSON.stringify({ type: "message", id: "assistant-secret", timestamp: "2025-02-03T04:07:06.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "Selected local reasoning only", thinkingSignature: "signature-not-rendered" }] } }),
   ].join("\n"));
@@ -62,7 +62,7 @@ test("viewer renders transcript only after selection and reports in a sandboxed 
   try {
     const list = await (await get(viewer.url, "api/sessions")).json();
     assert.equal(list[0].id, id);
-    assert.doesNotMatch(JSON.stringify(list), /Selected transcript only|Selected local reasoning only|PATH-DO-NOT-EXPOSE|entry-secret/);
+    assert.doesNotMatch(JSON.stringify(list), /Selected transcript only|Selected local reasoning only|PATH-DO-NOT-EXPOSE|entry-secret|projectRoot|cwd/);
     const detail = await (await get(viewer.url, "api/sessions/0")).json();
     assert.match(JSON.stringify(detail), /Selected transcript only/);
     assert.match(JSON.stringify(detail), /Selected local reasoning only/);
@@ -114,6 +114,21 @@ test("viewer rejects missing token, unexpected host and origin without echoing d
   } finally { viewer.close(); }
 });
 
+test("viewer note API validates, isolates selected sessions, mutates immediately, and never exposes roots or raw IDs", async () => {
+  const { sessions, reports, id } = await fixture();
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "n".repeat(43), idleMs: 60_000 });
+  try {
+    const empty = await (await get(viewer.url, "api/sessions/0/notes")).json(); assert.deepEqual(empty.notes, []);
+    const created = await get(viewer.url, "api/sessions/0/notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Local reviewed context." }) }); assert.equal(created.status, 200);
+    const afterCreate = await created.json(); assert.equal(afterCreate.notes.length, 1); assert.doesNotMatch(JSON.stringify(afterCreate), new RegExp(`${id}|projectRoot|cwd`, "i"));
+    const noteId = afterCreate.notes[0].noteId;
+    const edited = await get(viewer.url, `api/sessions/0/notes/${noteId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Updated local context." }) }); assert.equal(edited.status, 200); assert.equal((await edited.json()).notes[0].text, "Updated local context.");
+    const malicious = await get(viewer.url, "api/sessions/0/notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `session ${id}` }) }); assert.equal(malicious.status, 400);
+    const invalid = await get(viewer.url, "api/sessions/0/notes/not-a-note", { method: "DELETE" }); assert.equal(invalid.status, 404);
+    const deleted = await get(viewer.url, `api/sessions/0/notes/${noteId}`, { method: "DELETE" }); assert.equal(deleted.status, 200, await deleted.text());
+  } finally { viewer.close(); }
+});
+
 test("viewer binds loopback and close, heartbeat, idle, and maximum lifetime rules are bounded", async () => {
   const { sessions, reports } = await fixture();
   await assert.rejects(startViewer({ host: "0.0.0.0" }), /127\.0\.0\.1/);
@@ -138,7 +153,7 @@ test("viewer teardown destroys an incomplete retained loopback connection", asyn
   await Promise.all([socketClosed, serverClosed]);
 });
 
-test("viewer package assets are local and read-only implementation has no write, model, or network client", async () => {
+test("viewer package assets are local and note CRUD has no model or network client", async () => {
   const source = await readFile(new URL("../extensions/conversation-catalog/src/viewer.mjs", import.meta.url), "utf8");
   for (const forbidden of ["writeFile", "mkdir", "SessionManager", "sendUserMessage", "node:https", "https://"]) assert.doesNotMatch(source, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(source, /createServer/); assert.match(source, /readFile/);
