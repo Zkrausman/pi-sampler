@@ -1,7 +1,7 @@
 {
   "name": "@zkrausman/pi-conversation-catalog",
   "version": "0.3.0",
-  "description": "Static catalog and redaction-reviewed, evidence-cited hindsight reports for Pi conversations.",
+  "description": "Local Pi conversation browser and redaction-reviewed, evidence-cited hindsight reports.",
   "license": "UNLICENSED",
   "private": false,
   "files": [

@@ -14,7 +14,7 @@ and governance policy.
 | Extension | Purpose | Documentation |
 | --- | --- | --- |
 | [Delivery controller](extensions/delivery-controller/README.md) | Dispatch one explicitly supplied work item to a configured provider. It does not select work, merge code, or update a tracker. | [Install and use](extensions/delivery-controller/README.md) |
-| [Conversation catalog](extensions/conversation-catalog/README.md) | Writes a standalone metadata catalog and redaction-reviewed, evidence-cited hindsight reports for saved Pi conversations. | [Install and use](extensions/conversation-catalog/README.md) |
+| [Conversation catalog](extensions/conversation-catalog/README.md) | Browses and reads saved Pi conversations locally, then creates redaction-reviewed, evidence-cited hindsight reports. | [Install and use](extensions/conversation-catalog/README.md) |
 | [Wiki delivery](extensions/wiki-delivery/README.md) | Coordinates a fail-closed LLM Wiki delivery lifecycle and validates its manifest. | [Install and use](extensions/wiki-delivery/README.md) |
 | Pi Excalidraw (project-local) | Creates and reads local `.excalidraw` architecture diagrams with deterministic parsing; it makes no cloud/API calls. | [Load locally](#pi-excalidraw-project-local-extension) |
 
