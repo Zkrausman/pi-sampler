@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.4.0
+
+### Minor Changes
+
+- d724a38: Replace the generated conversation catalog with a local Pi browse/read flow. Scoped hindsight handoffs now use stable opaque identifiers, avoid a second picker, and preserve mandatory redaction before model submission.
+
 ## 0.3.0
 
 ### Minor Changes
