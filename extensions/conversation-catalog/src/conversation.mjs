@@ -46,7 +46,7 @@ function argumentSummary(argumentsValue) {
   }
 }
 
-function contentSummary(content, fallback) {
+function contentSummary(content, fallback, { includeThinking = false } = {}) {
   if (typeof content === "string") return bounded(content, fallback);
   if (!Array.isArray(content)) return fallback;
 
@@ -57,7 +57,7 @@ function contentSummary(content, fallback) {
     } else if (block.type === "text") {
       parts.push(text(block.text));
     } else if (block.type === "thinking") {
-      parts.push("[Thinking omitted]");
+      parts.push(includeThinking ? text(block.thinking) : "[Thinking omitted]");
     } else if (block.type !== "toolCall") {
       parts.push(`[${bounded(block.type, "Unsupported", 80)} content omitted]`);
     }
@@ -100,7 +100,7 @@ function eventFor(entry, sourceIndex, category, title, summary, message, extras)
  * All persisted branches are shown. The "next assistant" connection is a labeled,
  * chronological inference rather than a claim about tree-branch causality.
  */
-export function projectConversation(entries) {
+export function projectConversation(entries, { includeThinking = false } = {}) {
   const ordered = (Array.isArray(entries) ? entries : [])
     .map((entry, sourceIndex) => ({ entry: isObject(entry) ? entry : {}, sourceIndex }))
     .sort((left, right) => timeValue(left.entry.timestamp) - timeValue(right.entry.timestamp) || left.sourceIndex - right.sourceIndex);
@@ -123,7 +123,7 @@ export function projectConversation(entries) {
       primary = eventFor(entry, sourceIndex, "user", "User", contentSummary(message.content, "User message has no readable text."), message);
       events.push(primary);
     } else if (message.role === "assistant") {
-      primary = eventFor(entry, sourceIndex, "assistant", "Assistant", contentSummary(message.content, "Assistant message has no readable text."), message);
+      primary = eventFor(entry, sourceIndex, "assistant", "Assistant", contentSummary(message.content, "Assistant message has no readable text.", { includeThinking }), message);
       events.push(primary);
       const blocks = Array.isArray(message.content) ? message.content : [];
       let toolIndex = 0;

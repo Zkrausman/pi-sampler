@@ -35,6 +35,12 @@ test("conversation projection retains usable source evidence without rendering a
   assert.equal(cited.events.length, 1); assert.equal(cited.events[0].id, "event-1"); assert.equal(cited.events[0].evidence.reference, "conversation-1:event-0001");
 });
 
+test("hindsight projection omits thinking by default while the local viewer may opt in", () => {
+  const entries = [{ id: "assistant-entry", type: "message", timestamp: "2025-01-01", message: { role: "assistant", content: [{ type: "thinking", thinking: "Private local reasoning" }] } }];
+  assert.match(projectConversation(entries).events[0].summary, /Thinking omitted/);
+  assert.match(projectConversation(entries, { includeThinking: true }).events[0].summary, /Private local reasoning/);
+});
+
 test("only exact matched subagent pairs and their immediate chronological assistant follow-up become safely remapped delegation evidence", () => {
   const rawCallId = "raw-call-secret"; const rawEntryId = "raw-entry-secret";
   const entries = [

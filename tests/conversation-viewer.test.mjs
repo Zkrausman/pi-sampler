@@ -27,6 +27,7 @@ async function fixture() {
   await writeFile(join(sessions, "project", "one.jsonl"), [
     JSON.stringify({ type: "session", id, timestamp: "2025-02-03T04:05:06.000Z", cwd: "PATH-DO-NOT-EXPOSE" }),
     JSON.stringify({ type: "message", id: "entry-secret", timestamp: "2025-02-03T04:06:06.000Z", message: { role: "user", content: "Selected transcript only" } }),
+    JSON.stringify({ type: "message", id: "assistant-secret", timestamp: "2025-02-03T04:07:06.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "Selected local reasoning only", thinkingSignature: "signature-not-rendered" }] } }),
   ].join("\n"));
   await writeFile(join(sessions, "project", "bad.jsonl"), "not json\n");
   await writeFile(join(reports, "report.html"), "<h1>Local report</h1>");
@@ -50,7 +51,7 @@ async function rawRequest(url, path, headers) {
 test("viewer discovery accepts recognizable local sessions and malformed/stale input fails closed", async () => {
   const { sessions, reports, id } = await fixture();
   const found = await discoverSessions({ sessionDirectory: sessions });
-  assert.deepEqual(found.map(({ id: sessionId, messageCount }) => ({ id: sessionId, messageCount })), [{ id, messageCount: 1 }]);
+  assert.deepEqual(found.map(({ id: sessionId, messageCount }) => ({ id: sessionId, messageCount })), [{ id, messageCount: 2 }]);
   assert.deepEqual((await discoverReports({ reportDirectory: reports })).map((report) => report.name), ["report.html"]);
   assert.deepEqual(await discoverSessions({ sessionDirectory: join(sessions, "missing") }), []);
 });
@@ -61,10 +62,11 @@ test("viewer renders transcript only after selection and reports in a sandboxed 
   try {
     const list = await (await get(viewer.url, "api/sessions")).json();
     assert.equal(list[0].id, id);
-    assert.doesNotMatch(JSON.stringify(list), /Selected transcript only|PATH-DO-NOT-EXPOSE|entry-secret/);
+    assert.doesNotMatch(JSON.stringify(list), /Selected transcript only|Selected local reasoning only|PATH-DO-NOT-EXPOSE|entry-secret/);
     const detail = await (await get(viewer.url, "api/sessions/0")).json();
     assert.match(JSON.stringify(detail), /Selected transcript only/);
-    assert.equal(detail.events[0].category, "user");
+    assert.match(JSON.stringify(detail), /Selected local reasoning only/);
+    assert.equal(detail.events[0].category, "user"); assert.equal(detail.events[1].category, "assistant");
     assert.match(detail.reference, /^session-[a-z0-9]+$/);
     assert.equal(detail.reference, pseudonymizeSession({ id }));
     assert.equal(resolveSessionReference([{ id }], detail.reference).id, id);
