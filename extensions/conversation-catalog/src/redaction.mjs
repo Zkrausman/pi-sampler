@@ -162,6 +162,8 @@ export function redactProjection(projection, findings, decisions) {
         .map((item, sourceIndex) => ({ label: text(item?.label), value: text(item?.value), sourceIndex }))
         .filter((item) => !["Entry", "Parent", "Call ID"].includes(item.label)),
       ...(event.subagentActivity ? { subagentActivity: event.subagentActivity } : {}),
+      // This locally derived ordinal is deliberately opaque and never rendered.
+      ...( /^delegation-[1-9][0-9]*$/.test(text(event.delegationPair)) ? { delegationPair: text(event.delegationPair) } : {} ),
     };
     for (const field of visibleFields(event)) {
       const relevant = byEventAndField.get(`${event.id}\u0000${field.key}`);

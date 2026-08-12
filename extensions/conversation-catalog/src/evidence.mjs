@@ -17,12 +17,25 @@ function normalizedRecommendations(document) {
   });
 }
 function subagentEvidenceContract(evidence) {
-  const references = (activity) => new Set([...evidence.values()].filter((item) => item?.subagentActivity === activity).map((item) => item.reference));
-  const calls = references("delegation-call"); const results = references("delegation-result"); const followUps = references("delegation-follow-up");
-  // Projection marks calls/results only after an exact same-ID match. Requiring
-  // both kinds again makes a lone or malformed marker inert at this boundary.
-  const hasMatchedDelegation = calls.size > 0 && results.size > 0;
-  return { hasMatchedDelegation, calls, timing: new Set(hasMatchedDelegation ? [...calls, ...results, ...followUps] : []), results, followUps };
+  const pairs = new Map();
+  for (const item of evidence.values()) {
+    const pair = text(item?.delegationPair);
+    const activity = text(item?.subagentActivity);
+    if (!/^delegation-[1-9][0-9]*$/.test(pair) || !["delegation-call", "delegation-result", "delegation-follow-up"].includes(activity)) continue;
+    const member = pairs.get(pair) || { calls: new Set(), results: new Set(), followUps: new Set() };
+    if (activity === "delegation-call") member.calls.add(item.reference);
+    if (activity === "delegation-result") member.results.add(item.reference);
+    if (activity === "delegation-follow-up") member.followUps.add(item.reference);
+    pairs.set(pair, member);
+  }
+  // A stable projection produces one call and one result per ordinal. Treat
+  // malformed or multiply-associated markers as inert at this final boundary.
+  const matchedPairs = [...pairs.values()].filter((pair) => pair.calls.size === 1 && pair.results.size === 1 && pair.followUps.size <= 1);
+  const calls = new Set(matchedPairs.flatMap((pair) => [...pair.calls]));
+  const results = new Set(matchedPairs.flatMap((pair) => [...pair.results]));
+  const followUps = new Set(matchedPairs.flatMap((pair) => [...pair.followUps]));
+  const deliveryPairs = matchedPairs.filter((pair) => pair.followUps.size === 1);
+  return { hasMatchedDelegation: matchedPairs.length > 0, calls, results, followUps, timing: new Set([...calls, ...results, ...followUps]), deliveryPairs };
 }
 function normalizedSubagentFindings(document, evidence, recommendations) {
   if (document?.subagentEfficiency === undefined) return undefined;
@@ -38,7 +51,8 @@ function normalizedSubagentFindings(document, evidence, recommendations) {
       const refs = [...new Set((finding.evidenceReferences || []).map(text))];
       if (!text(finding.statement) || !["strength", "risk"].includes(finding.findingKind) || !["direct evidence", "inference"].includes(finding.classification) || !refs.length || refs.length > 20 || refs.some((reference) => !contract.timing.has(reference))) throw new Error(`${label} must cite only marked delegation evidence.`);
       if (name === "delegationTiming" && !refs.some((reference) => contract.calls.has(reference) || contract.results.has(reference))) throw new Error(`${label} requires a marked delegation call or result.`);
-      if (name === "deliveryQuality" && (finding.classification !== "inference" || !refs.some((reference) => contract.results.has(reference)) || !refs.some((reference) => contract.followUps.has(reference)))) throw new Error(`${label} requires inference plus a marked delegation result and chronological follow-up.`);
+      const hasQualifiedDeliveryPair = contract.deliveryPairs.some((pair) => refs.some((reference) => pair.results.has(reference)) && refs.some((reference) => pair.followUps.has(reference)));
+      if (name === "deliveryQuality" && (finding.classification !== "inference" || !hasQualifiedDeliveryPair)) throw new Error(`${label} requires inference plus a matched delegation result and its own chronological follow-up.`);
       const actionType = finding.findingKind === "strength" ? "harden" : "fix";
       if (!recommendations.some((recommendation) => recommendation.actionType === actionType && recommendation.refs.some((reference) => refs.includes(reference)))) throw new Error(`${label} requires a matching ${actionType} proposal.`);
       return { statement: bounded(finding.statement, "", 2000), findingKind: finding.findingKind, classification: finding.classification, refs };
@@ -80,7 +94,7 @@ export function generateCitedHindsightDocumentHtml(document) {
     return `<article class="lesson"><p class="classification">${escapeHtml(item.classification)} · ${escapeHtml(item.findingKind)}</p><p>${escapeHtml(item.statement)}</p>${evidenceSnippets(item.refs)}<p class="proposal-label">Matching ${escapeHtml(actionType)} proposals</p>${matches.map((recommendation) => actionCard(recommendation, true)).join("")}</article>`;
   }).join("") : `<p class="empty">${escapeHtml(empty)}</p>`;
   const subagentHtml = subagentEfficiency
-    ? `<section id="subagent-efficiency" class="section"><p class="label">Subagent efficiency</p><h2>Refine delegation and delivery</h2><p class="section-intro">These hindsight assessments are evidence-backed, not deterministic scores. Delivery quality is an inference only when both a marked result and a marked chronological follow-up are cited; follow-up is not proof of causality.</p><h3>Timing</h3><div class="split">${subagentInsight(subagentEfficiency.delegationTiming, "No cited delegation-timing finding was supported.")}</div><h3>Delivery</h3><div class="split">${subagentInsight(subagentEfficiency.deliveryQuality, "No cited delivery-quality finding was supported.")}</div></section>`
+    ? `<section id="subagent-efficiency" class="section"><p class="label">Subagent efficiency</p><h2>Refine delegation and delivery</h2><p class="section-intro">These hindsight assessments are evidence-backed, not deterministic scores. Delivery quality is an inference only when a matched result and its own marked chronological follow-up are cited; follow-up is not proof of causality.</p><h3>Timing</h3><div class="split">${subagentInsight(subagentEfficiency.delegationTiming, "No cited delegation-timing finding was supported.")}</div><h3>Delivery</h3><div class="split">${subagentInsight(subagentEfficiency.deliveryQuality, "No cited delivery-quality finding was supported.")}</div></section>`
     : `<section id="subagent-efficiency" class="section"><p class="label">Subagent efficiency</p><h2>Refine delegation and delivery</h2><p class="empty">No inspectable subagent activity in this selected conversation.</p></section>`;
   const excluded = evidence.filter((item) => item.availability === "excluded").length;
   const metrics = `<div class="context-grid"><div class="metric card"><strong>${evidence.length}</strong><span>cited evidence contexts in this report bundle</span></div><div class="metric card"><strong>${claims.length}</strong><span>claims labeled as evidence or inference</span></div><div class="metric card"><strong>${recommendations.length}</strong><span>proposed follow-through actions</span></div><div class="metric card"><strong>${timeline.length}</strong><span>story or timeline items</span></div>${excluded ? `<div class="metric card"><strong>${excluded}</strong><span>excluded source contexts</span></div>` : ""}</div>`;
