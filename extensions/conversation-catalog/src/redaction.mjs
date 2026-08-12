@@ -51,7 +51,7 @@ function visibleFields(event) {
   return fields;
 }
 
-/** Finds only strings that the flow renderer would otherwise display. */
+/** Finds only strings that the hindsight source bundle would otherwise include. */
 export function findSensitiveContent(projection, patterns = compileSensitivePatterns()) {
   const findings = [];
   const events = Array.isArray(projection?.events) ? projection.events : [];
@@ -163,28 +163,4 @@ export function redactProjection(projection, findings, decisions) {
     .map((edge) => ({ ...edge, from: eventIds.get(edge.from), to: eventIds.get(edge.to) }))
     .filter((edge) => edge.from && edge.to);
   return { ...projection, events, edges };
-}
-
-/** Metadata never includes matched sensitive text or the unredacted preview. */
-export function createRedactionMetadata(sessionId, findings, decisions, excluded) {
-  const safeFindings = Array.isArray(findings) ? findings : [];
-  requireRedactionDecisions(safeFindings, decisions, { excluded: Boolean(excluded) });
-  return {
-    schemaVersion: 1,
-    sessionId: text(sessionId),
-    excluded: Boolean(excluded),
-    findingCount: safeFindings.length,
-    decisions: safeFindings.map((finding) => ({
-      findingId: finding.id,
-      pattern: finding.pattern,
-      eventIndex: finding.eventIndex,
-      field: finding.field,
-      action: decisions?.[finding.id] === "retain" ? "retain" : "redact",
-    })),
-  };
-}
-
-export function generateExcludedConversationHtml(session) {
-  const id = text(session?.id) || "selected conversation";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pi conversation excluded</title><style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0 auto;max-width:42rem;padding:2rem;line-height:1.45}.note{border:1px solid #9997;border-radius:.5rem;padding:1rem}</style></head><body><h1>Conversation excluded</h1><p class="note">You chose not to include session ${id.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")} in this export. No conversation content was rendered.</p></body></html>`;
 }
