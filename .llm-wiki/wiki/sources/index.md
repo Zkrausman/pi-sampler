@@ -2,6 +2,9 @@
 
 ## Concepts
 
+- [Hindsight draft design renderer contract](hindsight-draft-design-as-renderer-contract.md)
+- [Evidence-first Fix/Harden hindsight model](hindsight-evidence-first-fix-harden-model.md)
+- [Hindsight user-local unique report output](hindsight-user-local-unique-output.md)
 - [Observation: Consumer project pins shared extension package](obs-2026-08-10-consumer-project-pins-shared-extension-package.md)
 - [Observation: Current Pi session did not apply Pith transform](obs-2026-08-10-current-pi-session-did-not-apply-pith-transform.md)
 - [Observation: Extension configuration limits documented](obs-2026-08-10-extension-configuration-limits-documented.md)
@@ -30,5 +33,8 @@
 - [Observation: Requested Pi features reclassified](obs-2026-08-10-requested-pi-features-reclassified.md)
 - [Observation: Three pi-sampler project subagents added](obs-2026-08-10-three-pi-sampler-project-subagents-added.md)
 - [Observation: User-level GitHub Packages npm registry configured](obs-2026-08-10-user-level-github-packages-npm-registry-configured.md)
+- [Observation: Standalone viewer feature ticket created](obs-2026-08-12-standalone-viewer-feature-ticket-created.md)
 - [Local patch for pi-answer package](pi-answer-workspace-dependency-local-patch.md)
 - [Project-local pi-sampler subagent roles](pi-sampler-project-subagent-roles.md)
+- [Pseudonymous event evidence citations](pseudonymous-event-evidence-citations.md)
+- [Subagent efficiency evidence contract](subagent-efficiency-evidence-contract.md)
