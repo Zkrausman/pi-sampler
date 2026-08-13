@@ -22,7 +22,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@zkrausman/pi-ticket-cost": ">=0.2.1",
+    "@zkrausman/pi-ticket-cost": ">=0.2.1 <1",
     "typebox": "*"
   },
   "pi": {
