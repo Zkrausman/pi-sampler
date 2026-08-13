@@ -14,6 +14,7 @@ import {
   viewerScript,
   viewerShouldClose,
   sandboxedReportHtml,
+  VIEWER_MAX_SNAPSHOTS,
 } from "../extensions/conversation-catalog/src/viewer.mjs";
 import { pseudonymizeSession } from "../extensions/conversation-catalog/src/redaction.mjs";
 import { resolveSessionReference } from "../extensions/conversation-catalog/src/browser.mjs";
@@ -71,10 +72,31 @@ ${JSON.stringify({ type: "message", timestamp: `2025-02-03T05:00:${String(index)
     const report = await (await get(viewer.url, `api/reports/${(await (await get(viewer.url, "api/reports")).json()).reports[0].handle}`)).text(); assert.match(report, /Local report/); assert.match(report, /default-src 'none'/); assert.match(sandboxedReportHtml("<script>bad()</script>"), /default-src 'none'/); } finally { viewer.close(); }
 });
 
+test("viewer snapshot eviction invalidates held cursors without crossing sessions", async () => {
+  const { directory, sessions, reports } = await fixture();
+  for (let index = 0; index <= VIEWER_MAX_SNAPSHOTS; index += 1) {
+    const id = `019fd4f3-b574-7953-a984-ffb49a51${String(index).padStart(4, "0")}`;
+    await writeFile(join(sessions, "project", `snapshot-${String(index).padStart(2, "0")}.jsonl`), [
+      JSON.stringify({ type: "session", id, timestamp: `2025-03-01T00:${String(index).padStart(2, "0")}:00.000Z`, cwd: directory }),
+      JSON.stringify({ type: "message", timestamp: "2025-03-01T01:00:00.000Z", message: { role: "user", content: `first ${index}` } }),
+      JSON.stringify({ type: "message", timestamp: "2025-03-01T01:01:00.000Z", message: { role: "assistant", content: `second ${index}` } }),
+    ].join("\n"));
+  }
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "e".repeat(43), idleMs: 60_000 });
+  try {
+    const handles = (await catalog(viewer)).sessions.map((session) => session.handle); assert.equal(handles.length, VIEWER_MAX_SNAPSHOTS + 2);
+    const first = await eventPage(viewer, handles[0], "?limit=1"); assert.ok(first.nextCursor);
+    let current;
+    for (const handle of handles.slice(1)) current = await eventPage(viewer, handle, "?limit=1");
+    assert.equal((await get(viewer.url, `api/sessions/${handles[0]}/events?cursor=${first.nextCursor}&limit=1`)).status, 404);
+    const retained = await eventPage(viewer, handles.at(-1), `?cursor=${current.nextCursor}&limit=1`); assert.equal(retained.events.length, 1);
+  } finally { viewer.close(); }
+});
+
 test("viewer browser pages events with accessible Load more and lazy notes", async () => {
   const page = viewerPage(); const script = viewerScript();
   assert.match(page, /id="navigation-drawer"[^>]*role="dialog"/); assert.match(page, /id="load-more-events"[^>]*aria-label="Load more conversation events"/);
-  assert.match(script, /events\.filter\(e=>e\.category==='user'\|\|e\.category==='assistant'\)/); assert.match(script, /nextCursor/); assert.match(script, /Load more conversations/); assert.match(script, /notes\.onclick=async/);
+  assert.match(script, /events\.filter\(e=>e\.category==='user'\|\|e\.category==='assistant'\)/); assert.match(script, /nextCursor/); assert.match(script, /Load more conversations/); assert.match(script, /d\.capped/); assert.match(script, /Conversation list is capped for local performance/); assert.match(script, /notes\.onclick=async/);
   assert.doesNotMatch(script, /api\(base\)/); assert.match(script, /selectedHandle\+'\/events/);
   const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-")); const syntaxFile = join(syntaxDirectory, "viewer-script.mjs"); await writeFile(syntaxFile, script);
   await new Promise((resolveCheck, rejectCheck) => { const child = spawn(process.execPath, ["--check", syntaxFile]); child.once("error", rejectCheck); child.once("exit", (code) => code === 0 ? resolveCheck() : rejectCheck(new Error("Viewer script has invalid syntax."))); });
@@ -138,6 +160,17 @@ test("Windows launcher imports its package-local ESM module using a file URL", a
   assert.match(launcher, /import\(pathToFileURL\(join\(root, "src", "viewer\.mjs"\)\)\.href\)/);
 });
 
+
+test("viewer discovery caps candidate files, recursion depth, and catalog results deterministically", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-discovery-")); const sessions = join(directory, "sessions"); await mkdir(join(sessions, "nested", "deeper"), { recursive: true });
+  const header = (id, timestamp) => `${JSON.stringify({ type: "session", id, timestamp, cwd: directory })}\n`;
+  await writeFile(join(sessions, "a.jsonl"), header("019fd4f3-b574-7953-a984-ffb49a519201", "2025-01-01T00:00:00.000Z"));
+  await writeFile(join(sessions, "b.jsonl"), header("019fd4f3-b574-7953-a984-ffb49a519202", "2025-01-02T00:00:00.000Z"));
+  await writeFile(join(sessions, "nested", "deeper", "hidden.jsonl"), header("019fd4f3-b574-7953-a984-ffb49a519203", "2025-01-03T00:00:00.000Z"));
+  const candidateCapped = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 1 }); assert.equal(candidateCapped.length, 1); assert.equal(candidateCapped.capped, true);
+  const depthCapped = await discoverSessions({ sessionDirectory: sessions, maxDepth: 0 }); assert.equal(depthCapped.length, 2); assert.equal(depthCapped.capped, true);
+  const resultCapped = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 10, maxDepth: 8, maxResults: 1 }); assert.equal(resultCapped.length, 1); assert.equal(resultCapped.capped, true); assert.match(resultCapped[0].file, /hidden\.jsonl$/);
+});
 
 test("viewer discovery reads only bounded metadata until a session is selected", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-viewer-metadata-")); const sessions = join(directory, "sessions"); await mkdir(sessions);

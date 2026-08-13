@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { buildHindsightDocument, buildSynthesisPrompt, MAX_SYNTHESIS_PROMPT_BYTES, preflightSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
+import { buildHindsightDocument, buildSynthesisPrompt, MAX_SYNTHESIS_PROMPT_BYTES, measureSynthesisPrompt, preflightSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = (summary = "First redacted event") => [{ reference: "session-one", events: [{ id: "event-one", category: "user", timestamp: "2025-01-01", summary, evidence: { reference: "session-one:event-0001" } }], edges: [] }];
@@ -90,6 +90,13 @@ test("synthesis prompt requires matching Fix/Harden proposals and retains prefli
   const prompt = buildSynthesisPrompt(source()); assert.match(prompt, /actionType \("fix" or "harden"\)/); assert.match(prompt, /Harden proposal/); assert.match(prompt, /Fix proposal/); assert.doesNotMatch(prompt, /narrativeMap|prior outcomes/i); assert.match(prompt, /No user-authored hindsight notes were included after review/);
   assert.throws(() => buildHindsightDocument([]), /exactly one/); assert.throws(() => buildHindsightDocument([...source(), ...source()]), /exactly one/);
   assert.throws(() => preflightSynthesisPrompt(source("🧠".repeat(MAX_SYNTHESIS_PROMPT_BYTES)), {}, { tokens: 0, contextWindow: 1_000_000 }), /limited to/);
+});
+
+test("note-dominated oversized prompts report measured components and preserve note non-evidence rules", () => {
+  const hindsightNotes = Array.from({ length: 100 }, (_, index) => ({ noteId: `note-${index.toString(16).padStart(32, "a")}`, eventReference: `event-${index.toString(16).padStart(32, "b")}`, eventLabel: "Reviewed event", text: "n".repeat(2000), provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: "2025-01-01T00:00:00.000Z" } }));
+  const measure = measureSynthesisPrompt(source(), { hindsightNotes }); assert.ok(measure.noteContextBytes > measure.evidenceBytes); assert.equal(measure.totalBytes, measure.evidenceBytes + measure.noteContextBytes + measure.instructionsAndOverheadBytes);
+  assert.match(buildSynthesisPrompt(source(), { hindsightNotes }), /never evidence\/citations/);
+  assert.throws(() => preflightSynthesisPrompt(source(), { hindsightNotes }, { tokens: 0, contextWindow: 1_000_000 }), /note context:.*instructions\/overhead:.*Review, redact, or remove hindsight notes/i);
 });
 
 test("only approved public commands remain and flow/map modules are deleted", () => {
