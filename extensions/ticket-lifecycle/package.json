@@ -1,0 +1,22 @@
+{
+  "name": "@zkrausman/pi-ticket-lifecycle",
+  "version": "0.1.0",
+  "description": "Local, tracker-neutral durable ticket lifecycle and aggregate cost receipts.",
+  "license": "UNLICENSED",
+  "private": false,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zkrausman/pi-sampler.git",
+    "directory": "extensions/ticket-lifecycle"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  }
+}
