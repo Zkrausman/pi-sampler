@@ -120,10 +120,24 @@ environment.
   set the referenced approval variable to `approved` only in an authorized
   execution environment.
 
+## Ticket lifecycle reference adapter
+
+The controller also provides a **human/host-only** reference adapter for the local `@zkrausman/pi-ticket-lifecycle` ledger. It does not add a model-callable lifecycle tool and `delivery_controller_dispatch` remains dispatch-only.
+
+Before pickup, the host writes the bounded local work-item manifest `.pi/delivery-controller/work-items/<TICKET>.json`:
+
+```json
+{"version":1,"ticket":"AIDEV-77","workItem":{"approved":true}}
+```
+
+In a trusted interactive Pi session, the host/operator uses `/ticket-lifecycle-pickup <TICKET>` and receives an opaque handle. It then uses `/ticket-lifecycle-start <HANDLE>`, `/ticket-lifecycle-settle <HANDLE>`, and `/ticket-lifecycle-awaiting-merge <HANDLE>`. Before `/ticket-lifecycle-merged <HANDLE>` and `/ticket-lifecycle-closed <HANDLE>`, it must write separate local attestations at `.pi/delivery-controller/attestations/<TICKET>-merged.json` and `...-closed.json`, each with `version`, `ticket`, `kind`, `ref`, and `evidence`. The adapter recomputes an evidence digest; it does not poll or mutate a tracker and does not call dispatch/provider completion proof merge/close.
+
+`pi-ticket-cost` is a peer and must be loaded in the **same Pi process**. The adapter emits only the exact v1 lifecycle signals and waits for a matching result. No result becomes `missing-receiver`; an error becomes `settle-failed`; shutdown/reload marks a pending segment `interrupted`. Reload/restart packages after installing or upgrading them. Final ticket receipts remain partial when a coverage gap exists.
+
 ## Verify
 
 From the repository root:
 
 ```powershell
-node --test tests/delivery-controller-generic.test.mjs
+node --test tests/delivery-controller-generic.test.mjs tests/delivery-controller-lifecycle.test.mjs
 ```
