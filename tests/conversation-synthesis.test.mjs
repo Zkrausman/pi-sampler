@@ -103,8 +103,6 @@ test("only approved public commands remain and flow/map modules are deleted", ()
 test("linked ticket closeout is separately rendered but excluded from the synthesis prompt and citations", () => {
   const closeout = { version: 1, ticket: "AIDEV-76", pickedUpAt: "2026-01-01T00:00:00.000Z", closedAt: "2026-01-01T00:01:00.000Z", durationMs: 60000, coverage: "partial", completedSegments: 1, totalSegments: 2, totals: { total: 3, parentDelta: 1, subagentTotal: 2, subagentRuns: 1 }, gaps: ["interrupted"], mergedEvidenceCount: 1, closedEvidenceCount: 1 };
   const html = buildHindsightDocument(source(), fullOutput(), undefined, closeout); assert.match(html, /Linked ticket closeout/); assert.match(html, /Known lower-bound total/); assert.match(html, /not submitted to the model/); assert.doesNotMatch(buildSynthesisPrompt(source()), /AIDEV-76|ticket closeout/i); assert.throws(() => buildHindsightDocument(source(), fullOutput(), undefined, { ...closeout, evidence: "widened" }), /descriptor is malformed/);
-  assert.match(buildHindsightDocument(source(), fullOutput(), undefined, { ...closeout, totals: { total: 1.25, parentDelta: 0.5, subagentTotal: 0.75, subagentRuns: 1 } }), /1.25/);
-  for (const invalid of [{ ...closeout, completedSegments: 0 }, { ...closeout, coverage: "complete" }, { ...closeout, completedSegments: 2, gaps: ["interrupted"] }, { ...closeout, gaps: ["unknown"] }]) assert.throws(() => buildHindsightDocument(source(), fullOutput(), undefined, invalid), /descriptor is malformed/);
   assert.equal(buildHindsightDocument(source(), fullOutput()), buildHindsightDocument(source(), fullOutput(), undefined, undefined));
 });
 

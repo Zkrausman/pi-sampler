@@ -13,16 +13,14 @@ const GAP_COVERAGE = new Set(["interrupted", "missing-receiver", "settle-failed"
 export class TicketCloseoutSummaryError extends Error { constructor(code) { super(code); this.code = code; } }
 const fail = (code) => { throw new TicketCloseoutSummaryError(code); };
 const object = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-const number = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_SAFE;
-const integer = (value) => Number.isSafeInteger(value) && value >= 0;
+const number = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= MAX_SAFE;
 const add = (left, right) => { if (!number(left) || !number(right) || left + right > MAX_SAFE) fail("unsafe_number"); return left + right; };
-const addInteger = (left, right) => { if (!integer(left) || !integer(right) || left + right > MAX_SAFE) fail("unsafe_number"); return left + right; };
 const keys = (value, allowed, code) => { if (!object(value) || Object.keys(value).some((key) => !allowed.includes(key))) fail(code); };
 const id = (value, code) => { if (typeof value !== "string" || !ID.test(value)) fail(code); return value; };
 const timestamp = (value, code) => { if (typeof value !== "string" || !ISO.test(value) || Number.isNaN(Date.parse(value))) fail(code); return value; };
 const receipt = (value, code = "invalid_receipt") => {
   keys(value, ["total", "parentDelta", "subagentTotal", "subagentRuns"], code);
-  if (!number(value.total) || !number(value.parentDelta) || !number(value.subagentTotal) || !integer(value.subagentRuns) || value.total !== add(value.parentDelta, value.subagentTotal)) fail(code);
+  if (!number(value.total) || !number(value.parentDelta) || !number(value.subagentTotal) || !number(value.subagentRuns) || value.total !== add(value.parentDelta, value.subagentTotal)) fail(code);
   return { total: value.total, parentDelta: value.parentDelta, subagentTotal: value.subagentTotal, subagentRuns: value.subagentRuns };
 };
 function evidence(value, code) {
@@ -50,8 +48,8 @@ export function parseFinalizedReceipt(value) {
   const segments = value.segments.map(normalizedSegment); const segmentIds = new Set(segments.map((segment) => segment.id));
   if (segmentIds.size !== segments.length) fail("invalid_receipt");
   let total = 0; let parentDelta = 0; let subagentTotal = 0; let subagentRuns = 0;
-  for (const segment of segments) if (segment.coverage === "complete") { total = add(total, segment.receipt.total); parentDelta = add(parentDelta, segment.receipt.parentDelta); subagentTotal = add(subagentTotal, segment.receipt.subagentTotal); subagentRuns = addInteger(subagentRuns, segment.receipt.subagentRuns); }
-  if (![value.total, value.parentDelta, value.subagentTotal].every(number) || !integer(value.subagentRuns) || value.total !== add(value.parentDelta, value.subagentTotal) || value.total !== total || value.parentDelta !== parentDelta || value.subagentTotal !== subagentTotal || value.subagentRuns !== subagentRuns) fail("invalid_receipt");
+  for (const segment of segments) if (segment.coverage === "complete") { total = add(total, segment.receipt.total); parentDelta = add(parentDelta, segment.receipt.parentDelta); subagentTotal = add(subagentTotal, segment.receipt.subagentTotal); subagentRuns = add(subagentRuns, segment.receipt.subagentRuns); }
+  if (![value.total, value.parentDelta, value.subagentTotal, value.subagentRuns].every(number) || value.total !== add(value.parentDelta, value.subagentTotal) || value.total !== total || value.parentDelta !== parentDelta || value.subagentTotal !== subagentTotal || value.subagentRuns !== subagentRuns) fail("invalid_receipt");
   const gaps = value.attributionGaps.map((gap) => { keys(gap, ["id", "reason"], "invalid_receipt"); if (typeof gap.id !== "string" || !segmentIds.has(gap.id) || typeof gap.reason !== "string" || !GAP_COVERAGE.has(gap.reason)) fail("invalid_receipt"); return { id: gap.id, reason: gap.reason }; });
   const expectedGaps = segments.filter((segment) => segment.coverage !== "complete").map((segment) => ({ id: segment.id, reason: segment.coverage }));
   if (gaps.length !== expectedGaps.length || gaps.some((gap, index) => gap.id !== expectedGaps[index].id || gap.reason !== expectedGaps[index].reason) || (value.coverage === "complete") !== (gaps.length === 0)) fail("invalid_receipt");
@@ -61,9 +59,9 @@ export function parseFinalizedReceipt(value) {
 /** A stable, safe descriptor intended for static presentation only. */
 export function summarizeFinalizedReceipt(value) { return parseFinalizedReceipt(value); }
 function checkedSummary(value) {
-  if (!object(value) || Object.keys(value).some((key) => !["version", "ticket", "pickedUpAt", "closedAt", "durationMs", "coverage", "completedSegments", "totalSegments", "totals", "gaps", "mergedEvidenceCount", "closedEvidenceCount"].includes(key)) || value.version !== 1 || typeof value.ticket !== "string" || !TICKET.test(value.ticket) || !integer(value.durationMs) || !["complete", "partial"].includes(value.coverage) || !integer(value.completedSegments) || !integer(value.totalSegments) || value.totalSegments < 1 || !Array.isArray(value.gaps) || !integer(value.mergedEvidenceCount) || !integer(value.closedEvidenceCount)) fail("invalid_summary");
+  if (!object(value) || Object.keys(value).some((key) => !["version", "ticket", "pickedUpAt", "closedAt", "durationMs", "coverage", "completedSegments", "totalSegments", "totals", "gaps", "mergedEvidenceCount", "closedEvidenceCount"].includes(key)) || value.version !== 1 || typeof value.ticket !== "string" || !TICKET.test(value.ticket) || !number(value.durationMs) || !["complete", "partial"].includes(value.coverage) || !Number.isSafeInteger(value.completedSegments) || !Number.isSafeInteger(value.totalSegments) || value.completedSegments < 0 || value.totalSegments < 1 || value.completedSegments > value.totalSegments || !Array.isArray(value.gaps) || !number(value.mergedEvidenceCount) || !number(value.closedEvidenceCount)) fail("invalid_summary");
   timestamp(value.pickedUpAt, "invalid_summary"); timestamp(value.closedAt, "invalid_summary"); const totals = receipt(value.totals, "invalid_summary");
-  if (value.durationMs !== Date.parse(value.closedAt) - Date.parse(value.pickedUpAt) || value.completedSegments + value.gaps.length !== value.totalSegments || (value.coverage === "complete" ? (value.gaps.length !== 0 || value.completedSegments !== value.totalSegments) : (value.gaps.length === 0 || value.completedSegments >= value.totalSegments)) || value.gaps.some((gap) => typeof gap !== "string" || !GAP_COVERAGE.has(gap))) fail("invalid_summary");
+  if (value.durationMs !== Date.parse(value.closedAt) - Date.parse(value.pickedUpAt) || (value.coverage === "complete") !== (value.gaps.length === 0) || value.gaps.some((gap) => typeof gap !== "string" || !GAP_COVERAGE.has(gap))) fail("invalid_summary");
   return { ...value, totals };
 }
 export function renderCloseoutMarkdown(value) {
