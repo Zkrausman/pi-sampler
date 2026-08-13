@@ -1,0 +1,28 @@
+{
+  "name": "@zkrausman/pi-ticket-cost",
+  "version": "0.1.1",
+  "description": "Local, session-scoped Pi ticket cost receipts.",
+  "license": "UNLICENSED",
+  "private": false,
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zkrausman/pi-sampler.git",
+    "directory": "extensions/ticket-cost"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
