@@ -371,6 +371,9 @@ export async function acquireCrossProcessHindsightNotesLock(projectRoot, session
         let existing;
         try { existing = await openDirectoryAt(store.notes, name, false); }
         catch { throw new HindsightNotesError("unsafe_notes_path"); }
+        // Another writer can release the lock after mkdir reports EEXIST. Retry
+        // acquisition rather than dereferencing a disappeared lock directory.
+        if (!existing) continue;
         const stale = await staleLock(existing, { now, staleMs, alive: processAliveImpl });
         await existing.close().catch(() => undefined);
         if (stale) {
