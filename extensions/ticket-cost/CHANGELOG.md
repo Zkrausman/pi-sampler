@@ -1,5 +1,11 @@
 # @zkrausman/pi-ticket-cost
 
+## 0.2.1
+
+### Patch Changes
+
+- 127dceb: Include bounded model and run aggregates in receipts and fail closed rather than double-counting duplicate subagent run identifiers.
+
 ## 0.2.0
 
 ### Minor Changes
