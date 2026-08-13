@@ -37,6 +37,7 @@ test("v1 contract rejects widened, invalid, and malformed authoritative input", 
 test("replay requires exact correlation, correct transitions, and terminal evidence", () => {
   assert.throws(() => replayTransitions([pickup(), merge()]), /invalid_transition/);
   assert.throws(() => replayTransitions([pickup(), started(), { ...settled(), segment: { ...settled().segment, startRequestId: "other" } }]), /invalid_segment_settlement/);
+  assert.throws(() => replayTransitions([pickup(), started(), awaiting()]), /segments_not_settled/);
   assert.throws(() => replayTransitions([pickup(), started(), settled(), awaiting(), merge(), { ...close(), evidence: [] }]), /invalid_evidence/);
 });
 

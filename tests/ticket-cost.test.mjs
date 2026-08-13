@@ -188,6 +188,16 @@ test("trusted ticket-loop event bus starts and closes a receipt without command 
   assert.equal(result.ok, true); assert.equal(result.receipt.total, 1.25); assert.match(result.markdownPath, /ticket-costs/); assert.equal(notices.filter(([message]) => /Ticket-cost/.test(message)).length, 2);
 });
 
+test("event listener is restored once after session shutdown and later session start", async (t) => {
+  const root = await tempProject(); t.after(() => rm(root, { recursive: true, force: true })); const listeners = new Map(); const eventListeners = new Map();
+  const events = { on(name, handler) { const handlers = eventListeners.get(name) ?? new Set(); handlers.add(handler); eventListeners.set(name, handlers); return () => handlers.delete(handler); }, emit(name, payload) { for (const handler of eventListeners.get(name) ?? []) handler(payload); } };
+  ticketCost({ on: (name, handler) => listeners.set(name, handler), registerCommand: () => {}, events }); const ctx = { cwd: root, isProjectTrusted: () => true, ui: { notify() {} } };
+  listeners.get("session_start")({}, ctx); listeners.get("session_shutdown")({}, ctx); listeners.get("session_start")({}, ctx);
+  assert.equal(eventListeners.get(TICKET_COST_LIFECYCLE_EVENT).size, 1);
+  const result = new Promise((resolve) => events.on(TICKET_COST_LIFECYCLE_RESULT_EVENT, resolve)); events.emit(TICKET_COST_LIFECYCLE_EVENT, { version: 1, requestId: "restart-begin", action: "begin", ticket: "AIDEV-72" });
+  assert.equal((await result).ok, true);
+});
+
 test("trust gate prevents untrusted command, lifecycle signal, message accounting, and filesystem action", async () => {
   const listeners = new Map(); const eventListeners = new Map(); let command; const notices = [];
   const events = { on(name, handler) { const handlers = eventListeners.get(name) ?? new Set(); handlers.add(handler); eventListeners.set(name, handlers); return () => handlers.delete(handler); }, emit(name, payload) { for (const handler of eventListeners.get(name) ?? []) handler(payload); } };

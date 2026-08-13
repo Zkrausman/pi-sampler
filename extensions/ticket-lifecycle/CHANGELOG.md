@@ -1,5 +1,11 @@
 # @zkrausman/pi-ticket-lifecycle
 
+## 0.1.1
+
+### Patch Changes
+
+- Reject awaiting-merge and merged transitions while any ticket segment remains pending.
+
 ## 0.1.0
 
 ### Minor Changes

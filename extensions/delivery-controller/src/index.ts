@@ -32,7 +32,7 @@ export default function deliveryController(pi: ExtensionAPI) {
         const config = validateControllerConfig(params.config as any, { trusted: context.isProjectTrusted(), mode: context.mode } as any);
         if (!config.ok) return { content: [{ type: "text", text: `Controller unavailable: ${(config as any).code}` }], details: config };
         try {
-          const item = await lifecycle?.dispatchWorkItem((params as any).lifecycleHandle); if (!item) throw Object.assign(new Error("lifecycle_unavailable"), { code: "lifecycle_unavailable" });
+          const item = await lifecycle?.bindDispatch((params as any).lifecycleHandle, (params as any).idempotencyKey, (params as any).correlationId); if (!item) throw Object.assign(new Error("lifecycle_unavailable"), { code: "lifecycle_unavailable" });
           const { JobLedger } = await import("./ledger.mjs"); const { JulesAdapter } = await import("./jules-adapter.mjs"); const { JulesProvider } = await import("./jules-provider.mjs");
           const adapter = new JulesAdapter({ ledger: new JobLedger((params.config as any).ledgerPath), provider: new JulesProvider({ providerAuthEnvRef: (params as any).providerAuthEnvRef }) });
           const result = await adapter.dispatch({ ticket: item, idempotencyKey: (params as any).idempotencyKey, correlationId: (params as any).correlationId, approvalEnvRef: (params.config as any).approvalEnvRef, providerAuthEnvRef: (params as any).providerAuthEnvRef });

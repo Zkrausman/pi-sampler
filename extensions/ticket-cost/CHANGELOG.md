@@ -1,5 +1,11 @@
 # @zkrausman/pi-ticket-cost
 
+## 0.2.2
+
+### Patch Changes
+
+- Restore the single trusted lifecycle-event listener after a retained extension instance starts a new session.
+
 ## 0.2.1
 
 ### Patch Changes
