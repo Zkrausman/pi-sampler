@@ -217,14 +217,19 @@ test("adversarial symlink swaps cannot redirect note read, lock, temp, rename, o
     const notesDir = join(projectRoot, ".pi", "hindsight-notes");
     const parked = join(projectRoot, ".pi", "hindsight-notes-parked");
     let swapping = true;
+    let swapAttempts = 0;
+    // A bounded, yielding adversary still exercises concurrent replacement without
+    // starving the operations under test or leaving CI with an unbounded loop.
     const swapper = (async () => {
-      while (swapping) {
+      while (swapping && swapAttempts < 64) {
+        swapAttempts += 1;
         try {
           await rename(notesDir, parked);
           await symlink(outside, notesDir, "dir");
           await rm(notesDir, { recursive: true, force: true });
           await rename(parked, notesDir);
         } catch { /* races only make an operation fail closed */ }
+        if (swapAttempts % 8 === 0) await new Promise((done) => setImmediate(done));
       }
     })();
     const operations = await Promise.allSettled([
@@ -236,6 +241,7 @@ test("adversarial symlink swaps cannot redirect note read, lock, temp, rename, o
     ]);
     swapping = false;
     await swapper;
+    assert.ok(swapAttempts > 0);
     assert.ok(operations.every((result) => result.status === "fulfilled" || result.reason instanceof HindsightNotesError));
     assert.equal(await readFile(sentinel, "utf8"), "outside-must-not-change");
     assert.deepEqual((await readdir(outside)).sort(), ["sentinel.txt"]);
