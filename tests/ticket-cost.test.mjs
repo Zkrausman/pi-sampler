@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, utimes, writeFile } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  MAX_ARTIFACT_DIRECTORY_ENTRIES, TicketCostLifecycle, assistantCostTotal, assistantUsage, majorCostDriverSentence, majorCostDrivers, parseTicketCostArguments,
+  MAX_ARTIFACT_DIRECTORY_ENTRIES, TICKET_COST_LIFECYCLE_EVENT, TICKET_COST_LIFECYCLE_RESULT_EVENT, TicketCostLifecycle, assistantCostTotal, assistantUsage, majorCostDriverSentence, majorCostDrivers, parseTicketCostArguments, parseTicketCostLifecycleSignal,
   receiptMarkdown, scanArtifactMetadata, summarizeCosts, writeReceipt,
 } from "../extensions/ticket-cost/src/ticket-cost.mjs";
 import ticketCost from "../extensions/ticket-cost/src/ticket-cost.mjs";
@@ -19,6 +19,11 @@ async function artifact(root, name, value, mtime = Date.now()) {
 test("parser accepts exactly bounded conservative ticket commands", () => {
   assert.deepEqual(parseTicketCostArguments("begin AIDEV-72"), { action: "begin", ticket: "AIDEV-72" });
   for (const value of ["", "begin A-1", "begin AIDEV-0", "begin aidev-72", "begin AIDEV-72 extra", "status AIDEV-72", "close AIDEV-72 --force"]) assert.throws(() => parseTicketCostArguments(value), /Usage/);
+});
+
+test("lifecycle event parser requires an explicit versioned ticket-loop signal", () => {
+  assert.deepEqual(parseTicketCostLifecycleSignal({ version: 1, requestId: "loop-72", action: "begin", ticket: "AIDEV-72" }), { version: 1, requestId: "loop-72", action: "begin", ticket: "AIDEV-72" });
+  for (const value of [{}, { version: 2, requestId: "loop", action: "begin", ticket: "AIDEV-72" }, { version: 1, requestId: "bad id", action: "close", ticket: "AIDEV-72" }, { version: 1, requestId: "loop", action: "close", ticket: "aidev-72" }]) assert.throws(() => parseTicketCostLifecycleSignal(value), /Invalid ticket-cost lifecycle signal/);
 });
 
 test("message filtering only accepts finalized assistant numeric nonnegative cost", () => {
@@ -38,6 +43,8 @@ test("artifact scan is bounded, safe, ordered, windowed, and ignores forbidden s
   await writeFile(join(root, ".pi", "subagents", "artifacts", "sibling.secret"), "must not be read");
   const records = await scanArtifactMetadata({ cwd: root, startedAt: now - 1_000, endedAt: now + 1_000 });
   assert.deepEqual(records, [{ runId: "run-a", agent: "reviewer-1", cost: 1 }, { runId: "run-z", agent: "reviewer-2", cost: 2 }]);
+  await artifact(root, "real_meta.json", JSON.stringify({ runId: "run-real", agent: "pi-development", usage: { input: 11, output: 7, cacheRead: 5, cacheWrite: 3, turns: 2, cost: 0.1554568 } }), now);
+  assert.deepEqual(await scanArtifactMetadata({ cwd: root, startedAt: now - 1_000, endedAt: now + 1_000 }), [{ runId: "run-a", agent: "reviewer-1", cost: 1 }, { runId: "run-real", agent: "pi-development", cost: 0.1554568, tokens: { input: 11, output: 7, cacheRead: 5, cacheWrite: 3 }, turns: 2 }, { runId: "run-z", agent: "reviewer-2", cost: 2 }]);
 });
 
 test("artifact scan stops bounded enumeration at the first name over cap and avoids symlink metadata", async (t) => {
@@ -76,7 +83,8 @@ test("lifecycle uses in-memory baseline, close failure after reset, and local re
 
 test("receipt writes are collision-safe, contained, atomic-style files with deterministic driver order", async (t) => {
   const root = await tempProject(); t.after(() => rm(root, { recursive: true, force: true }));
-  const receipt = summarizeCosts({ ticket: "AIDEV-72", startedAt: 0, endedAt: 1_700_000_000_000, parentDelta: 1, records: [{ runId: "b", agent: "zeta", cost: 2 }, { runId: "a", agent: "alpha", cost: 2 }, { runId: "c", agent: "reviewer-1", cost: 1 }] });
+  const receipt = summarizeCosts({ ticket: "AIDEV-72", startedAt: 0, endedAt: 1_700_000_000_000, parentDelta: 1, records: [{ runId: "b", agent: "zeta", cost: 2, tokens: { input: 3 }, turns: 2 }, { runId: "a", agent: "alpha", cost: 2, tokens: { input: 1, output: 4 }, turns: 1 }, { runId: "c", agent: "reviewer-1", cost: 1 }] });
+  assert.equal(receipt.version, 2); assert.deepEqual(receipt.subagentTokens, { input: 4, output: 4 }); assert.equal(receipt.subagentTurns, 3);
   assert.deepEqual(majorCostDrivers(2, [{ agent: "zeta", cost: 2 }, { agent: "alpha", cost: 2 }]), ["1. agent:alpha: $2.000000", "2. agent:zeta: $2.000000", "3. parent: $2.000000"]);
   assert.equal(majorCostDriverSentence(2, [{ agent: "zeta", cost: 2 }, { agent: "alpha", cost: 2 }]), "Major cost driver: agent:alpha at $2.000000.");
   assert.equal(receipt.reviewRounds, 1); const first = await writeReceipt({ cwd: root, receipt }); const second = await writeReceipt({ cwd: root, receipt }); assert.notEqual(first.jsonPath, second.jsonPath);
@@ -153,6 +161,9 @@ test("unsafe numeric observations and aggregate overflow fail closed", async (t)
   const root = await tempProject(); t.after(() => rm(root, { recursive: true, force: true })); const now = Date.now();
   await artifact(root, "unsafe_meta.json", JSON.stringify({ runId: "run", agent: "agent", usage: { cost: { total: null } } }), now);
   await assert.rejects(scanArtifactMetadata({ cwd: root, startedAt: now - 1, endedAt: now + 1 }), /Unsafe or out-of-range/);
+  const conflicting = await tempProject(); t.after(() => rm(conflicting, { recursive: true, force: true }));
+  await artifact(conflicting, "conflicting_meta.json", JSON.stringify({ runId: "run", agent: "agent", usage: { input: 2, inputTokens: 3, cost: 1 } }), now);
+  await assert.rejects(scanArtifactMetadata({ cwd: conflicting, startedAt: now - 1, endedAt: now + 1 }), /Unsafe or out-of-range/);
   assert.throws(() => summarizeCosts({ ticket: "AIDEV-72", startedAt: 0, endedAt: 1, parentDelta: Number.MAX_SAFE_INTEGER, records: [{ runId: "a", agent: "agent", cost: 1 }] }), /Unsafe or out-of-range/);
   const lifecycle = new TicketCostLifecycle(); lifecycle.begin("AIDEV-72");
   lifecycle.observeMessage({ message: { role: "assistant", usage: { cost: { total: Infinity } } } });
@@ -160,10 +171,31 @@ test("unsafe numeric observations and aggregate overflow fail closed", async (t)
   await assert.rejects(writeReceipt({ cwd: root, receipt: { ticket: "AIDEV-72", parentDelta: Infinity } }), /Unsafe or out-of-range/);
 });
 
-test("trust gate prevents untrusted command, message accounting, and filesystem action", async () => {
-  const listeners = new Map(); let command; const notices = [];
-  ticketCost({ on: (name, handler) => listeners.set(name, handler), registerCommand: (_name, entry) => { command = entry; } });
+test("trusted ticket-loop event bus starts and closes a receipt without command parsing or tracker access", async (t) => {
+  const root = await tempProject(); t.after(() => rm(root, { recursive: true, force: true }));
+  const listeners = new Map(); const eventListeners = new Map(); const notices = [];
+  const events = { on(name, handler) { const handlers = eventListeners.get(name) ?? new Set(); handlers.add(handler); eventListeners.set(name, handlers); return () => handlers.delete(handler); }, emit(name, payload) { for (const handler of eventListeners.get(name) ?? []) handler(payload); } };
+  ticketCost({ on: (name, handler) => listeners.set(name, handler), registerCommand: () => {}, events });
+  const context = { cwd: root, isProjectTrusted: () => true, ui: { notify: (...args) => notices.push(args) } };
+  listeners.get("session_start")({}, context);
+  events.emit(TICKET_COST_LIFECYCLE_EVENT, { version: 1, requestId: "begin-72", action: "begin", ticket: "AIDEV-72" });
+  await Promise.resolve();
+  await listeners.get("message_end")({ message: { role: "assistant", usage: { input: 2, cost: { total: 1.25 } } } }, context);
+  const closed = new Promise((resolve) => events.on(TICKET_COST_LIFECYCLE_RESULT_EVENT, (result) => { if (result.requestId === "close-72") resolve(result); }));
+  events.emit(TICKET_COST_LIFECYCLE_EVENT, { version: 1, requestId: "close-72", action: "close", ticket: "AIDEV-72" });
+  const result = await closed;
+  assert.equal(result.ok, true); assert.equal(result.receipt.total, 1.25); assert.match(result.markdownPath, /ticket-costs/); assert.equal(notices.filter(([message]) => /Ticket-cost/.test(message)).length, 2);
+});
+
+test("trust gate prevents untrusted command, lifecycle signal, message accounting, and filesystem action", async () => {
+  const listeners = new Map(); const eventListeners = new Map(); let command; const notices = [];
+  const events = { on(name, handler) { const handlers = eventListeners.get(name) ?? new Set(); handlers.add(handler); eventListeners.set(name, handlers); return () => handlers.delete(handler); }, emit(name, payload) { for (const handler of eventListeners.get(name) ?? []) handler(payload); } };
+  ticketCost({ on: (name, handler) => listeners.set(name, handler), registerCommand: (_name, entry) => { command = entry; }, events });
   const context = { cwd: "never-read", isProjectTrusted: () => false, ui: { notify: (...args) => notices.push(args) } };
+  listeners.get("session_start")({}, context);
+  const rejected = new Promise((resolve) => events.on(TICKET_COST_LIFECYCLE_RESULT_EVENT, resolve));
+  events.emit(TICKET_COST_LIFECYCLE_EVENT, { version: 1, requestId: "untrusted-72", action: "close", ticket: "AIDEV-72" });
+  assert.match((await rejected).error, /trusted project/);
   await listeners.get("message_end")({ message: { role: "assistant", usage: { cost: { total: 99 } } } }, context);
   await command.handler("close AIDEV-72", context);
   assert.match(notices[0][0], /trusted project/); assert.equal(notices.length, 1);

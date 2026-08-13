@@ -10,6 +10,9 @@ export const MAX_ARTIFACT_FILES = 100;
 export const MAX_ARTIFACT_BYTES = 65_536;
 const SAFE_METADATA_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}_meta\.json$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+export const TICKET_COST_LIFECYCLE_EVENT = "ticket-cost:v1:lifecycle";
+export const TICKET_COST_LIFECYCLE_RESULT_EVENT = "ticket-cost:v1:lifecycle-result";
 const MAX_SAFE_OBSERVATION = Number.MAX_SAFE_INTEGER;
 const nodeFs = { mkdir, open, realpath, rename, lstat, stat, unlink, rmdir, opendir };
 
@@ -57,11 +60,25 @@ async function verifyOpenedFile(fs, root, path, handle, fileStat) {
   return canonicalPath;
 }
 
+function metadataUsageNumber(usage, keys) {
+  const values = keys.filter((key) => key in usage).map((key) => usage[key]);
+  if (values.length === 0) return undefined;
+  if (values.some((value) => !isNonnegativeFinite(value)) || values.some((value) => value !== values[0])) throw new UnsafeTicketCostObservationError();
+  return values[0];
+}
 function safeMetadata(value) {
-  if (!isObject(value) || !SAFE_ID.test(value.runId) || !SAFE_ID.test(value.agent)) return undefined;
-  if (!isObject(value.usage) || !isObject(value.usage.cost) || !("total" in value.usage.cost)) return undefined;
-  if (!isNonnegativeFinite(value.usage.cost.total)) throw new UnsafeTicketCostObservationError();
-  return { runId: value.runId, agent: value.agent, cost: value.usage.cost.total };
+  if (!isObject(value) || !SAFE_ID.test(value.runId) || !SAFE_ID.test(value.agent) || !isObject(value.usage)) return undefined;
+  const rawCost = value.usage.cost;
+  const cost = isNonnegativeFinite(rawCost) ? rawCost : isObject(rawCost) && "total" in rawCost ? rawCost.total : undefined;
+  if (cost === undefined) return undefined;
+  if (!isNonnegativeFinite(cost)) throw new UnsafeTicketCostObservationError();
+  const tokens = {};
+  for (const [key, aliases] of [["input", ["input", "inputTokens"]], ["output", ["output", "outputTokens"]], ["cacheRead", ["cacheRead"]], ["cacheWrite", ["cacheWrite"]]]) {
+    const tokenCount = metadataUsageNumber(value.usage, aliases);
+    if (tokenCount !== undefined) tokens[key] = tokenCount;
+  }
+  const turns = metadataUsageNumber(value.usage, ["turns"]);
+  return { runId: value.runId, agent: value.agent, cost, ...(Object.keys(tokens).length ? { tokens } : {}), ...(turns === undefined ? {} : { turns }) };
 }
 
 function hasUnsafeAssistantUsage(event) {
@@ -75,6 +92,12 @@ export function parseTicketCostArguments(args) {
   const values = typeof args === "string" ? args.trim().split(/\s+/).filter(Boolean) : [];
   if (values.length !== 2 || (values[0] !== "begin" && values[0] !== "close") || !TICKET_KEY_PATTERN.test(values[1])) throw new Error("Usage: /ticket-cost begin <TICKET-KEY> or /ticket-cost close <TICKET-KEY>.");
   return { action: values[0], ticket: values[1] };
+}
+
+/** Strict, local-only protocol for a trusted ticket-loop extension on Pi's in-process event bus. */
+export function parseTicketCostLifecycleSignal(value) {
+  if (!isObject(value) || value.version !== 1 || !SAFE_REQUEST_ID.test(value.requestId) || (value.action !== "begin" && value.action !== "close") || !TICKET_KEY_PATTERN.test(value.ticket)) throw new Error("Invalid ticket-cost lifecycle signal.");
+  return { version: 1, requestId: value.requestId, action: value.action, ticket: value.ticket };
 }
 
 export function assistantUsage(event) {
@@ -166,17 +189,25 @@ export async function scanArtifactMetadata({ cwd, startedAt, endedAt, fs = nodeF
 
 export function summarizeCosts({ ticket, startedAt, endedAt, parentDelta, parentTokens, records }) {
   if (!isNonnegativeFinite(parentDelta) || !Array.isArray(records)) throw new UnsafeTicketCostObservationError();
-  const costs = new Map();
+  const aggregates = new Map();
   for (const record of records) {
-    if (!record || !SAFE_ID.test(record.agent) || !isNonnegativeFinite(record.cost)) throw new UnsafeTicketCostObservationError();
-    costs.set(record.agent, checkedAdd(costs.get(record.agent) ?? 0, record.cost));
+    if (!record || !SAFE_ID.test(record.agent) || !isNonnegativeFinite(record.cost) || (record.tokens !== undefined && (!isObject(record.tokens) || Object.values(record.tokens).some((value) => !isNonnegativeFinite(value)))) || (record.turns !== undefined && !isNonnegativeFinite(record.turns))) throw new UnsafeTicketCostObservationError();
+    const aggregate = aggregates.get(record.agent) ?? { cost: 0, tokens: {}, turns: 0 };
+    aggregate.cost = checkedAdd(aggregate.cost, record.cost);
+    for (const [key, value] of Object.entries(record.tokens ?? {})) aggregate.tokens[key] = checkedAdd(aggregate.tokens[key] ?? 0, value);
+    aggregate.turns = checkedAdd(aggregate.turns, record.turns ?? 0);
+    aggregates.set(record.agent, aggregate);
   }
-  const agents = [...costs.entries()].map(([agent, cost]) => ({ agent, cost })).sort((left, right) => stableCompare(left.agent, right.agent));
+  const agents = [...aggregates.entries()].map(([agent, aggregate]) => ({ agent, cost: aggregate.cost, ...(Object.keys(aggregate.tokens).length ? { tokens: aggregate.tokens } : {}), ...(aggregate.turns ? { turns: aggregate.turns } : {}) })).sort((left, right) => stableCompare(left.agent, right.agent));
   const subagentTotal = agents.reduce((total, entry) => checkedAdd(total, entry.cost), 0);
   const total = checkedAdd(parentDelta, subagentTotal);
   if (parentTokens && Object.values(parentTokens).some((value) => !isNonnegativeFinite(value))) throw new UnsafeTicketCostObservationError();
-  const receipt = { version: 1, ticket, startedAt: new Date(startedAt).toISOString(), endedAt: new Date(endedAt).toISOString(), parentDelta, subagentTotal, total, agents, majorCostDriver: majorCostDriverSentence(parentDelta, agents), majorCostDrivers: majorCostDrivers(parentDelta, agents) };
+  const subagentTokens = {}; let subagentTurns = 0;
+  for (const agent of agents) { for (const [key, value] of Object.entries(agent.tokens ?? {})) subagentTokens[key] = checkedAdd(subagentTokens[key] ?? 0, value); subagentTurns = checkedAdd(subagentTurns, agent.turns ?? 0); }
+  const receipt = { version: 2, ticket, startedAt: new Date(startedAt).toISOString(), endedAt: new Date(endedAt).toISOString(), parentDelta, subagentTotal, total, agents, majorCostDriver: majorCostDriverSentence(parentDelta, agents), majorCostDrivers: majorCostDrivers(parentDelta, agents) };
   if (parentTokens && Object.keys(parentTokens).length) receipt.parentTokens = parentTokens;
+  if (Object.keys(subagentTokens).length) receipt.subagentTokens = subagentTokens;
+  if (subagentTurns) receipt.subagentTurns = subagentTurns;
   const reviewRounds = inferReviewRounds(agents.map(({ agent }) => agent)); if (reviewRounds !== undefined) receipt.reviewRounds = reviewRounds;
   return receipt;
 }
@@ -185,9 +216,11 @@ export function receiptMarkdown(receipt) {
   assertReceiptSafe(receipt);
   const lines = [`# Ticket cost receipt: ${receipt.ticket}`, "", `- Start: ${receipt.startedAt}`, `- End: ${receipt.endedAt}`, `- Parent delta: $${receipt.parentDelta.toFixed(6)}`, `- Subagent total: $${receipt.subagentTotal.toFixed(6)}`, `- Total: $${receipt.total.toFixed(6)}`];
   if (receipt.parentTokens && Object.keys(receipt.parentTokens).length) lines.push(`- Parent tokens: ${Object.entries(receipt.parentTokens).map(([kind, count]) => `${kind}=${count}`).join(", ")}`);
+  if (receipt.subagentTokens && Object.keys(receipt.subagentTokens).length) lines.push(`- Subagent tokens: ${Object.entries(receipt.subagentTokens).map(([kind, count]) => `${kind}=${count}`).join(", ")}`);
+  if (receipt.subagentTurns !== undefined) lines.push(`- Subagent turns: ${receipt.subagentTurns}`);
   if (receipt.reviewRounds !== undefined) lines.push(`- Review rounds: ${receipt.reviewRounds}`);
   lines.push("", "## Agent aggregate", "");
-  if (receipt.agents.length) lines.push(...receipt.agents.map(({ agent, cost }) => `- ${agent}: $${cost.toFixed(6)}`)); else lines.push("- No eligible subagent metadata in the window.");
+  if (receipt.agents.length) lines.push(...receipt.agents.map(({ agent, cost, tokens, turns }) => `- ${agent}: $${cost.toFixed(6)}${tokens && Object.keys(tokens).length ? ` (${Object.entries(tokens).map(([kind, count]) => `${kind}=${count}`).join(", ")})` : ""}${turns !== undefined ? ` (turns=${turns})` : ""}`)); else lines.push("- No eligible subagent metadata in the window.");
   lines.push("", "## Major cost drivers", "", ...receipt.majorCostDrivers.map((driver) => `- ${driver}`), "", "## Linear closeout (paste locally)", "", "```text", `Ticket: ${receipt.ticket}`, `Cost window: ${receipt.startedAt} to ${receipt.endedAt}`, `Parent delta: $${receipt.parentDelta.toFixed(6)}`, `Subagent total: $${receipt.subagentTotal.toFixed(6)}`, `Total: $${receipt.total.toFixed(6)}`, receipt.majorCostDriver, "```");
   return `${lines.join("\n")}\n`;
 }
@@ -204,7 +237,7 @@ async function writeExclusive(fs, root, outputDirectory, path, content) {
 }
 
 function assertReceiptSafe(receipt) {
-  if (!isObject(receipt) || !TICKET_KEY_PATTERN.test(receipt.ticket) || !isNonnegativeFinite(receipt.parentDelta) || !isNonnegativeFinite(receipt.subagentTotal) || !isNonnegativeFinite(receipt.total) || !Array.isArray(receipt.agents) || receipt.agents.some(({ agent, cost }) => !SAFE_ID.test(agent) || !isNonnegativeFinite(cost)) || (receipt.parentTokens && Object.values(receipt.parentTokens).some((value) => !isNonnegativeFinite(value)))) throw new UnsafeTicketCostObservationError();
+  if (!isObject(receipt) || !TICKET_KEY_PATTERN.test(receipt.ticket) || !isNonnegativeFinite(receipt.parentDelta) || !isNonnegativeFinite(receipt.subagentTotal) || !isNonnegativeFinite(receipt.total) || !Array.isArray(receipt.agents) || receipt.agents.some(({ agent, cost, tokens, turns }) => !SAFE_ID.test(agent) || !isNonnegativeFinite(cost) || (tokens !== undefined && (!isObject(tokens) || Object.values(tokens).some((value) => !isNonnegativeFinite(value)))) || (turns !== undefined && !isNonnegativeFinite(turns))) || (receipt.parentTokens && (!isObject(receipt.parentTokens) || Object.values(receipt.parentTokens).some((value) => !isNonnegativeFinite(value)))) || (receipt.subagentTokens && (!isObject(receipt.subagentTokens) || Object.values(receipt.subagentTokens).some((value) => !isNonnegativeFinite(value)))) || (receipt.subagentTurns !== undefined && !isNonnegativeFinite(receipt.subagentTurns))) throw new UnsafeTicketCostObservationError();
 }
 async function removeStagingReceipt(fs, directory) {
   await Promise.all([unlinkIfPresent(fs, join(directory, "receipt.json")), unlinkIfPresent(fs, join(directory, "receipt.md"))]);
@@ -292,7 +325,34 @@ function trusted(ctx) { return typeof ctx?.isProjectTrusted === "function" && ct
 /** Local-only ticket-window accounting; no session, model, network, or tracker access. */
 export default function ticketCost(pi) {
   const lifecycle = new TicketCostLifecycle();
-  pi.on("session_start", (_event, ctx) => { if (trusted(ctx)) lifecycle.reset(); });
+  let sessionContext;
+  const publishLifecycleResult = (signal, result) => pi.events?.emit?.(TICKET_COST_LIFECYCLE_RESULT_EVENT, { version: 1, requestId: signal.requestId, action: signal.action, ticket: signal.ticket, ...result });
+  const applyLifecycleSignal = async (rawSignal) => {
+    let signal;
+    try { signal = parseTicketCostLifecycleSignal(rawSignal); } catch { return; }
+    if (!trusted(sessionContext)) {
+      publishLifecycleResult(signal, { ok: false, error: "Ticket cost requires a trusted project; no data was read or written." });
+      return;
+    }
+    try {
+      if (signal.action === "begin") {
+        lifecycle.begin(signal.ticket);
+        sessionContext?.ui?.notify?.(`Ticket-cost window started for ${signal.ticket}.`, "info");
+        publishLifecycleResult(signal, { ok: true });
+        return;
+      }
+      const result = await lifecycle.close(signal.ticket, sessionContext.cwd);
+      sessionContext?.ui?.notify?.(`Ticket-cost receipt for ${signal.ticket}: total $${result.receipt.total.toFixed(6)}. Local closeout block is in ${result.markdownPath}.`, "info");
+      publishLifecycleResult(signal, { ok: true, receipt: result.receipt, jsonPath: result.jsonPath, markdownPath: result.markdownPath });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to create ticket-cost receipt.";
+      sessionContext?.ui?.notify?.(message, "error");
+      publishLifecycleResult(signal, { ok: false, error: message });
+    }
+  };
+  const unsubscribe = pi.events?.on?.(TICKET_COST_LIFECYCLE_EVENT, (signal) => { void applyLifecycleSignal(signal); });
+  pi.on("session_start", (_event, ctx) => { sessionContext = trusted(ctx) ? ctx : undefined; lifecycle.reset(); });
+  pi.on("session_shutdown", () => { sessionContext = undefined; lifecycle.reset(); if (typeof unsubscribe === "function") unsubscribe(); });
   pi.on("message_end", (event, ctx) => { if (trusted(ctx)) lifecycle.observeMessage(event); });
   pi.registerCommand("ticket-cost", { description: "Begin or close a local, session-scoped ticket cost window", async handler(args, ctx) {
     if (!trusted(ctx)) { ctx?.ui?.notify?.("Ticket cost requires a trusted project; no data was read or written.", "error"); return; }
