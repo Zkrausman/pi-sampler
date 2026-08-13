@@ -102,7 +102,7 @@ export function replayTransitions(rawEvents) {
     if (event.action === "segment-settle") {
       if (!current.segments.has(event.segment.id)) fail("segment_not_started");
       const existing = current.segments.get(event.segment.id);
-      if (existing.session !== event.segment.session || existing.startRequestId !== event.segment.startRequestId || existing.coverage !== "pending") fail("invalid_segment_settlement");
+      if (existing.session !== event.segment.session || existing.startRequestId !== event.segment.startRequestId || existing.coverage !== "pending" || [...current.segments.values()].some((segment) => segment.id !== event.segment.id && segment.settleRequestId === event.segment.settleRequestId)) fail("invalid_segment_settlement");
       if (current.segments.size > MAX_SEGMENTS) fail("too_many_segments");
       current.segments.set(event.segment.id, event.segment);
     } else if (event.action === "segment-start") {
