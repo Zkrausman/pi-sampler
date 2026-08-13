@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { parseFinalizedReceipt, readCloseoutSummary, renderCloseoutMarkdown, TicketCloseoutSummaryError } from "../extensions/ticket-closeout-summary/src/index.mjs";
+import { parseCloseoutSummary, parseFinalizedReceipt, readCloseoutSummary, renderCloseoutMarkdown, TicketCloseoutSummaryError } from "../extensions/ticket-closeout-summary/src/index.mjs";
 
 const execFileAsync = promisify(execFile);
 const evidence = (ref) => [{ ref, sha256: "a".repeat(64) }];
@@ -24,6 +24,20 @@ test("complete and partial finalized receipts produce sanitized deterministic de
 
 test("parser fails closed on malformed, widened, partial invariant, and non-comparable receipt data", () => {
   for (const invalid of [{ ...receipt(), extra: true }, { ...receipt(), version: 2 }, { ...receipt(), total: 4 }, { ...receipt({ partial: true }), coverage: "complete" }, { ...receipt({ partial: true }), attributionGaps: [] }, { ...receipt(), evidence: { merged: evidence("merge"), closed: [] } }, { ...receipt(), segments: [{ ...completed("one"), session: "raw session value!" }] }]) assert.throws(() => parseFinalizedReceipt(invalid), TicketCloseoutSummaryError);
+});
+
+test("lifecycle-compatible decimal costs parse and render", () => {
+  const decimalReceipt = { ...receipt(), total: 1.25, parentDelta: 0.5, subagentTotal: 0.75, segments: [completed("one", 1.25, 0.5, 0.75)] };
+  const summary = parseFinalizedReceipt(decimalReceipt);
+  assert.deepEqual(summary.totals, { total: 1.25, parentDelta: 0.5, subagentTotal: 0.75, subagentRuns: 1 });
+  assert.match(renderCloseoutMarkdown(summary), /Aggregate total: 1.25 \(parent 0.5; subagent 0.75; 1 subagent runs\)/);
+});
+
+test("sanitized summary descriptors require internally consistent coverage", async (t) => {
+  const directory = await temporary(t); const descriptor = { version: 1, ticket: "AIDEV-76", pickedUpAt: "2026-01-01T00:00:00.000Z", closedAt: "2026-01-01T00:01:00.000Z", durationMs: 60000, coverage: "partial", completedSegments: 1, totalSegments: 2, totals: { total: 1.25, parentDelta: 0.5, subagentTotal: 0.75, subagentRuns: 1 }, gaps: ["interrupted"], mergedEvidenceCount: 1, closedEvidenceCount: 1 };
+  assert.deepEqual(parseCloseoutSummary(descriptor), descriptor);
+  const path = join(directory, "descriptor.json"); await writeFile(path, JSON.stringify(descriptor)); assert.deepEqual(await readCloseoutSummary(path), descriptor);
+  for (const invalid of [{ ...descriptor, completedSegments: 0 }, { ...descriptor, coverage: "complete" }, { ...descriptor, coverage: "partial", completedSegments: 2, totalSegments: 2, gaps: [] }, { ...descriptor, gaps: ["unknown"] }]) assert.throws(() => parseCloseoutSummary(invalid), TicketCloseoutSummaryError);
 });
 
 test("reader rejects relative, symlink, nonregular, malformed inputs and CLI accepts only its documented arguments", async (t) => {
