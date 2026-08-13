@@ -121,12 +121,16 @@ export async function acquireLedgerLock(path) {
   try { const handle = await open(path, "wx"); await handle.writeFile(JSON.stringify({ version: 1, token })); await handle.sync(); await handle.close(); return { path, token }; }
   catch (error) { if (error?.code === "EEXIST") fail("ledger_locked"); throw error; }
 }
-/** Release only if the on-disk ownership token still matches this owner. */
+/**
+ * Best-effort release: token comparison rejects ordinary stale cleanup, but
+ * portable Node cannot atomically compare-token-and-unlink. It therefore
+ * requires a trusted filesystem and no concurrent manual lock recovery.
+ */
 export async function releaseLedgerLock(lock) {
   try {
     const entry = await safeFile(lock.path); if (!entry) return false;
     const value = JSON.parse(await readFile(lock.path, "utf8")); if (!isObject(value) || value.version !== 1 || value.token !== lock.token) return false;
-    // Node has no portable unlink-if-same-inode primitive; token verification prevents known successor deletion.
+    // This check is a defense against ordinary stale cleanup, not a guarantee: a replacement can race after read.
     await unlink(lock.path); return true;
   } catch (error) { if (error?.code === "ENOENT") return false; throw error; }
 }

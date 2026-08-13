@@ -54,9 +54,12 @@ non-trailing records fail closed. This is intentional crash recovery, not a
 repair of arbitrary ledger corruption.
 
 Writers use a non-reclaimed ownership-token lock. If a process dies holding a
-lock, a later writer fails with `ledger_locked`; an operator must first verify
-the owner is stopped and then remove the lock as an explicit recovery action.
-Release checks its token so a former owner cannot remove a successor lock.
+lock, a later writer fails with `ledger_locked`; an operator must first confirm
+the owner is stopped and only then remove the lock as an explicit recovery
+action. Release compares its token as a defense against ordinary stale cleanup,
+but is **best-effort**: portable Node cannot atomically compare a token and
+unlink. Correct operation requires a trusted filesystem and no concurrent
+manual lock recovery while a writer may release its lock.
 
 Created lifecycle directories and output files are rejected if they are
 symlinks. Node does not offer portable `openat`/`O_NOFOLLOW` parent binding or

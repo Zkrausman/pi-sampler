@@ -54,7 +54,7 @@ test("append supports exact retries and concurrent writers fail bounded rather t
   const layout = await ledger.layout(); const owner = await acquireLedgerLock(layout.lockPath); await assert.rejects(ledger.append(started()), /ledger_locked/); assert.equal(await releaseLedgerLock(owner), true);
 });
 
-test("lock release verifies ownership and never removes a successor token", async (t) => {
+test("lock release compares ownership for ordinary stale cleanup", async (t) => {
   const directory = await root(t); const lockPath = join(directory, "lock"); const first = await acquireLedgerLock(lockPath);
   await rm(lockPath); const successor = await acquireLedgerLock(lockPath); assert.equal(await releaseLedgerLock(first), false);
   assert.equal(JSON.parse(await readFile(lockPath, "utf8")).token, successor.token); assert.equal(await releaseLedgerLock(successor), true);
