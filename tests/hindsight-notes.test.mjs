@@ -154,7 +154,7 @@ test("atomic cross-process appends retain all notes and leave no lock or tempora
 
 test("Windows Registry backend uses fixed hash-only keys, atomic per-note values, bounded responses, and preserves concurrent notes", async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), "hindsight-notes-registry-"));
-  const values = new Map(); const calls = [];
+  const values = new Map(); const calls = []; let blankNextQuery = false;
   const missing = () => ({ code: 1, stdout: "", stderr: "ERROR: The system was unable to find the specified registry key or value.\r\n" });
   const runner = async (args) => {
     calls.push(args);
@@ -166,6 +166,7 @@ test("Windows Registry backend uses fixed hash-only keys, atomic per-note values
       return { code: 0, stdout: `${header}\r\n    ${name}    REG_SZ    ${bucket.get(name)}\r\n`, stderr: "" };
     }
     if (verb === "query") {
+      if (blankNextQuery) { blankNextQuery = false; return { code: 0, stdout: "\r\n", stderr: "" }; }
       if (!bucket) return missing();
       return { code: 0, stdout: `${header}\r\n${[...bucket].map(([valueName, value]) => `    ${valueName}    REG_SZ    ${value}\r\n`).join("")}`, stderr: "" };
     }
@@ -182,6 +183,8 @@ test("Windows Registry backend uses fixed hash-only keys, atomic per-note values
   };
   try {
     const backend = createWindowsRegistryBackend({ runRegistry: runner });
+    blankNextQuery = true;
+    assert.deepEqual((await backend.list(projectRoot, sessionReference)).notes, [], "an existing empty registry key is an empty note store");
     const first = note("First registry note.");
     const second = { ...note("Second registry note."), noteId: "note-fedcba9876543210fedcba9876543210" };
     await Promise.all([backend.put(projectRoot, sessionReference, first), backend.put(projectRoot, sessionReference, second)]);

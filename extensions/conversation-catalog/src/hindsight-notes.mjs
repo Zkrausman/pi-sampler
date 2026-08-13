@@ -151,8 +151,11 @@ export function createWindowsRegistryBackend({ runRegistry = directWindowsRegist
     if (absent(result)) return undefined;
     if (result.code !== 0 || result.stderr.trim()) throw new HindsightNotesError("registry_query_failed");
     const lines = result.stdout.replace(/\r/g, "").split("\n").filter(Boolean);
+    // reg.exe reports an existing key with no values as a successful blank response.
+    // Treat it as an empty note store so a prior empty registry key cannot block adds.
+    if (lines.length === 0) return emptyHindsightNotes(sessionReference);
     const canonicalHeader = `HKEY_CURRENT_USER${key.slice("HKCU".length)}`;
-    if (lines.length < 1 || lines[0].trim().toLowerCase() !== canonicalHeader.toLowerCase()) throw new HindsightNotesError("registry_response_invalid");
+    if (lines[0].trim().toLowerCase() !== canonicalHeader.toLowerCase()) throw new HindsightNotesError("registry_response_invalid");
     const notes = [];
     for (const line of lines.slice(1)) {
       const match = /^\s*(n_[a-f0-9]{32})\s+REG_SZ\s+([A-Za-z0-9+/=]+)\s*$/.exec(line);

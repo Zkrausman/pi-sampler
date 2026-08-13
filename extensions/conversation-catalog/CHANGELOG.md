@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.5
+
+### Patch Changes
+
+- Treat existing empty Windows Registry note keys as empty stores so they no longer block saving notes; surface Save-note results in the reader status area.
+
 ## 0.5.4
 
 ### Patch Changes

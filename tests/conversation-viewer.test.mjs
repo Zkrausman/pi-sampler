@@ -95,6 +95,8 @@ test("viewer reader has an accessible on-demand navigation drawer, handoff copy 
   assert.match(script, /noteReference/); assert.match(script, /drawerFocusables/); assert.match(script, /textarea/); assert.doesNotMatch(script, /prompt\(/);
   assert.match(script, /status\.setAttribute\('role','status'\)/); assert.match(script, /status\.setAttribute\('aria-live','polite'\)/);
   assert.match(script, /status\.textContent='Note added\.'/); assert.match(script, /status\.textContent='Note updated\.'/); assert.match(script, /status\.textContent='Note deleted\.'/);
+  assert.match(script, /readerStatus\.textContent='Note added\.'/);
+  assert.match(script, /readerStatus\.textContent='Unable to save note\.'/);
   assert.match(script, /readerStatus\.textContent='Legacy note attached to the selected event\.'/); assert.match(script, /readerStatus\.textContent='Unable to attach legacy note\.'/);
   assert.match(page, /id="legacy-notes-status" role="status" aria-live="polite"/);
   assert.match(page, /id="reader-status" class="notice" role="status" aria-live="polite"/);
