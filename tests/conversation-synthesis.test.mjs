@@ -100,19 +100,11 @@ test("only approved public commands remain and flow/map modules are deleted", ()
   assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/flow.mjs")), false); assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/map.mjs")), false);
 });
 
-test("linked ticket closeout is separately rendered but excluded from the synthesis prompt and citations", () => {
-  const closeout = { version: 1, ticket: "AIDEV-76", pickedUpAt: "2026-01-01T00:00:00.000Z", closedAt: "2026-01-01T00:01:00.000Z", durationMs: 60000, coverage: "partial", completedSegments: 1, totalSegments: 2, totals: { total: 3, parentDelta: 1, subagentTotal: 2, subagentRuns: 1 }, gaps: ["interrupted"], mergedEvidenceCount: 1, closedEvidenceCount: 1 };
-  const html = buildHindsightDocument(source(), fullOutput(), undefined, closeout); assert.match(html, /Linked ticket closeout/); assert.match(html, /Known lower-bound total/); assert.match(html, /not submitted to the model/); assert.doesNotMatch(buildSynthesisPrompt(source()), /AIDEV-76|ticket closeout/i); assert.throws(() => buildHindsightDocument(source(), fullOutput(), undefined, { ...closeout, evidence: "widened" }), /descriptor is malformed/);
-  assert.equal(buildHindsightDocument(source(), fullOutput()), buildHindsightDocument(source(), fullOutput(), undefined, undefined));
-});
-
 test("unsupported hindsight flags are rejected before a session is selected", async () => {
   const extension = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8").replace(/^import[^\n]+;\r?\n/gm, "");
   const compiled = ts.transpileModule(extension, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   const { hindsightArguments } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
   for (const flag of ["--narrative-map", "--validate-claim-support", "--prior-outcomes old.outcomes.json"]) assert.throws(() => hindsightArguments(flag), /Unsupported hindsight option/);
-  assert.deepEqual(hindsightArguments("session-ab12 --ticket-closeout E:/receipt.json"), { reference: "session-ab12", closeoutPath: "E:/receipt.json" });
-  assert.throws(() => hindsightArguments("--ticket-closeout"), /Usage:/);
   assert.deepEqual(hindsightArguments("reports/one.html"), { outputPath: "reports/one.html" });
   assert.deepEqual(hindsightArguments("session-ab12 reports/one.html"), { reference: "session-ab12", outputPath: "reports/one.html" });
   assert.throws(() => hindsightArguments("session-invalid!"), /identifier is invalid/);

@@ -20,7 +20,7 @@ The viewer uses package-local assets only and makes no network request, Pi invoc
 
 ```text
 /conversation-catalog
-/hindsight-document [session-identifier] [output-path] [--ticket-closeout <absolute-summary-or-receipt-path>]
+/hindsight-document [session-identifier] [output-path]
 /hindsight-notes
 ```
 
@@ -33,7 +33,7 @@ The viewer uses package-local assets only and makes no network request, Pi invoc
 
 The selected transcript and local identity are never written to a generated catalog, cached by the extension, transmitted, or sent to the model by the browser. If a previously selected identifier is stale or invalid, hindsight fails closed.
 
-You may also run `/hindsight-document` without an identifier to use the same local single-session picker, or provide an optional `.html` output path after an opaque identifier. The default report path is user-local; it is not the browser's output. Optionally add `--ticket-closeout <absolute-summary-or-receipt-path>` to show a strictly validated, sanitized local lifecycle closeout in a separate view-only report section. It is read once from the explicit path, never discovered, sent to the model, used as source evidence/citations, or used for claims, recommendations, notes, or subagent assessment. Invalid closeout input fails the report before synthesis.
+You may also run `/hindsight-document` without an identifier to use the same local single-session picker, or provide an optional `.html` output path after an opaque identifier. The default report path is user-local; it is not the browser's output.
 
 ## In-session hindsight notes
 

@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { readCloseoutSummary } from "@zkrausman/pi-ticket-closeout-summary";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { browserPickerLabel, formatLocalConversationReader, resolveSessionReference } from "./browser.mjs";
@@ -14,22 +13,17 @@ import { compileSensitivePatterns, findSensitiveContent, pseudonymizeSession, re
 import { defaultHindsightReportDirectory, resolveExplicitHindsightOutputPath, writeDefaultHindsightReport, writeHindsightReport } from "./hindsight-output.mjs";
 
 function hindsightArguments(args: string) {
-  const values = args.trim().split(/\s+/).filter(Boolean); let closeoutPath: string | undefined;
-  const closeout = values.indexOf("--ticket-closeout");
-  if (closeout >= 0) {
-    if (values.filter((value) => value === "--ticket-closeout").length !== 1 || closeout === values.length - 1 || values[closeout + 1].startsWith("--")) throw new Error("Usage: /hindsight-document [session-identifier] [output-path] [--ticket-closeout <absolute-summary-or-receipt-path>]");
-    closeoutPath = values[closeout + 1]; values.splice(closeout, 2);
-  }
-  if (values.some((value) => value.startsWith("--"))) throw new Error("Unsupported hindsight option. Usage: /hindsight-document [session-identifier] [output-path] [--ticket-closeout <absolute-summary-or-receipt-path>]");
-  if (values.length > 2) throw new Error("Usage: /hindsight-document [session-identifier] [output-path] [--ticket-closeout <absolute-summary-or-receipt-path>]");
-  if (values.length === 0) return closeoutPath ? { closeoutPath } : {};
+  const values = args.trim().split(/\s+/).filter(Boolean);
+  if (values.some((value) => value.startsWith("--"))) throw new Error("Unsupported hindsight option. Usage: /hindsight-document [session-identifier] [output-path]");
+  if (values.length > 2) throw new Error("Usage: /hindsight-document [session-identifier] [output-path]");
+  if (values.length === 0) return {};
   const [first, second] = values;
   if (first.startsWith("session-")) {
     if (!/^session-[a-z0-9]+$/.test(first)) throw new Error("The selected conversation identifier is invalid.");
-    return { ...(second ? { reference: first, outputPath: second } : { reference: first }), ...(closeoutPath ? { closeoutPath } : {}) };
+    return second ? { reference: first, outputPath: second } : { reference: first };
   }
   if (second) throw new Error("A session identifier must come before an output path.");
-  return { outputPath: first, ...(closeoutPath ? { closeoutPath } : {}) };
+  return { outputPath: first };
 }
 async function configuredPatterns(cwd: string) {
   try {
@@ -88,7 +82,7 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
 
 /** Read-only catalog and redaction-reviewed hindsight reports of saved Pi conversations. */
 export default function conversationCatalog(pi: ExtensionAPI) {
-  let pendingHindsight: { sources: any[]; hindsightNotes: any[]; ticketCloseout?: any; outputPath?: string; defaultDirectory?: string; reference: string; restoreTools: () => void } | undefined;
+  let pendingHindsight: { sources: any[]; hindsightNotes: any[]; outputPath?: string; defaultDirectory?: string; reference: string; restoreTools: () => void } | undefined;
   pi.on("agent_settled", () => { const pending = pendingHindsight; if (pending) { pendingHindsight = undefined; pending.restoreTools(); } });
   pi.registerTool({
     name: "hindsight_document_write", label: "Write safe hindsight document",
@@ -106,7 +100,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     async execute(_toolCallId, params) {
       if (!pendingHindsight) return { content: [{ type: "text", text: "No hindsight document draft is awaiting generation." }] };
       try {
-        const html = buildHindsightDocument(pendingHindsight.sources, params, pendingHindsight.hindsightNotes, pendingHindsight.ticketCloseout);
+        const html = buildHindsightDocument(pendingHindsight.sources, params, pendingHindsight.hindsightNotes);
         const outputPath = pendingHindsight.outputPath
           ? (await writeHindsightReport(pendingHindsight.outputPath, html), pendingHindsight.outputPath)
           : await writeDefaultHindsightReport({ directory: pendingHindsight.defaultDirectory!, reference: pendingHindsight.reference, html });
@@ -126,7 +120,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
 
   async function beginHindsight(args: string, ctx: any) {
     if (!ctx.hasUI) throw new Error("Hindsight generation requires Pi's interactive UI.");
-    const requested = hindsightArguments(args); const ticketCloseout = requested.closeoutPath ? await readCloseoutSummary(requested.closeoutPath) : undefined; const sessions = await SessionManager.listAll();
+    const requested = hindsightArguments(args); const sessions = await SessionManager.listAll();
     if (!sessions.length) throw new Error("No saved conversations are available for hindsight generation.");
     const session = requested.reference
       ? resolveSessionReference(sessions, requested.reference)
@@ -145,7 +139,7 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     const outputPath = requested.outputPath ? resolveExplicitHindsightOutputPath(requested.outputPath, ctx.cwd) : undefined;
     const defaultDirectory = outputPath ? undefined : defaultHindsightReportDirectory({ home: homedir() });
     const prompt = preflightSynthesisPrompt(sources, { hindsightNotes }, ctx.getContextUsage?.()); const restoreTools = restrictToolsForHindsightSynthesis(pi);
-    try { pendingHindsight = { sources, hindsightNotes, ticketCloseout, outputPath, defaultDirectory, reference, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
+    try { pendingHindsight = { sources, hindsightNotes, outputPath, defaultDirectory, reference, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
     const destination = outputPath || defaultDirectory;
     ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${destination}.`, "info");
   }
