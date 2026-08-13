@@ -53,12 +53,12 @@ test("local reader shows selected content without raw session storage identifier
   for (const forbidden of [selected.id, selected.path, selected.cwd, entryId, callId]) assert.doesNotMatch(transcript, new RegExp(forbidden));
 });
 
-test("viewer session navigation uses the session API ordinal and collapses empty event notes", () => {
+test("viewer session navigation uses server-issued handles, paging, and lazy event notes", () => {
   const script = viewerScript();
-  assert.match(script, /sessions,session=>item\('Conversation '\+\(session\.index\+1\)/);
-  assert.doesNotMatch(script, /sessions,\(session,index\)=>item\('Conversation '\+\(index\+1\)/);
-  assert.match(script, /const renderCompact=\(\)=>\{container\.replaceChildren\(add,status\)\}/);
-  assert.match(script, /if\(!notes\.length&&!form\)\{renderCompact\(\);return\}/);
-  assert.match(script, /status\.setAttribute\('role','status'\)/);
-  assert.match(script, /sessionIndex===selectedIndex&&epoch===selectionEpoch/);
+  assert.match(script, /s\.handle/);
+  assert.match(script, /nextCursor/);
+  assert.match(script, /Load more conversations/);
+  assert.match(script, /notes\.onclick=async/);
+  assert.doesNotMatch(script, /api\(base\)/);
+  assert.doesNotMatch(script, /session\.index/);
 });

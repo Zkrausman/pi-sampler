@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { buildHindsightDocument, buildSynthesisPrompt, MAX_SYNTHESIS_PROMPT_BYTES, preflightSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
+import { buildHindsightDocument, buildSynthesisPrompt, MAX_SYNTHESIS_PROMPT_BYTES, measureSynthesisPrompt, preflightSynthesisPrompt } from "../extensions/conversation-catalog/src/synthesis.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = (summary = "First redacted event") => [{ reference: "session-one", events: [{ id: "event-one", category: "user", timestamp: "2025-01-01", summary, evidence: { reference: "session-one:event-0001" } }], edges: [] }];
@@ -92,6 +92,13 @@ test("synthesis prompt requires matching Fix/Harden proposals and retains prefli
   assert.throws(() => preflightSynthesisPrompt(source("🧠".repeat(MAX_SYNTHESIS_PROMPT_BYTES)), {}, { tokens: 0, contextWindow: 1_000_000 }), /limited to/);
 });
 
+test("note-dominated oversized prompts report measured components and preserve note non-evidence rules", () => {
+  const hindsightNotes = Array.from({ length: 100 }, (_, index) => ({ noteId: `note-${index.toString(16).padStart(32, "a")}`, eventReference: `event-${index.toString(16).padStart(32, "b")}`, eventLabel: "Reviewed event", text: "n".repeat(2000), provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: "2025-01-01T00:00:00.000Z" } }));
+  const measure = measureSynthesisPrompt(source(), { hindsightNotes }); assert.ok(measure.noteContextBytes > measure.evidenceBytes); assert.equal(measure.totalBytes, measure.evidenceBytes + measure.noteContextBytes + measure.instructionsAndOverheadBytes);
+  assert.match(buildSynthesisPrompt(source(), { hindsightNotes }), /never evidence\/citations/);
+  assert.throws(() => preflightSynthesisPrompt(source(), { hindsightNotes }, { tokens: 0, contextWindow: 1_000_000 }), /note context:.*instructions\/overhead:.*Review, redact, or remove hindsight notes/i);
+});
+
 test("only approved public commands remain and flow/map modules are deleted", () => {
   const index = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
   assert.equal((index.match(/registerCommand\(/g) || []).length, 3); assert.equal((index.match(/registerTool\(/g) || []).length, 1);
@@ -118,4 +125,21 @@ test("unsupported hindsight flags are rejected before a session is selected", as
   assert.deepEqual(hindsightArguments("reports/one.html"), { outputPath: "reports/one.html" });
   assert.deepEqual(hindsightArguments("session-ab12 reports/one.html"), { reference: "session-ab12", outputPath: "reports/one.html" });
   assert.throws(() => hindsightArguments("session-invalid!"), /identifier is invalid/);
+});
+
+test("canonical chunk plans are deterministic, UTF-8 bounded, ordered, and exclude notes/citations", async () => {
+  const { planCanonicalSynthesisChunks } = await import("../extensions/conversation-catalog/src/chunk-plan.mjs");
+  const sources = [{ reference: "session-one", events: [
+    { category: "user", timestamp: "2025-01-01", title: "One", summary: "é".repeat(20), metadata: [], evidence: { reference: "session-one:event-0001" } },
+    { category: "assistant", timestamp: "2025-01-02", title: "Two", summary: "second", metadata: [], evidence: { reference: "session-one:event-0002" } },
+  ] }];
+  const plan = planCanonicalSynthesisChunks(sources, { maxBytes: 400 });
+  assert.deepEqual(plan, planCanonicalSynthesisChunks(sources, { maxBytes: 400 }));
+  assert.deepEqual(plan.chunks.flatMap((chunk) => chunk.references), ["session-one:event-0001", "session-one:event-0002"]);
+  for (const chunk of plan.chunks) { assert.ok(chunk.bytes <= 400); assert.match(chunk.fingerprint, /^[a-f0-9]{64}$/); assert.doesNotMatch(JSON.stringify(chunk), /note|citation/i); }
+  assert.throws(() => planCanonicalSynthesisChunks([{ reference: "session-one", events: [{ summary: "x".repeat(1000), evidence: { reference: "session-one:event-oversized" } }] }], { maxBytes: 256 }), /Redact that event further/);
+});
+
+test("oversized single-prompt hindsight fails closed without fake multi-turn synthesis", () => {
+  assert.throws(() => preflightSynthesisPrompt(source("x".repeat(MAX_SYNTHESIS_PROMPT_BYTES)), {}, { tokens: 0, contextWindow: 1_000_000 }), /cannot create isolated model turns.*no partial or multi-prompt generation/i);
 });
