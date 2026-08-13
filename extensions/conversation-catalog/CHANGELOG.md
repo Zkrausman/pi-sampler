@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.4
+
+### Patch Changes
+
+- Make legacy-note attachment outcomes visible in the standalone viewer after the legacy-note panel closes.
+
 ## 0.5.3
 
 ### Patch Changes
