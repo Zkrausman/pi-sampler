@@ -42,9 +42,9 @@ test("artifact scan is bounded, safe, ordered, windowed, and ignores forbidden s
   await artifact(root, "other.json", JSON.stringify({ runId: "wrong", agent: "wrong", usage: { cost: { total: 9 } } }), now);
   await writeFile(join(root, ".pi", "subagents", "artifacts", "sibling.secret"), "must not be read");
   const records = await scanArtifactMetadata({ cwd: root, startedAt: now - 1_000, endedAt: now + 1_000 });
-  assert.deepEqual(records, [{ runId: "run-a", agent: "reviewer-1", cost: 1 }, { runId: "run-z", agent: "reviewer-2", cost: 2 }]);
-  await artifact(root, "real_meta.json", JSON.stringify({ runId: "run-real", agent: "pi-development", usage: { input: 11, output: 7, cacheRead: 5, cacheWrite: 3, turns: 2, cost: 0.1554568 } }), now);
-  assert.deepEqual(await scanArtifactMetadata({ cwd: root, startedAt: now - 1_000, endedAt: now + 1_000 }), [{ runId: "run-a", agent: "reviewer-1", cost: 1 }, { runId: "run-real", agent: "pi-development", cost: 0.1554568, tokens: { input: 11, output: 7, cacheRead: 5, cacheWrite: 3 }, turns: 2 }, { runId: "run-z", agent: "reviewer-2", cost: 2 }]);
+  assert.deepEqual(records, [{ runId: "run-a", agent: "reviewer-1", cost: 1 }, { runId: "run-z", agent: "reviewer-2", cost: 2, model: "forbidden" }]);
+  await artifact(root, "real_meta.json", JSON.stringify({ runId: "run-real", agent: "pi-development", model: "openai-codex/gpt-5.6-terra", usage: { input: 11, output: 7, cacheRead: 5, cacheWrite: 3, turns: 2, cost: 0.1554568 } }), now);
+  assert.deepEqual(await scanArtifactMetadata({ cwd: root, startedAt: now - 1_000, endedAt: now + 1_000 }), [{ runId: "run-a", agent: "reviewer-1", cost: 1 }, { runId: "run-real", agent: "pi-development", model: "openai-codex/gpt-5.6-terra", cost: 0.1554568, tokens: { input: 11, output: 7, cacheRead: 5, cacheWrite: 3 }, turns: 2 }, { runId: "run-z", agent: "reviewer-2", cost: 2, model: "forbidden" }]);
 });
 
 test("artifact scan stops bounded enumeration at the first name over cap and avoids symlink metadata", async (t) => {
@@ -83,8 +83,8 @@ test("lifecycle uses in-memory baseline, close failure after reset, and local re
 
 test("receipt writes are collision-safe, contained, atomic-style files with deterministic driver order", async (t) => {
   const root = await tempProject(); t.after(() => rm(root, { recursive: true, force: true }));
-  const receipt = summarizeCosts({ ticket: "AIDEV-72", startedAt: 0, endedAt: 1_700_000_000_000, parentDelta: 1, records: [{ runId: "b", agent: "zeta", cost: 2, tokens: { input: 3 }, turns: 2 }, { runId: "a", agent: "alpha", cost: 2, tokens: { input: 1, output: 4 }, turns: 1 }, { runId: "c", agent: "reviewer-1", cost: 1 }] });
-  assert.equal(receipt.version, 2); assert.deepEqual(receipt.subagentTokens, { input: 4, output: 4 }); assert.equal(receipt.subagentTurns, 3);
+  const receipt = summarizeCosts({ ticket: "AIDEV-72", startedAt: 0, endedAt: 1_700_000_000_000, parentDelta: 1, records: [{ runId: "b", agent: "zeta", model: "provider/zeta", cost: 2, tokens: { input: 3 }, turns: 2 }, { runId: "a", agent: "alpha", model: "provider/alpha", cost: 2, tokens: { input: 1, output: 4 }, turns: 1 }, { runId: "c", agent: "reviewer-1", model: "provider/alpha", cost: 1 }] });
+  assert.equal(receipt.version, 2); assert.equal(receipt.subagentRuns, 3); assert.deepEqual(receipt.subagentTokens, { input: 4, output: 4 }); assert.equal(receipt.subagentTurns, 3); assert.deepEqual(receipt.models.map(({ model, cost, runs }) => ({ model, cost, runs })), [{ model: "provider/alpha", cost: 3, runs: 2 }, { model: "provider/zeta", cost: 2, runs: 1 }]);
   assert.deepEqual(majorCostDrivers(2, [{ agent: "zeta", cost: 2 }, { agent: "alpha", cost: 2 }]), ["1. agent:alpha: $2.000000", "2. agent:zeta: $2.000000", "3. parent: $2.000000"]);
   assert.equal(majorCostDriverSentence(2, [{ agent: "zeta", cost: 2 }, { agent: "alpha", cost: 2 }]), "Major cost driver: agent:alpha at $2.000000.");
   assert.equal(receipt.reviewRounds, 1); const first = await writeReceipt({ cwd: root, receipt }); const second = await writeReceipt({ cwd: root, receipt }); assert.notEqual(first.jsonPath, second.jsonPath);
@@ -165,6 +165,7 @@ test("unsafe numeric observations and aggregate overflow fail closed", async (t)
   await artifact(conflicting, "conflicting_meta.json", JSON.stringify({ runId: "run", agent: "agent", usage: { input: 2, inputTokens: 3, cost: 1 } }), now);
   await assert.rejects(scanArtifactMetadata({ cwd: conflicting, startedAt: now - 1, endedAt: now + 1 }), /Unsafe or out-of-range/);
   assert.throws(() => summarizeCosts({ ticket: "AIDEV-72", startedAt: 0, endedAt: 1, parentDelta: Number.MAX_SAFE_INTEGER, records: [{ runId: "a", agent: "agent", cost: 1 }] }), /Unsafe or out-of-range/);
+  assert.throws(() => summarizeCosts({ ticket: "AIDEV-72", startedAt: 0, endedAt: 1, parentDelta: 0, records: [{ runId: "a", agent: "agent", cost: 1 }, { runId: "a", agent: "agent", cost: 1 }] }), /Unsafe or out-of-range/);
   const lifecycle = new TicketCostLifecycle(); lifecycle.begin("AIDEV-72");
   lifecycle.observeMessage({ message: { role: "assistant", usage: { cost: { total: Infinity } } } });
   await assert.rejects(lifecycle.close("AIDEV-72", root), /Unsafe or out-of-range/);

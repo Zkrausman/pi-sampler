@@ -10,6 +10,7 @@ export const MAX_ARTIFACT_FILES = 100;
 export const MAX_ARTIFACT_BYTES = 65_536;
 const SAFE_METADATA_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}_meta\.json$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export const TICKET_COST_LIFECYCLE_EVENT = "ticket-cost:v1:lifecycle";
 export const TICKET_COST_LIFECYCLE_RESULT_EVENT = "ticket-cost:v1:lifecycle-result";
@@ -78,7 +79,8 @@ function safeMetadata(value) {
     if (tokenCount !== undefined) tokens[key] = tokenCount;
   }
   const turns = metadataUsageNumber(value.usage, ["turns"]);
-  return { runId: value.runId, agent: value.agent, cost, ...(Object.keys(tokens).length ? { tokens } : {}), ...(turns === undefined ? {} : { turns }) };
+  const model = typeof value.model === "string" && SAFE_MODEL.test(value.model) ? value.model : undefined;
+  return { runId: value.runId, agent: value.agent, cost, ...(Object.keys(tokens).length ? { tokens } : {}), ...(turns === undefined ? {} : { turns }), ...(model === undefined ? {} : { model }) };
 }
 
 function hasUnsafeAssistantUsage(event) {
@@ -187,24 +189,31 @@ export async function scanArtifactMetadata({ cwd, startedAt, endedAt, fs = nodeF
   return records.sort((left, right) => stableCompare(left.runId, right.runId) || stableCompare(left.agent, right.agent));
 }
 
+function addAggregate(aggregates, key, record) {
+  const aggregate = aggregates.get(key) ?? { cost: 0, tokens: {}, turns: 0, runs: 0 };
+  aggregate.cost = checkedAdd(aggregate.cost, record.cost);
+  for (const [token, value] of Object.entries(record.tokens ?? {})) aggregate.tokens[token] = checkedAdd(aggregate.tokens[token] ?? 0, value);
+  aggregate.turns = checkedAdd(aggregate.turns, record.turns ?? 0);
+  aggregate.runs = checkedAdd(aggregate.runs, 1);
+  aggregates.set(key, aggregate);
+}
+function aggregateEntries(aggregates, label) {
+  return [...aggregates.entries()].map(([name, aggregate]) => ({ [label]: name, cost: aggregate.cost, runs: aggregate.runs, ...(Object.keys(aggregate.tokens).length ? { tokens: aggregate.tokens } : {}), ...(aggregate.turns ? { turns: aggregate.turns } : {}) })).sort((left, right) => stableCompare(left[label], right[label]));
+}
 export function summarizeCosts({ ticket, startedAt, endedAt, parentDelta, parentTokens, records }) {
   if (!isNonnegativeFinite(parentDelta) || !Array.isArray(records)) throw new UnsafeTicketCostObservationError();
-  const aggregates = new Map();
+  const agentAggregates = new Map(); const modelAggregates = new Map(); const runIds = new Set();
   for (const record of records) {
-    if (!record || !SAFE_ID.test(record.agent) || !isNonnegativeFinite(record.cost) || (record.tokens !== undefined && (!isObject(record.tokens) || Object.values(record.tokens).some((value) => !isNonnegativeFinite(value)))) || (record.turns !== undefined && !isNonnegativeFinite(record.turns))) throw new UnsafeTicketCostObservationError();
-    const aggregate = aggregates.get(record.agent) ?? { cost: 0, tokens: {}, turns: 0 };
-    aggregate.cost = checkedAdd(aggregate.cost, record.cost);
-    for (const [key, value] of Object.entries(record.tokens ?? {})) aggregate.tokens[key] = checkedAdd(aggregate.tokens[key] ?? 0, value);
-    aggregate.turns = checkedAdd(aggregate.turns, record.turns ?? 0);
-    aggregates.set(record.agent, aggregate);
+    if (!record || !SAFE_ID.test(record.runId) || !SAFE_ID.test(record.agent) || !isNonnegativeFinite(record.cost) || (record.tokens !== undefined && (!isObject(record.tokens) || Object.values(record.tokens).some((value) => !isNonnegativeFinite(value)))) || (record.turns !== undefined && !isNonnegativeFinite(record.turns)) || (record.model !== undefined && (typeof record.model !== "string" || !SAFE_MODEL.test(record.model))) || runIds.has(record.runId)) throw new UnsafeTicketCostObservationError();
+    runIds.add(record.runId); addAggregate(agentAggregates, record.agent, record); if (record.model !== undefined) addAggregate(modelAggregates, record.model, record);
   }
-  const agents = [...aggregates.entries()].map(([agent, aggregate]) => ({ agent, cost: aggregate.cost, ...(Object.keys(aggregate.tokens).length ? { tokens: aggregate.tokens } : {}), ...(aggregate.turns ? { turns: aggregate.turns } : {}) })).sort((left, right) => stableCompare(left.agent, right.agent));
+  const agents = aggregateEntries(agentAggregates, "agent"); const models = aggregateEntries(modelAggregates, "model");
   const subagentTotal = agents.reduce((total, entry) => checkedAdd(total, entry.cost), 0);
   const total = checkedAdd(parentDelta, subagentTotal);
   if (parentTokens && Object.values(parentTokens).some((value) => !isNonnegativeFinite(value))) throw new UnsafeTicketCostObservationError();
   const subagentTokens = {}; let subagentTurns = 0;
   for (const agent of agents) { for (const [key, value] of Object.entries(agent.tokens ?? {})) subagentTokens[key] = checkedAdd(subagentTokens[key] ?? 0, value); subagentTurns = checkedAdd(subagentTurns, agent.turns ?? 0); }
-  const receipt = { version: 2, ticket, startedAt: new Date(startedAt).toISOString(), endedAt: new Date(endedAt).toISOString(), parentDelta, subagentTotal, total, agents, majorCostDriver: majorCostDriverSentence(parentDelta, agents), majorCostDrivers: majorCostDrivers(parentDelta, agents) };
+  const receipt = { version: 2, ticket, startedAt: new Date(startedAt).toISOString(), endedAt: new Date(endedAt).toISOString(), parentDelta, subagentTotal, total, subagentRuns: runIds.size, agents, models, majorCostDriver: majorCostDriverSentence(parentDelta, agents), majorCostDrivers: majorCostDrivers(parentDelta, agents) };
   if (parentTokens && Object.keys(parentTokens).length) receipt.parentTokens = parentTokens;
   if (Object.keys(subagentTokens).length) receipt.subagentTokens = subagentTokens;
   if (subagentTurns) receipt.subagentTurns = subagentTurns;
@@ -218,9 +227,13 @@ export function receiptMarkdown(receipt) {
   if (receipt.parentTokens && Object.keys(receipt.parentTokens).length) lines.push(`- Parent tokens: ${Object.entries(receipt.parentTokens).map(([kind, count]) => `${kind}=${count}`).join(", ")}`);
   if (receipt.subagentTokens && Object.keys(receipt.subagentTokens).length) lines.push(`- Subagent tokens: ${Object.entries(receipt.subagentTokens).map(([kind, count]) => `${kind}=${count}`).join(", ")}`);
   if (receipt.subagentTurns !== undefined) lines.push(`- Subagent turns: ${receipt.subagentTurns}`);
+  if (receipt.subagentRuns !== undefined) lines.push(`- Subagent runs: ${receipt.subagentRuns}`);
   if (receipt.reviewRounds !== undefined) lines.push(`- Review rounds: ${receipt.reviewRounds}`);
+  const aggregateLine = ({ name, cost, runs, tokens, turns }) => `- ${name}: $${cost.toFixed(6)} (runs=${runs})${tokens && Object.keys(tokens).length ? ` (${Object.entries(tokens).map(([kind, count]) => `${kind}=${count}`).join(", ")})` : ""}${turns !== undefined ? ` (turns=${turns})` : ""}`;
   lines.push("", "## Agent aggregate", "");
-  if (receipt.agents.length) lines.push(...receipt.agents.map(({ agent, cost, tokens, turns }) => `- ${agent}: $${cost.toFixed(6)}${tokens && Object.keys(tokens).length ? ` (${Object.entries(tokens).map(([kind, count]) => `${kind}=${count}`).join(", ")})` : ""}${turns !== undefined ? ` (turns=${turns})` : ""}`)); else lines.push("- No eligible subagent metadata in the window.");
+  if (receipt.agents.length) lines.push(...receipt.agents.map(({ agent, ...entry }) => aggregateLine({ name: agent, ...entry }))); else lines.push("- No eligible subagent metadata in the window.");
+  lines.push("", "## Model aggregate", "");
+  if (receipt.models.length) lines.push(...receipt.models.map(({ model, ...entry }) => aggregateLine({ name: model, ...entry }))); else lines.push("- No eligible model metadata in the window.");
   lines.push("", "## Major cost drivers", "", ...receipt.majorCostDrivers.map((driver) => `- ${driver}`), "", "## Linear closeout (paste locally)", "", "```text", `Ticket: ${receipt.ticket}`, `Cost window: ${receipt.startedAt} to ${receipt.endedAt}`, `Parent delta: $${receipt.parentDelta.toFixed(6)}`, `Subagent total: $${receipt.subagentTotal.toFixed(6)}`, `Total: $${receipt.total.toFixed(6)}`, receipt.majorCostDriver, "```");
   return `${lines.join("\n")}\n`;
 }
@@ -236,8 +249,11 @@ async function writeExclusive(fs, root, outputDirectory, path, content) {
   } finally { await handle.close(); }
 }
 
+function safeAggregateEntry(entry, key, pattern) {
+  return isObject(entry) && typeof entry[key] === "string" && pattern.test(entry[key]) && isNonnegativeFinite(entry.cost) && isNonnegativeFinite(entry.runs) && (entry.tokens === undefined || isObject(entry.tokens) && Object.values(entry.tokens).every(isNonnegativeFinite)) && (entry.turns === undefined || isNonnegativeFinite(entry.turns));
+}
 function assertReceiptSafe(receipt) {
-  if (!isObject(receipt) || !TICKET_KEY_PATTERN.test(receipt.ticket) || !isNonnegativeFinite(receipt.parentDelta) || !isNonnegativeFinite(receipt.subagentTotal) || !isNonnegativeFinite(receipt.total) || !Array.isArray(receipt.agents) || receipt.agents.some(({ agent, cost, tokens, turns }) => !SAFE_ID.test(agent) || !isNonnegativeFinite(cost) || (tokens !== undefined && (!isObject(tokens) || Object.values(tokens).some((value) => !isNonnegativeFinite(value)))) || (turns !== undefined && !isNonnegativeFinite(turns))) || (receipt.parentTokens && (!isObject(receipt.parentTokens) || Object.values(receipt.parentTokens).some((value) => !isNonnegativeFinite(value)))) || (receipt.subagentTokens && (!isObject(receipt.subagentTokens) || Object.values(receipt.subagentTokens).some((value) => !isNonnegativeFinite(value)))) || (receipt.subagentTurns !== undefined && !isNonnegativeFinite(receipt.subagentTurns))) throw new UnsafeTicketCostObservationError();
+  if (!isObject(receipt) || !TICKET_KEY_PATTERN.test(receipt.ticket) || !isNonnegativeFinite(receipt.parentDelta) || !isNonnegativeFinite(receipt.subagentTotal) || !isNonnegativeFinite(receipt.total) || !isNonnegativeFinite(receipt.subagentRuns) || !Array.isArray(receipt.agents) || receipt.agents.some((entry) => !safeAggregateEntry(entry, "agent", SAFE_ID)) || !Array.isArray(receipt.models) || receipt.models.some((entry) => !safeAggregateEntry(entry, "model", SAFE_MODEL)) || (receipt.parentTokens && (!isObject(receipt.parentTokens) || Object.values(receipt.parentTokens).some((value) => !isNonnegativeFinite(value)))) || (receipt.subagentTokens && (!isObject(receipt.subagentTokens) || Object.values(receipt.subagentTokens).some((value) => !isNonnegativeFinite(value)))) || (receipt.subagentTurns !== undefined && !isNonnegativeFinite(receipt.subagentTurns))) throw new UnsafeTicketCostObservationError();
 }
 async function removeStagingReceipt(fs, directory) {
   await Promise.all([unlinkIfPresent(fs, join(directory, "receipt.json")), unlinkIfPresent(fs, join(directory, "receipt.md"))]);
