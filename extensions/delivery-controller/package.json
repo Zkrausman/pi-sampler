@@ -17,8 +17,12 @@
     "registry": "https://npm.pkg.github.com",
     "access": "restricted"
   },
+  "dependencies": {
+    "@zkrausman/pi-ticket-lifecycle": "^0.1.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@zkrausman/pi-ticket-cost": ">=0.2.1 <1",
     "typebox": "*"
   },
   "pi": {

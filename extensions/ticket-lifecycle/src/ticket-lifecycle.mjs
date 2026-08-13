@@ -83,6 +83,7 @@ export function replayTransitions(rawEvents) {
       current.segments.set(event.segment.id, event.segment);
     } else {
       const next = targetState(event); if (!NEXT.get(current.state)?.has(next)) fail("invalid_transition");
+      if ((event.action === "awaiting-merge" || event.action === "merged") && [...current.segments.values()].some((segment) => segment.coverage === "pending")) fail("segments_not_settled");
       if (event.action === "pickup") current.pickedUpAt = event.at;
       if (event.action === "merged") current.evidence.merged = event.evidence;
       if (event.action === "closed") {

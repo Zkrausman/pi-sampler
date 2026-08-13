@@ -1,25 +1,26 @@
 # Delivery controller
 
-A provider-neutral Pi extension for dispatching **one explicitly supplied work
-item**. It is deliberately narrow: it does not discover or select work, merge
-branches, change tracker status, or grant approval.
+A provider-neutral Pi extension for dispatching **one host-picked immutable
+work item**. It does not discover work, merge branches, change tracker status,
+or grant approval.
 
 ## What it does
 
 The extension registers `delivery_controller_dispatch` in trusted projects.
-The caller supplies:
+A human/host first picks up a pre-manifested work item through the host-only
+lifecycle command and passes its opaque handle to dispatch. The caller supplies:
 
-- a work item ID, source identifier, branch, base ref, instructions, and
-  verification contract;
+- that lifecycle handle;
 - a repository-relative ledger path;
 - an approval environment-variable reference (for example,
   `$PROJECT_DELIVERY_APPROVAL`);
 - a provider authentication environment-variable reference; and
-- idempotency and correlation identifiers.
+- stable idempotency and correlation identifiers.
 
-The controller validates the inputs, records the attempted dispatch in its
-ledger, and delegates to the configured provider adapter. In non-interactive
-Pi modes, the approval variable must resolve to `approved`.
+The controller binds one exact dispatch identity to the handle, resolves its
+immutable manifest, records the attempted dispatch in its ledger, and delegates
+to the configured provider adapter. In non-interactive Pi modes, the approval
+variable must resolve to `approved`.
 
 A project profile should own the work-item pattern, repository source,
 verification commands, required checks, and delivery paths. Start from
@@ -37,19 +38,19 @@ passed with each `delivery_controller_dispatch` request:
 | `config.ledgerPath` | A non-empty, repository-relative path that does not escape the checkout. |
 | `config.approvalEnvRef` | An environment-variable reference such as `$PROJECT_DELIVERY_APPROVAL`. In non-interactive mode, its value must be `approved`. |
 | `providerAuthEnvRef` | An environment-variable reference for the provider credential; never a secret value. |
-| `item` | The explicit work item, including `id`, `sources/...` identifier, branch, base ref, verification contract, and instructions. |
-| `idempotencyKey` / `correlationId` | Caller-supplied stable identifiers for deduplication and audit correlation. |
+| `lifecycleHandle` | The opaque handle returned by `/ticket-lifecycle-pickup`; it resolves the immutable pre-manifested work item. |
+| `idempotencyKey` / `correlationId` | One exact pair is bound to the handle before provider invocation; only that exact retry is allowed. |
 
 A project profile documents the consumer-owned work-item pattern, source,
-verification commands, required checks, and paths. The profile helper validates
-those values for review workflows; the dispatch tool currently requires the
-corresponding item values explicitly and does not auto-load a profile.
+verification commands, required checks, and paths. The host validates and
+persists the corresponding manifest before lifecycle pickup; dispatch never
+accepts a replacement work item.
 
 ## Example: dispatch an approved implementation task
 
-Use this after a human has selected and approved a bounded task—for example,
-adding a health endpoint to a service. The agent supplies the task rather than
-asking the extension to discover work:
+Use this after a human/host has written and picked up the approved local
+manifest, for example with `/ticket-lifecycle-pickup ENG-42`. Dispatch the
+returned opaque handle:
 
 ```json
 {
@@ -57,27 +58,17 @@ asking the extension to discover work:
     "ledgerPath": ".delivery/jobs.ndjson",
     "approvalEnvRef": "$PROJECT_DELIVERY_APPROVAL"
   },
-  "item": {
-    "id": "ENG-42",
-    "source": "sources/github/acme/example-service",
-    "branch": "feature/eng-42-health-endpoint",
-    "baseRef": "origin/main",
-    "verificationContract": "Run npm test and npm run lint.",
-    "instructions": [
-      "Add GET /health with a documented JSON response.",
-      "Do not change deployment configuration."
-    ],
-    "title": "Add health endpoint"
-  },
+  "lifecycleHandle": "hdl-0123456789abcdef01234567",
   "providerAuthEnvRef": "$DELIVERY_PROVIDER_TOKEN",
   "idempotencyKey": "eng-42-dispatch-v1",
   "correlationId": "delivery-eng-42"
 }
 ```
 
-The controller records the request and dispatches it through the provider
-adapter. It does **not** approve the work, choose a different task, merge the
-branch, or alter an issue tracker. In CI or other non-interactive modes, set
+The controller binds that exact dispatch identity, resolves the manifest owned
+by the handle, and dispatches it through the provider adapter. It does **not**
+approve work, choose a different task, merge a branch, or alter an issue
+tracker. In CI or other non-interactive modes, set
 `PROJECT_DELIVERY_APPROVAL=approved` only in the authorized execution
 environment.
 
@@ -111,8 +102,10 @@ environment.
 ## Required inputs and restrictions
 
 - Pi must trust the current project.
-- `item.source` must be an explicit `sources/...` identifier. The extension has
-  no default repository.
+- The picked-up manifest's work-item `source` must be an explicit `sources/...`
+  identifier. The extension has no default repository.
+- `lifecycleHandle` must be a picked-up local authority handle; raw work-item
+  dispatch is rejected.
 - `ledgerPath` is repository-relative and cannot escape the project.
 - Approval and provider credentials are environment-variable **references**;
   never pass secret values in tool arguments.
@@ -120,10 +113,26 @@ environment.
   set the referenced approval variable to `approved` only in an authorized
   execution environment.
 
+## Ticket lifecycle reference adapter
+
+The controller also provides a **human/host-only** reference adapter for the local `@zkrausman/pi-ticket-lifecycle` ledger. It does not add a model-callable lifecycle tool; `delivery_controller_dispatch` is limited to the immutable work item bound to its lifecycle handle.
+
+Before pickup, the host writes the bounded local work-item manifest `.pi/delivery-controller/work-items/<TICKET>.json`:
+
+```json
+{"version":1,"ticket":"AIDEV-77","workItem":{"approved":true}}
+```
+
+In a trusted interactive Pi session, the host/operator uses `/ticket-lifecycle-pickup <TICKET>` and receives an opaque handle. It then uses `/ticket-lifecycle-start <HANDLE>`, `/ticket-lifecycle-settle <HANDLE>`, and `/ticket-lifecycle-awaiting-merge <HANDLE>`. Before `/ticket-lifecycle-merged <HANDLE>` and `/ticket-lifecycle-closed <HANDLE>`, it must write separate local attestations at `.pi/delivery-controller/attestations/<TICKET>-merged.json` and `...-closed.json`, each with `version`, `ticket`, `kind`, `ref`, and `evidence`. The adapter recomputes an evidence digest; it does not poll or mutate a tracker and does not call dispatch/provider completion proof merge/close.
+
+`delivery_controller_dispatch` requires the opaque picked-up lifecycle handle and resolves the immutable approved `workItem` from that authority record; it does not accept a raw parallel work item. `pi-ticket-cost` (`>=0.2.1 <1`) is a peer and must be loaded in the **same Pi process**. The adapter emits only exact v1 lifecycle signals and waits for a matching result. A deadline is an explicit unsettled timeout, not a `missing-receiver` claim: it blocks merge/finalization until the next startup/reload reconciles it as `interrupted`. A correlated receiver error becomes `settle-failed`; `missing-receiver` is reserved for a future architecture that can prove receiver absence. Startup/reload first replays any durable authority intent and interrupts every pending segment before work is accepted; shutdown makes the same best-effort attempt and visibly reports failure. Reload/restart packages after installing or upgrading them. Final ticket receipts remain partial when a coverage gap exists.
+
+The merge/close attestation must include `source: "local-operator-attestation"`. It is a locally asserted provenance label, **not** remote tracker, merge, or closure proof. The adapter never polls or mutates a tracker.
+
 ## Verify
 
 From the repository root:
 
 ```powershell
-node --test tests/delivery-controller-generic.test.mjs
+node --test tests/delivery-controller-generic.test.mjs tests/delivery-controller-lifecycle.test.mjs
 ```

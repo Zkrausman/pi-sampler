@@ -366,9 +366,11 @@ export default function ticketCost(pi) {
       publishLifecycleResult(signal, { ok: false, error: message });
     }
   };
-  const unsubscribe = pi.events?.on?.(TICKET_COST_LIFECYCLE_EVENT, (signal) => { void applyLifecycleSignal(signal); });
-  pi.on("session_start", (_event, ctx) => { sessionContext = trusted(ctx) ? ctx : undefined; lifecycle.reset(); });
-  pi.on("session_shutdown", () => { sessionContext = undefined; lifecycle.reset(); if (typeof unsubscribe === "function") unsubscribe(); });
+  let unsubscribe;
+  const subscribe = () => { if (!unsubscribe) unsubscribe = pi.events?.on?.(TICKET_COST_LIFECYCLE_EVENT, (signal) => { void applyLifecycleSignal(signal); }); };
+  pi.on("session_start", (_event, ctx) => { sessionContext = trusted(ctx) ? ctx : undefined; lifecycle.reset(); subscribe(); });
+  pi.on("session_shutdown", () => { sessionContext = undefined; lifecycle.reset(); if (typeof unsubscribe === "function") unsubscribe(); unsubscribe = undefined; });
+  subscribe();
   pi.on("message_end", (event, ctx) => { if (trusted(ctx)) lifecycle.observeMessage(event); });
   pi.registerCommand("ticket-cost", { description: "Begin or close a local, session-scoped ticket cost window", async handler(args, ctx) {
     if (!trusted(ctx)) { ctx?.ui?.notify?.("Ticket cost requires a trusted project; no data was read or written.", "error"); return; }

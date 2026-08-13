@@ -1,6 +1,6 @@
 {
   "name": "@zkrausman/pi-ticket-lifecycle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local, tracker-neutral durable ticket lifecycle and aggregate cost receipts.",
   "license": "UNLICENSED",
   "private": false,
