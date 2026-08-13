@@ -46,7 +46,18 @@ function argumentSummary(argumentsValue) {
   }
 }
 
-function contentSummary(content, fallback) {
+function localValueSummary(value, fallback) {
+  if (typeof value === "string") return bounded(value, fallback);
+  if (typeof value === "number" || typeof value === "boolean") return bounded(String(value), fallback);
+  if (!isObject(value) && !Array.isArray(value)) return fallback;
+  try {
+    return bounded(JSON.stringify(value), fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+function contentSummary(content, fallback, { includeThinking = false } = {}) {
   if (typeof content === "string") return bounded(content, fallback);
   if (!Array.isArray(content)) return fallback;
 
@@ -57,7 +68,7 @@ function contentSummary(content, fallback) {
     } else if (block.type === "text") {
       parts.push(text(block.text));
     } else if (block.type === "thinking") {
-      parts.push("[Thinking omitted]");
+      parts.push(includeThinking ? text(block.thinking) : "[Thinking omitted]");
     } else if (block.type !== "toolCall") {
       parts.push(`[${bounded(block.type, "Unsupported", 80)} content omitted]`);
     }
@@ -83,6 +94,9 @@ function eventFor(entry, sourceIndex, category, title, summary, message, extras)
   const entryId = text(entry.id);
   return {
     id: `event-${sourceIndex}-${safeToken(entryId)}`,
+    // This source tuple stays internal; callers derive the browser-safe opaque
+    // note reference from it with a domain-separated hash.
+    noteIdentity: `entry:${sourceIndex}:${entryId || "missing"}:${category}`,
     entryId,
     parentId: text(entry.parentId),
     sourceIndex,
@@ -100,7 +114,7 @@ function eventFor(entry, sourceIndex, category, title, summary, message, extras)
  * All persisted branches are shown. The "next assistant" connection is a labeled,
  * chronological inference rather than a claim about tree-branch causality.
  */
-export function projectConversation(entries) {
+export function projectConversation(entries, { includeThinking = false, includeLocalEntries = false } = {}) {
   const ordered = (Array.isArray(entries) ? entries : [])
     .map((entry, sourceIndex) => ({ entry: isObject(entry) ? entry : {}, sourceIndex }))
     .sort((left, right) => timeValue(left.entry.timestamp) - timeValue(right.entry.timestamp) || left.sourceIndex - right.sourceIndex);
@@ -115,15 +129,31 @@ export function projectConversation(entries) {
     const message = isObject(entry.message) ? entry.message : undefined;
     let primary;
     if (entry.type !== "message" || !message) {
-      const customType = text(entry.customType) || text(message?.customType);
-      const category = isSkill(customType) ? "skill" : "unsupported";
-      primary = eventFor(entry, sourceIndex, category, category === "skill" ? "Skill activity" : "Unsupported entry", contentSummary(entry.content, "This entry cannot be rendered as a Pi message."), message, customType ? [{ label: "Custom type", value: bounded(customType) }] : []);
+      const customType = text(entry.customType);
+      const extras = customType ? [{ label: "Custom type", value: bounded(customType) }] : [];
+      if (entry.type === "custom_message") {
+        const category = isSkill(customType) ? "skill" : "extension-message";
+        primary = eventFor(entry, sourceIndex, category, category === "skill" ? "Skill activity" : "Extension message", contentSummary(entry.content, "Extension message has no readable text.", { includeThinking }), message, extras.concat([{ label: "Display", value: entry.display === false ? "Hidden in Pi" : "Visible in Pi" }]));
+      } else if (entry.type === "thinking_level_change") {
+        primary = eventFor(entry, sourceIndex, "thinking-level", "Thinking level changed", bounded(entry.thinkingLevel, "Unknown thinking level"), message);
+      } else if (entry.type === "model_change") {
+        const model = [text(entry.provider), text(entry.modelId)].filter(Boolean).join("/");
+        primary = eventFor(entry, sourceIndex, "model-change", "Model changed", bounded(model, "Unknown model"), message);
+      } else if (entry.type === "session_info") {
+        primary = eventFor(entry, sourceIndex, "session-info", "Session named", bounded(entry.name, "Session information updated"), message);
+      } else if (entry.type === "compaction") {
+        primary = eventFor(entry, sourceIndex, "compaction", "Context compacted", bounded(entry.summary, "Context compacted without a readable summary"), message, Number.isFinite(entry.tokensBefore) ? [{ label: "Tokens before", value: String(entry.tokensBefore) }] : []);
+      } else if (entry.type === "custom") {
+        primary = eventFor(entry, sourceIndex, "extension-state", "Extension state", includeLocalEntries ? localValueSummary(entry.data, "No extension state recorded.") : "Extension state recorded locally.", message, extras);
+      } else {
+        primary = eventFor(entry, sourceIndex, "unsupported", "Unrecognized Pi entry", includeLocalEntries ? localValueSummary(entry.content ?? entry.data ?? entry, "This local Pi entry type has no renderer yet.") : "This Pi entry type has no renderer yet.", message, extras.concat(text(entry.type) ? [{ label: "Entry type", value: bounded(entry.type) }] : []));
+      }
       events.push(primary);
     } else if (message.role === "user") {
       primary = eventFor(entry, sourceIndex, "user", "User", contentSummary(message.content, "User message has no readable text."), message);
       events.push(primary);
     } else if (message.role === "assistant") {
-      primary = eventFor(entry, sourceIndex, "assistant", "Assistant", contentSummary(message.content, "Assistant message has no readable text."), message);
+      primary = eventFor(entry, sourceIndex, "assistant", "Assistant", contentSummary(message.content, "Assistant message has no readable text.", { includeThinking }), message);
       events.push(primary);
       const blocks = Array.isArray(message.content) ? message.content : [];
       let toolIndex = 0;
@@ -137,7 +167,7 @@ export function projectConversation(entries) {
           ...(callId ? [{ label: "Call ID", value: bounded(callId) }] : []),
           { label: "Arguments", value: argumentSummary(block.arguments) },
         ]);
-        tool.id = `${primary.id}-call-${toolIndex++}`;
+        tool.id = `${primary.id}-call-${toolIndex}`; tool.noteIdentity = `${primary.noteIdentity}:tool-call:${toolIndex++}`;
         tool.callId = callId;
         // Keep exact `subagent` calls private until an exact same-ID result
         // proves this is a complete delegation pair. Similar tool names and
@@ -155,6 +185,7 @@ export function projectConversation(entries) {
         ...(callId ? [{ label: "Call ID", value: bounded(callId) }] : []),
         ...(message.isError === true ? [{ label: "Status", value: "Error" }] : []),
       ]);
+      primary.noteIdentity = `${primary.noteIdentity}:tool-result:${callId || "missing"}`;
       primary.callId = callId;
       primary.isResult = true;
       // Delegation evidence requires both exact `subagent` names and one

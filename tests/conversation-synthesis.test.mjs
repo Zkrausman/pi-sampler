@@ -87,15 +87,15 @@ test("omitted model output and excluded redaction fallback remain safe", () => {
 });
 
 test("synthesis prompt requires matching Fix/Harden proposals and retains preflight safeguards", () => {
-  const prompt = buildSynthesisPrompt(source()); assert.match(prompt, /actionType \("fix" or "harden"\)/); assert.match(prompt, /Harden proposal/); assert.match(prompt, /Fix proposal/); assert.doesNotMatch(prompt, /narrativeMap|prior outcomes|notes/i);
+  const prompt = buildSynthesisPrompt(source()); assert.match(prompt, /actionType \("fix" or "harden"\)/); assert.match(prompt, /Harden proposal/); assert.match(prompt, /Fix proposal/); assert.doesNotMatch(prompt, /narrativeMap|prior outcomes/i); assert.match(prompt, /No user-authored hindsight notes were included after review/);
   assert.throws(() => buildHindsightDocument([]), /exactly one/); assert.throws(() => buildHindsightDocument([...source(), ...source()]), /exactly one/);
   assert.throws(() => preflightSynthesisPrompt(source("🧠".repeat(MAX_SYNTHESIS_PROMPT_BYTES)), {}, { tokens: 0, contextWindow: 1_000_000 }), /limited to/);
 });
 
-test("only two public commands remain and flow/map modules are deleted", () => {
+test("only approved public commands remain and flow/map modules are deleted", () => {
   const index = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
-  assert.equal((index.match(/registerCommand\(/g) || []).length, 2); assert.equal((index.match(/registerTool\(/g) || []).length, 1);
-  for (const command of ["conversation-catalog", "hindsight-document"]) assert.ok(index.includes(`registerCommand("${command}"`));
+  assert.equal((index.match(/registerCommand\(/g) || []).length, 3); assert.equal((index.match(/registerTool\(/g) || []).length, 1);
+  for (const command of ["conversation-catalog", "hindsight-document", "hindsight-notes"]) assert.ok(index.includes(`registerCommand("${command}"`));
   for (const removed of ["conversation-flow", "conversation-map", "flow.mjs", "map.mjs", "createRedactionMetadata", "generateExcludedConversationHtml", "writeRelationshipMapExport"]) assert.doesNotMatch(index, new RegExp(removed, "i"));
   assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/flow.mjs")), false); assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/map.mjs")), false);
 });
