@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.2
+
+### Patch Changes
+
+- 62a2c8e: Restore secure event-attached hindsight notes, including shared Pi and local viewer CRUD, explicit legacy-note attachment, and reviewed non-evidence provenance.
+
 ## 0.5.1
 
 ### Patch Changes
