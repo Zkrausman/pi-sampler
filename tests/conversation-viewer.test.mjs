@@ -52,7 +52,7 @@ async function rawRequest(url, path, headers) {
 test("viewer discovery accepts recognizable local sessions and malformed/stale input fails closed", async () => {
   const { sessions, reports, id } = await fixture();
   const found = await discoverSessions({ sessionDirectory: sessions });
-  assert.deepEqual(found.map(({ id: sessionId, messageCount }) => ({ id: sessionId, messageCount })), [{ id, messageCount: 3 }]);
+  assert.deepEqual(found.map(({ id: sessionId, messageCount, entries }) => ({ id: sessionId, messageCount, entries })), [{ id, messageCount: undefined, entries: undefined }]);
   assert.deepEqual((await discoverReports({ reportDirectory: reports })).map((report) => report.name), ["report.html"]);
   assert.deepEqual(await discoverSessions({ sessionDirectory: join(sessions, "missing") }), []);
 });
@@ -166,4 +166,15 @@ test("Windows launcher imports its package-local ESM module using a file URL", a
   const launcher = await readFile(new URL("../extensions/conversation-catalog/bin/pi-conversation-viewer.mjs", import.meta.url), "utf8");
   assert.match(launcher, /pathToFileURL/);
   assert.match(launcher, /import\(pathToFileURL\(join\(root, "src", "viewer\.mjs"\)\)\.href\)/);
+});
+
+
+test("viewer discovery reads only bounded metadata until a session is selected", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-metadata-")); const sessions = join(directory, "sessions"); await mkdir(sessions);
+  const id = "019fd4f3-b574-7953-a984-ffb49a519207"; const large = "x".repeat(250_000);
+  await writeFile(join(sessions, "large.jsonl"), `${JSON.stringify({ type: "session", id, timestamp: "2025-02-03T04:05:06.000Z", cwd: directory })}
+${JSON.stringify({ type: "message", message: { role: "user", content: large } })}
+`);
+  const found = await discoverSessions({ sessionDirectory: sessions });
+  assert.equal(found.length, 1); assert.equal(found[0].entries, undefined); assert.equal(found[0].messageCount, undefined); assert.match(found[0].file, /large\.jsonl$/);
 });

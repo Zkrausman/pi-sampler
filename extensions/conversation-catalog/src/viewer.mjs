@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open, readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, join, relative, resolve } from "node:path";
 import { projectConversation } from "./conversation.mjs";
@@ -12,6 +12,8 @@ export const VIEWER_IDLE_MS = 5 * 60 * 1000;
 export const VIEWER_MAX_LIFETIME_MS = 30 * 60 * 1000;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,}$/;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{8,128}$/i;
+export const VIEWER_SESSION_PAGE_SIZE = 50;
+const VIEWER_HEADER_BYTES = 64 * 1024;
 
 function asText(value) { return typeof value === "string" ? value.trim() : ""; }
 function safeDate(value) {
@@ -38,35 +40,32 @@ async function walkSessionFiles(directory, files = []) {
   return files;
 }
 
-async function readSession(file) {
-  let lines;
-  try { lines = (await readFile(file, "utf8")).split(/\r?\n/).filter(Boolean); } catch { return undefined; }
-  let header;
-  const entries = [];
-  for (const line of lines) {
-    try {
-      const value = JSON.parse(line);
-      if (value?.type === "session" && !header) header = value;
-      else if (value && typeof value === "object") entries.push(value);
-    } catch { return undefined; }
-  }
-  const id = asText(header?.id);
-  if (!header || !SESSION_ID_PATTERN.test(id)) return undefined;
-  return { id, projectRoot: asText(header.cwd), modified: safeDate(header.timestamp), timestamp: header.timestamp, messageCount: safeCount(entries), entries };
+async function readSessionMetadata(file) {
+  let handle;
+  try {
+    handle = await open(file, "r");
+    const buffer = Buffer.alloc(VIEWER_HEADER_BYTES);
+    const result = await handle.read(buffer, 0, buffer.length, 0);
+    const newline = buffer.subarray(0, result.bytesRead).indexOf(10);
+    if (newline < 0) return undefined;
+    const header = JSON.parse(buffer.subarray(0, newline).toString("utf8"));
+    const id = asText(header?.id);
+    if (header?.type !== "session" || !SESSION_ID_PATTERN.test(id)) return undefined;
+    return { id, projectRoot: asText(header.cwd), modified: safeDate(header.timestamp), timestamp: header.timestamp, file };
+  } catch { return undefined; } finally { await handle?.close(); }
 }
-
-/** Reads only regular JSONL files below Pi's default session directory. */
+async function hydrateSession(session) {
+  if (Array.isArray(session.entries)) return session;
+  let contents; try { contents = await readFile(session.file, "utf8"); } catch { return undefined; }
+  const entries = [];
+  for (const line of contents.split(String.fromCharCode(10)).slice(1)) { if (!line.trim()) continue; try { const value = JSON.parse(line); if (!value || typeof value !== "object") return undefined; entries.push(value); } catch { return undefined; } }
+  session.entries = entries; session.messageCount = safeCount(entries); return session;
+}
+/** Reads bounded header metadata only; transcript content is opened only after selection. */
 export async function discoverSessions({ sessionDirectory = defaultPiSessionDirectory() } = {}) {
-  const root = resolve(sessionDirectory);
-  const files = await walkSessionFiles(root);
-  const sessions = [];
-  for (const file of files) {
-    // Defense in depth should a future walker be changed: never follow a path outside the known root.
-    if (relative(root, file).startsWith("..")) continue;
-    const session = await readSession(file);
-    if (session) sessions.push(session);
-  }
-  return sessions.sort((left, right) => String(right.timestamp).localeCompare(String(left.timestamp)));
+  const root = resolve(sessionDirectory); const files = await walkSessionFiles(root); const sessions = [];
+  for (const file of files) { if (relative(root, file).startsWith("..")) continue; const session = await readSessionMetadata(file); if (session) sessions.push(session); }
+  return sessions.sort((left, right) => String(right.timestamp).localeCompare(String(left.timestamp)) || left.file.localeCompare(right.file));
 }
 
 /** Reads only regular HTML reports from the documented default report directory. */
@@ -163,7 +162,7 @@ export async function startViewer({ host = "127.0.0.1", port = 0, token = random
     if (route === "api/sessions") return response.end(JSON.stringify(sessions.map((session, index) => ({ index, modified: session.modified, messageCount: session.messageCount }))));
     if (route === "api/reports") return response.end(JSON.stringify(reports.map((report, index) => ({ index, name: report.name, modified: report.modified }))));
     const sessionMatch = /^api\/sessions\/(\d+)$/.exec(route);
-    if (sessionMatch) { const session = sessions[Number(sessionMatch[1])]; if (!session) return genericError(response); const events = viewerEvents(session); return response.end(JSON.stringify({ reference: pseudonymizeSession(session), events: events.map(({ timestamp, category, title, summary, noteReference, noteLabel }) => ({ timestamp, category, title, summary, noteReference, noteLabel })) })); }
+    if (sessionMatch) { const session = sessions[Number(sessionMatch[1])]; if (!session || !await hydrateSession(session)) return genericError(response); const events = viewerEvents(session); return response.end(JSON.stringify({ reference: pseudonymizeSession(session), events: events.map(({ timestamp, category, title, summary, noteReference, noteLabel }) => ({ timestamp, category, title, summary, noteReference, noteLabel })) })); }
     const reportMatch = /^api\/reports\/(\d+)$/.exec(route);
     if (reportMatch) { const report = reports[Number(reportMatch[1])]; if (!report) return genericError(response); try { const html = sandboxedReportHtml(await readFile(report.file, "utf8")); response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:" }); return response.end(html); } catch { return genericError(response); } }
     return genericError(response);

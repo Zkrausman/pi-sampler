@@ -119,3 +119,20 @@ test("unsupported hindsight flags are rejected before a session is selected", as
   assert.deepEqual(hindsightArguments("session-ab12 reports/one.html"), { reference: "session-ab12", outputPath: "reports/one.html" });
   assert.throws(() => hindsightArguments("session-invalid!"), /identifier is invalid/);
 });
+
+test("canonical chunk plans are deterministic, UTF-8 bounded, ordered, and exclude notes/citations", async () => {
+  const { planCanonicalSynthesisChunks } = await import("../extensions/conversation-catalog/src/chunk-plan.mjs");
+  const sources = [{ reference: "session-one", events: [
+    { category: "user", timestamp: "2025-01-01", title: "One", summary: "é".repeat(20), metadata: [], evidence: { reference: "session-one:event-0001" } },
+    { category: "assistant", timestamp: "2025-01-02", title: "Two", summary: "second", metadata: [], evidence: { reference: "session-one:event-0002" } },
+  ] }];
+  const plan = planCanonicalSynthesisChunks(sources, { maxBytes: 400 });
+  assert.deepEqual(plan, planCanonicalSynthesisChunks(sources, { maxBytes: 400 }));
+  assert.deepEqual(plan.chunks.flatMap((chunk) => chunk.references), ["session-one:event-0001", "session-one:event-0002"]);
+  for (const chunk of plan.chunks) { assert.ok(chunk.bytes <= 400); assert.match(chunk.fingerprint, /^[a-f0-9]{64}$/); assert.doesNotMatch(JSON.stringify(chunk), /note|citation/i); }
+  assert.throws(() => planCanonicalSynthesisChunks([{ reference: "session-one", events: [{ summary: "x".repeat(1000), evidence: { reference: "session-one:event-oversized" } }] }], { maxBytes: 256 }), /Redact that event further/);
+});
+
+test("oversized single-prompt hindsight fails closed without fake multi-turn synthesis", () => {
+  assert.throws(() => preflightSynthesisPrompt(source("x".repeat(MAX_SYNTHESIS_PROMPT_BYTES)), {}, { tokens: 0, contextWindow: 1_000_000 }), /cannot create isolated model turns.*no partial or multi-prompt generation/i);
+});
