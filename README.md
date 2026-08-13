@@ -92,5 +92,5 @@ node --test tests/*.test.mjs
 cd governance; go test -race ./...
 ```
 
-See [`docs/SCOPED-REVIEW.md`](docs/SCOPED-REVIEW.md) for local, commit-only scoped review packets, and
+See [`docs/SCOPED-REVIEW.md`](docs/SCOPED-REVIEW.md) for local, commit-only scoped review packets (emitted to stdout for caller-controlled redirection), and
 [`docs/specs/AI-TOOLING-SEPARATION.md`](docs/specs/AI-TOOLING-SEPARATION.md) for the extraction boundary and migration rationale.
