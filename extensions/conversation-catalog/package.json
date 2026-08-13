@@ -21,6 +21,9 @@
     "registry": "https://npm.pkg.github.com",
     "access": "restricted"
   },
+  "dependencies": {
+    "@zkrausman/pi-ticket-closeout-summary": "^0.1.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
