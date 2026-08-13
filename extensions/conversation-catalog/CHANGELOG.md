@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.3
+
+### Patch Changes
+
+- Fix standalone viewer session labels and compact empty event-note controls. Also include the prior lock-directory race retry fix for secure hindsight notes.
+
 ## 0.5.2
 
 ### Patch Changes

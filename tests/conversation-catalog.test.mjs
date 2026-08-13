@@ -7,6 +7,7 @@ import {
   resolveSessionReference,
 } from "../extensions/conversation-catalog/src/browser.mjs";
 import { pseudonymizeSession } from "../extensions/conversation-catalog/src/redaction.mjs";
+import { viewerScript } from "../extensions/conversation-catalog/src/viewer.mjs";
 
 const selected = {
   id: "SESSION-ID-DO-NOT-RENDER",
@@ -50,4 +51,14 @@ test("local reader shows selected content without raw session storage identifier
   assert.match(transcript, /Readable local result/);
   assert.match(transcript, new RegExp(pseudonymizeSession(selected)));
   for (const forbidden of [selected.id, selected.path, selected.cwd, entryId, callId]) assert.doesNotMatch(transcript, new RegExp(forbidden));
+});
+
+test("viewer session navigation uses the session API ordinal and collapses empty event notes", () => {
+  const script = viewerScript();
+  assert.match(script, /sessions,session=>item\('Conversation '\+\(session\.index\+1\)/);
+  assert.doesNotMatch(script, /sessions,\(session,index\)=>item\('Conversation '\+\(index\+1\)/);
+  assert.match(script, /const renderCompact=\(\)=>\{container\.replaceChildren\(add,status\)\}/);
+  assert.match(script, /if\(!notes\.length&&!form\)\{renderCompact\(\);return\}/);
+  assert.match(script, /status\.setAttribute\('role','status'\)/);
+  assert.match(script, /sessionIndex===selectedIndex&&epoch===selectionEpoch/);
 });
