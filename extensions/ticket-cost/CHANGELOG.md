@@ -1,5 +1,11 @@
 # @zkrausman/pi-ticket-cost
 
+## 0.2.0
+
+### Minor Changes
+
+- 231b80f: Automate trusted ticket-loop windows through a versioned local Pi event-bus API and correctly aggregate pi-subagents numeric metadata costs, tokens, and turns in closeout receipts.
+
 ## 0.1.1
 
 ### Patch Changes
