@@ -13,6 +13,7 @@ import {
   viewerPage,
   viewerScript,
   viewerShouldClose,
+  viewerStyles,
   sandboxedReportHtml,
   VIEWER_HEADER_BYTES,
   VIEWER_MAX_SNAPSHOTS,
@@ -106,6 +107,15 @@ test("viewer browser keeps the reader-first a11y and local-only UI contract", as
   assert.doesNotMatch(script, /api\(base\)/); assert.doesNotMatch(script, /https:\/\//);
   const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-")); const syntaxFile = join(syntaxDirectory, "viewer-script.mjs"); await writeFile(syntaxFile, script);
   await new Promise((resolveCheck, rejectCheck) => { const child = spawn(process.execPath, ["--check", syntaxFile]); child.once("error", rejectCheck); child.once("exit", (code) => code === 0 ? resolveCheck() : rejectCheck(new Error("Viewer script has invalid syntax."))); });
+});
+
+test("viewer styles retain the dark green palette without light-paper variables", () => {
+  const styles = viewerStyles();
+  assert.match(styles, /^:root\{color-scheme:dark;/);
+  for (const token of ["--canvas:#101411", "--surface:#151b16", "--green:#a8dba8", "--cyan:#8fd5d1", "--amber:#dfbd7a"]) assert.match(styles, new RegExp(token));
+  assert.doesNotMatch(styles, /color-scheme:light|--(?:paper|ink|accent(?:-quiet)?|focus):|#fbfaf6|#fffefa/);
+  assert.match(styles, /@media \(prefers-reduced-motion:reduce\)/);
+  assert.match(styles, /@media \(forced-colors:active\)/);
 });
 
 test("viewer note errors retain recovery controls and reset before retry or success", () => {
