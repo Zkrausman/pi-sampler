@@ -4,6 +4,8 @@ coverage/
 /.pi/
 !/.pi/
 /.pi/*
+# Project-local Excalidraw SQLite database and WAL/SHM recovery sidecars.
+/.pi/excalidraw/
 !/.pi/agents/
 /.pi/agents/*
 !/.pi/agents/*.md
