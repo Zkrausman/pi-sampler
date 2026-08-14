@@ -107,6 +107,14 @@ test("viewer browser keeps the reader-first a11y and local-only UI contract", as
   await new Promise((resolveCheck, rejectCheck) => { const child = spawn(process.execPath, ["--check", syntaxFile]); child.once("error", rejectCheck); child.once("exit", (code) => code === 0 ? resolveCheck() : rejectCheck(new Error("Viewer script has invalid syntax."))); });
 });
 
+test("viewer note errors retain recovery controls and reset before retry or success", () => {
+  const script = viewerScript();
+  assert.match(script, /if\(e\.noteError\)\{const p=document\.createElement\('p'\),retry=document\.createElement\('button'\).*?retry\.textContent='Retry notes'.*?box\.append\(p,retry\)\}if\(e\.noteLoading\)/);
+  assert.match(script, /async function noteRequest\(e,box,error,request,loading=false\)\{e\.noteError=undefined;.*?try\{await request\(\);e\.noteError=undefined;/);
+  assert.match(script, /box\.append\(list\);const form=.*?box\.append\(form\)\}/);
+  assert.match(script, /close\.textContent='Close notes'/);
+});
+
 test("viewer rejects missing token, unexpected host and origin without echoing data", async () => {
   const { sessions, reports, id } = await fixture();
   const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "b".repeat(43), idleMs: 60_000 });
