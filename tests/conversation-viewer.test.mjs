@@ -3,7 +3,7 @@ import test from "node:test";
 import { request } from "node:http";
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -45,6 +45,7 @@ async function get(url, path, options) { return fetch(`${url}${path}`, options);
 async function catalog(viewer) { return (await get(viewer.url, "api/sessions")).json(); }
 async function sessionHandle(viewer, index = 0) { return (await catalog(viewer)).sessions[index].handle; }
 async function eventPage(viewer, handle, suffix = "") { return (await get(viewer.url, `api/sessions/${handle}/events${suffix}`)).json(); }
+async function search(viewer, body) { return get(viewer.url, "api/session-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
 async function rawRequest(url, path, headers) {
   const requestUrl = new URL(`${url}${path}`);
   return new Promise((resolveRequest, reject) => {
@@ -109,6 +110,53 @@ test("viewer returns the complete bounded opaque catalog immediately while selec
   } finally { viewer.close(); }
 });
 
+test("viewer archive search is on-demand, literal, bounded, opaque, and reaches sessions outside the catalog", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-search-")); const sessions = join(directory, "sessions"); const reports = join(directory, "reports"); await mkdir(sessions); await mkdir(reports);
+  const id = (index) => `019fd4f3-b574-7953-a984-ffb49a51${String(index).padStart(4, "0")}`;
+  for (let index = 0; index <= 250; index += 1) await writeFile(join(sessions, `${String(index).padStart(3, "0")}.jsonl`), [
+    JSON.stringify({ type: "session", id: id(index), timestamp: index === 250 ? "2024-01-01T00:00:00.000Z" : `2025-04-01T00:00:${String(index % 60).padStart(2, "0")}.000Z`, cwd: directory }),
+    JSON.stringify({ type: "message", id: `entry-${index}`, message: { role: "user", content: index === 250 ? "Find <b>Literal [needle] café</b> only here" : `ordinary ${index}` } }),
+    JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "private-tool", arguments: { secret: "tool-argument-needle" } }] } }),
+  ].join("\n") + "\n");
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "z".repeat(43), idleMs: 60_000 });
+  try {
+    const listed = await catalog(viewer); assert.equal(listed.sessions.length, 250); assert.equal(listed.capped, true);
+    const response = await search(viewer, { query: "LITERAL [NEEDLE] CAFÉ" }); assert.equal(response.status, 200); const body = await response.json();
+    assert.deepEqual(Object.keys(body).sort(), ["results"]); assert.equal(body.results.length, 1); assert.deepEqual(Object.keys(body.results[0]).sort(), ["classification", "handle", "modified", "snippets"]); assert.match(body.results[0].handle, /^s_[A-Za-z0-9_-]{32}$/); assert.match(body.results[0].snippets[0], /&lt;b&gt;Literal \[needle\] café&lt;\/b&gt;/); assert.doesNotMatch(JSON.stringify(body), new RegExp(`${id(250)}|entry-250|tool-argument-needle|private-tool|cwd|\.jsonl`));
+    assert.equal((await eventPage(viewer, body.results[0].handle)).events.length, 3, "a cross-session search handle opens through the existing reader");
+    assert.equal((await get(viewer.url, "api/session-search?query=needle")).status, 404, "query text is never accepted in a URL");
+    const firstPage = await search(viewer, { query: "ordinary" }); const firstBody = await firstPage.json(); assert.equal(firstBody.results.length, 20); assert.match(firstBody.nextCursor, /^q_[A-Za-z0-9_-]{32}$/); const secondPage = await search(viewer, { cursor: firstBody.nextCursor }); const secondBody = await secondPage.json(); assert.equal(secondBody.results.length, 20); assert.match(secondBody.nextCursor, /^q_[A-Za-z0-9_-]{32}$/);
+    const noTool = await search(viewer, { query: "tool-argument-needle" }); assert.deepEqual((await noTool.json()).results, []);
+    assert.equal((await search(viewer, { query: "x".repeat(513) })).status, 404); assert.equal((await search(viewer, { query: "   " })).status, 404); assert.equal((await search(viewer, { cursor: "q_forged" })).status, 404);
+  } finally { viewer.close(); }
+});
+
+test("viewer search fails closed for malformed valid session sources", async () => {
+  const { sessions, reports, id } = await fixture();
+  await writeFile(join(sessions, "project", "malformed-valid.jsonl"), `${JSON.stringify({ type: "session", id: "019fd4f3-b574-7953-a984-ffb49a519299", timestamp: "2025-02-03T04:05:06.000Z", cwd: "/secret" })}\n{"type":"message"\n`);
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "y".repeat(43), idleMs: 60_000 });
+  try { const response = await search(viewer, { query: "selected" }); assert.equal(response.status, 404); assert.doesNotMatch(await response.text(), new RegExp(`${id}|secret|malformed-valid`)); } finally { viewer.close(); }
+});
+
+test("viewer invalidates a replaced catalog path and binds a search result to the replacement identity", async () => {
+  const { directory, sessions, reports, id } = await fixture();
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "w".repeat(43), idleMs: 60_000 });
+  try {
+    const originalHandle = await sessionHandle(viewer); const replacementId = "019fd4f3-b574-7953-a984-ffb49a519208"; const replacement = join(sessions, "project", "replacement.jsonl"); const target = join(sessions, "project", "one.jsonl");
+    await writeFile(replacement, [
+      JSON.stringify({ type: "session", id: replacementId, timestamp: "2025-02-04T04:05:06.000Z", cwd: directory }),
+      JSON.stringify({ type: "message", timestamp: "2025-02-04T04:06:06.000Z", message: { role: "user", content: "Replacement-only searchable content" } }),
+    ].join("\n") + "\n");
+    await rename(replacement, target);
+
+    const stale = await get(viewer.url, `api/sessions/${originalHandle}/events`); assert.equal(stale.status, 404, "the pre-replacement catalog handle cannot read the new file");
+    const response = await search(viewer, { query: "replacement-only searchable" }); assert.equal(response.status, 200); const body = await response.json();
+    assert.equal(body.results.length, 1); assert.notEqual(body.results[0].handle, originalHandle, "search does not reuse the invalidated catalog handle");
+    const selectedResponse = await get(viewer.url, `api/sessions/${body.results[0].handle}/events`); assert.equal(selectedResponse.status, 200); const selected = await selectedResponse.json();
+    assert.equal(selected.reference, pseudonymizeSession({ id: replacementId }), "the replacement contents retain only their own hindsight reference"); assert.notEqual(selected.reference, pseudonymizeSession({ id })); assert.match(JSON.stringify(selected.events), /Replacement-only searchable content/);
+  } finally { viewer.close(); }
+});
+
 test("viewer snapshot eviction invalidates held cursors without crossing sessions", async () => {
   const { directory, sessions, reports } = await fixture();
   for (let index = 0; index <= VIEWER_MAX_SNAPSHOTS; index += 1) {
@@ -153,7 +201,7 @@ test("viewer browser keeps the reader-first a11y and local-only UI contract", as
   assert.match(script, /events\.filter\(e=>e\.category==='user'\|\|e\.category==='assistant'\)/); assert.match(script, /Showing '\+shown\.length\+' loaded events/); assert.match(script, /time\.dateTime=e\.timestamp/);
   assert.match(script, /api\/sessions\/'.*events.*notes/); assert.match(script, /method:'POST'/); assert.match(script, /method:'PUT'/); assert.match(script, /method:'DELETE'/); assert.match(script, /Local-only, user-authored context/); assert.match(script, /async function openNotes/); assert.doesNotMatch(script, /loadNotes\(.*S\.events/);
   assert.match(script, /toggle\.setAttribute\('aria-expanded','true'\)/); assert.match(script, /e\.key==='Escape'/); assert.match(script, /document\.activeElement===last/); assert.match(script, /aria-current','page/);
-  assert.match(page, /id="sessions-capped"[^>]*role="status"/); assert.match(script, /S\.catalog=d\.sessions/); assert.match(page, /Conversation list is capped for local performance/); assert.match(script, /r\.status===429&&body\?\.capacity===true/); assert.match(script, /Conversation paging is temporarily at capacity\. Retry opening it\./); assert.match(script, /Conversation paging is temporarily at capacity\. Retry loading more events\./); assert.doesNotMatch(script, /Load more conversations|catalogCursor|sessions-more|Promise\.all\(\[catalog/);
+  assert.match(page, /id="archive-search"[^>]*aria-labelledby="search-heading"/); assert.match(page, /id="archive-search-query"[^>]*type="search"/); assert.match(page, /id="search-status"[^>]*role="status"/); assert.match(script, /api\/session-search/); assert.match(script, /method:'POST'/); assert.match(script, /TextEncoder\(\)\.encode\(query\.trim\(\)\)/); assert.doesNotMatch(script, /api\/session-search\?query/); assert.match(page, /id="sessions-capped"[^>]*role="status"/); assert.match(script, /S\.catalog=d\.sessions/); assert.match(page, /Conversation list is capped for local performance/); assert.match(script, /r\.status===429&&body\?\.capacity===true/); assert.match(script, /Conversation paging is temporarily at capacity\. Retry opening it\./); assert.match(script, /Conversation paging is temporarily at capacity\. Retry loading more events\./); assert.doesNotMatch(script, /Load more conversations|catalogCursor|sessions-more|Promise\.all\(\[catalog/);
   assert.doesNotMatch(script, /api\(base\)/); assert.doesNotMatch(script, /https:\/\//);
   const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-")); const syntaxFile = join(syntaxDirectory, "viewer-script.mjs"); await writeFile(syntaxFile, script);
   await new Promise((resolveCheck, rejectCheck) => { const child = spawn(process.execPath, ["--check", syntaxFile]); child.once("error", rejectCheck); child.once("exit", (code) => code === 0 ? resolveCheck() : rejectCheck(new Error("Viewer script has invalid syntax."))); });
