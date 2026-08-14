@@ -16,7 +16,9 @@ import {
   viewerStyles,
   sandboxedReportHtml,
   VIEWER_HEADER_BYTES,
+  VIEWER_MAX_SESSION_FILE_BYTES,
   VIEWER_MAX_SNAPSHOTS,
+  VIEWER_MAX_CURSORS,
 } from "../extensions/conversation-catalog/src/viewer.mjs";
 import { pseudonymizeSession } from "../extensions/conversation-catalog/src/redaction.mjs";
 import { resolveSessionReference } from "../extensions/conversation-catalog/src/browser.mjs";
@@ -63,15 +65,48 @@ test("viewer discovery accepts recognizable local sessions and malformed/stale i
   assert.deepEqual(await discoverSessions({ sessionDirectory: join(sessions, "missing") }), []);
 });
 
-test("viewer uses opaque handles and bounded ordered event pages without private source values", async () => {
+test("viewer returns the complete bounded opaque catalog immediately while selected event pages remain lazy", async () => {
   const { sessions, reports, id, directory } = await fixture();
-  const small = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "z".repeat(43), idleMs: 60_000 }); const legacy = await (await get(small.url, "api/sessions/0")).json(); assert.ok(legacy.events.length); small.close();
-  for (let index = 0; index < 60; index += 1) await writeFile(join(sessions, "project", `extra-${index}.jsonl`), `${JSON.stringify({ type: "session", id: `019fd4f3-b574-7953-a984-ffb49a519${String(index).padStart(3, "0")}`, timestamp: `2025-02-03T04:05:${String(index).padStart(2, "0")}.000Z`, cwd: directory })}
-${JSON.stringify({ type: "message", timestamp: `2025-02-03T05:00:${String(index).padStart(2, "0")}.000Z`, message: { role: "user", content: `event ${index}` } })}`);
+  for (let index = 0; index < 60; index += 1) {
+    const classification = index % 2 ? [{ type: "session_info", name: "private subagent work" }] : [];
+    await writeFile(join(sessions, "project", `extra-${index}.jsonl`), [
+      JSON.stringify({ type: "session", id: `019fd4f3-b574-7953-a984-ffb49a519${String(index).padStart(3, "0")}`, timestamp: `2025-03-01T00:00:${String(index).padStart(2, "0")}.000Z`, cwd: directory }),
+      ...classification.map(JSON.stringify),
+      JSON.stringify({ type: "message", timestamp: `2025-03-01T01:00:${String(index).padStart(2, "0")}.000Z`, message: { role: "user", content: `event ${index}` } }),
+    ].join("\n"));
+  }
   const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "a".repeat(43), idleMs: 60_000 });
-  try { const first = await catalog(viewer); assert.equal(first.sessions.length, 50); assert.match(first.sessions[0].handle, /^s_[A-Za-z0-9_-]{32}$/); assert.doesNotMatch(JSON.stringify(first), new RegExp(`${id}|cwd|file|index`)); const next = await (await get(viewer.url, `api/sessions?cursor=${first.nextCursor}`)).json(); assert.equal(next.sessions.length, 11); assert.equal((await get(viewer.url, "api/sessions?cursor=c_forged")).status, 404);
-    const all = [...first.sessions, ...next.sessions]; let handle; let page; for (const candidate of all) { const trial = await eventPage(viewer, candidate.handle, "?limit=2"); if (trial.events.length === 2) { handle = candidate.handle; page = trial; break; } } assert.ok(handle); assert.equal(page.events.length, 2); assert.match(page.nextCursor, /^c_[A-Za-z0-9_-]{32}$/); assert.doesNotMatch(JSON.stringify(page), new RegExp(`${id}|entry-secret|projectRoot|cwd|file|token`)); const later = await eventPage(viewer, handle, `?cursor=${page.nextCursor}&limit=2`); assert.equal(new Set([...page.events, ...later.events].map((event) => event.noteReference)).size, page.events.length + later.events.length); const laterNotes = `api/sessions/${handle}/events/${later.events[0].noteReference}/notes`; assert.equal((await get(viewer.url, laterNotes, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Later page context." }) })).status, 200); assert.equal((await get(viewer.url, `api/sessions/${next.sessions[0].handle}/events?cursor=${page.nextCursor}`)).status, 404); assert.equal((await get(viewer.url, `api/sessions/${handle}/events?limit=101`)).status, 404);
-    const report = await (await get(viewer.url, `api/reports/${(await (await get(viewer.url, "api/reports")).json()).reports[0].handle}`)).text(); assert.match(report, /Local report/); assert.match(report, /default-src 'none'/); assert.match(sandboxedReportHtml("<script>bad()</script>"), /default-src 'none'/); } finally { viewer.close(); }
+  try {
+    const response = await catalog(viewer);
+    assert.equal(response.sessions.length, 61, "one catalog response contains every discovered bounded entry");
+    assert.equal(response.nextCursor, undefined);
+    assert.equal((await get(viewer.url, "api/sessions?cursor=c_forged")).status, 404);
+    assert.equal((await get(viewer.url, "api/sessions/0")).status, 404);
+    assert.equal(response.sessions.filter((session) => session.classification === "main").length, 31);
+    assert.equal(response.sessions.filter((session) => session.classification === "subagent").length, 30);
+    for (const session of response.sessions) {
+      assert.match(session.handle, /^s_[A-Za-z0-9_-]{32}$/);
+      assert.deepEqual(Object.keys(session).sort(), ["classification", "handle", "modified"]);
+    }
+    assert.doesNotMatch(JSON.stringify(response), new RegExp(`${id}|cwd|file|index|private subagent work`));
+
+    let handle; let page;
+    for (const candidate of response.sessions) {
+      const trial = await eventPage(viewer, candidate.handle, "?limit=2");
+      if (trial.events.length === 2 && trial.nextCursor) { handle = candidate.handle; page = trial; break; }
+    }
+    assert.ok(handle, "catalog lookup does not create an event snapshot until a handle is selected");
+    assert.equal(page.events.length, 2); assert.match(page.nextCursor, /^c_[A-Za-z0-9_-]{32}$/);
+    assert.doesNotMatch(JSON.stringify(page), new RegExp(`${id}|entry-secret|projectRoot|cwd|file|token`));
+    const later = await eventPage(viewer, handle, `?cursor=${page.nextCursor}&limit=2`);
+    assert.equal(new Set([...page.events, ...later.events].map((event) => event.noteReference)).size, page.events.length + later.events.length);
+    const laterNotes = `api/sessions/${handle}/events/${later.events[0].noteReference}/notes`;
+    assert.equal((await get(viewer.url, laterNotes, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Later page context." }) })).status, 200);
+    assert.equal((await get(viewer.url, `api/sessions/${response.sessions.at(-1).handle}/events?cursor=${page.nextCursor}`)).status, 404);
+    assert.equal((await get(viewer.url, `api/sessions/${handle}/events?limit=101`)).status, 404);
+    const report = await (await get(viewer.url, `api/reports/${(await (await get(viewer.url, "api/reports")).json()).reports[0].handle}`)).text();
+    assert.match(report, /Local report/); assert.match(report, /default-src 'none'/); assert.match(sandboxedReportHtml("<script>bad()</script>"), /default-src 'none'/);
+  } finally { viewer.close(); }
 });
 
 test("viewer snapshot eviction invalidates held cursors without crossing sessions", async () => {
@@ -95,6 +130,21 @@ test("viewer snapshot eviction invalidates held cursors without crossing session
   } finally { viewer.close(); }
 });
 
+test("viewer preserves held cursors at capacity and explicitly rejects a new initial page", async () => {
+  const { sessions, reports } = await fixture(); const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "p".repeat(43), idleMs: 60_000 });
+  try {
+    const handle = await sessionHandle(viewer); const held = await eventPage(viewer, handle, "?limit=1"); assert.match(held.nextCursor, /^c_[A-Za-z0-9_-]{32}$/);
+    for (let index = 1; index < VIEWER_MAX_CURSORS; index += 1) { const page = await eventPage(viewer, handle, "?limit=1"); assert.match(page.nextCursor, /^c_[A-Za-z0-9_-]{32}$/); }
+    const capacity = await get(viewer.url, `api/sessions/${handle}/events?limit=1`);
+    assert.equal(capacity.status, 429); assert.deepEqual(await capacity.json(), { capacity: true }, "a saturated initial page reports retryable capacity instead of silently omitting nextCursor");
+    const continuedResponse = await get(viewer.url, `api/sessions/${handle}/events?cursor=${held.nextCursor}&limit=1`);
+    assert.equal(continuedResponse.status, 200, "a held oldest continuation remains valid after other requests fill capacity");
+    const continued = await continuedResponse.json(); assert.match(continued.nextCursor, /^c_[A-Za-z0-9_-]{32}$/);
+    const later = await eventPage(viewer, handle, `?cursor=${continued.nextCursor}&limit=1`);
+    assert.equal(later.events.length, 1, "consuming a continuation reserves and reuses its freed cursor slot");
+  } finally { viewer.close(); }
+});
+
 test("viewer browser keeps the reader-first a11y and local-only UI contract", async () => {
   const page = viewerPage(); const script = viewerScript();
   assert.match(page, /id="navigation-drawer"[^>]*role="dialog"/); assert.match(page, /id="drawer-toggle"[^>]*aria-expanded="false"/); assert.match(page, /id="load-more-events"[^>]*aria-label="Load more conversation events"/);
@@ -103,7 +153,7 @@ test("viewer browser keeps the reader-first a11y and local-only UI contract", as
   assert.match(script, /events\.filter\(e=>e\.category==='user'\|\|e\.category==='assistant'\)/); assert.match(script, /Showing '\+shown\.length\+' loaded events/); assert.match(script, /time\.dateTime=e\.timestamp/);
   assert.match(script, /api\/sessions\/'.*events.*notes/); assert.match(script, /method:'POST'/); assert.match(script, /method:'PUT'/); assert.match(script, /method:'DELETE'/); assert.match(script, /Local-only, user-authored context/); assert.match(script, /async function openNotes/); assert.doesNotMatch(script, /loadNotes\(.*S\.events/);
   assert.match(script, /toggle\.setAttribute\('aria-expanded','true'\)/); assert.match(script, /e\.key==='Escape'/); assert.match(script, /document\.activeElement===last/); assert.match(script, /aria-current','page/);
-  assert.match(script, /Load more conversations/); assert.match(script, /Conversation list is capped for local performance/); assert.doesNotMatch(script, /Promise\.all\(\[catalog/);
+  assert.match(page, /id="sessions-capped"[^>]*role="status"/); assert.match(script, /S\.catalog=d\.sessions/); assert.match(page, /Conversation list is capped for local performance/); assert.match(script, /r\.status===429&&body\?\.capacity===true/); assert.match(script, /Conversation paging is temporarily at capacity\. Retry opening it\./); assert.match(script, /Conversation paging is temporarily at capacity\. Retry loading more events\./); assert.doesNotMatch(script, /Load more conversations|catalogCursor|sessions-more|Promise\.all\(\[catalog/);
   assert.doesNotMatch(script, /api\(base\)/); assert.doesNotMatch(script, /https:\/\//);
   const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-")); const syntaxFile = join(syntaxDirectory, "viewer-script.mjs"); await writeFile(syntaxFile, script);
   await new Promise((resolveCheck, rejectCheck) => { const child = spawn(process.execPath, ["--check", syntaxFile]); child.once("error", rejectCheck); child.once("exit", (code) => code === 0 ? resolveCheck() : rejectCheck(new Error("Viewer script has invalid syntax."))); });
@@ -194,18 +244,38 @@ test("viewer discovery caps candidate files, recursion depth, and catalog result
   const candidateCapped = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 1 }); assert.equal(candidateCapped.length, 1); assert.equal(candidateCapped.capped, true);
   const depthCapped = await discoverSessions({ sessionDirectory: sessions, maxDepth: 0 }); assert.equal(depthCapped.length, 2); assert.equal(depthCapped.capped, true);
   const resultCapped = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 10, maxDepth: 8, maxResults: 1 }); assert.equal(resultCapped.length, 1); assert.equal(resultCapped.capped, true); assert.match(resultCapped[0].file, /hidden\.jsonl$/);
+  for (const bounds of [
+    { maxCandidates: Number.NaN, maxDepth: Number.NaN, maxResults: Number.NaN },
+    { maxCandidates: Infinity, maxDepth: Infinity, maxResults: Infinity },
+    { maxCandidates: -Infinity, maxDepth: -Infinity, maxResults: -Infinity },
+  ]) { const normalized = await discoverSessions({ sessionDirectory: sessions, ...bounds }); assert.equal(normalized.length, 3); assert.equal(normalized.capped, false); }
+  const fractionalCandidates = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 1.9, maxDepth: 8, maxResults: 10 }); assert.equal(fractionalCandidates.length, 1); assert.equal(fractionalCandidates.capped, true);
+  const fractionalDepth = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 10, maxDepth: 0.9, maxResults: 10 }); assert.equal(fractionalDepth.length, 2); assert.equal(fractionalDepth.capped, true);
+  const fractionalResults = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 10, maxDepth: 8, maxResults: 1.9 }); assert.equal(fractionalResults.length, 1); assert.equal(fractionalResults.capped, true);
 });
 
-test("viewer discovery reads only bounded metadata until a session is selected", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-metadata-")); const sessions = join(directory, "sessions"); await mkdir(sessions);
-  const id = "019fd4f3-b574-7953-a984-ffb49a519207"; const large = "x".repeat(250_000);
+test("viewer returns a capped notice with the complete hard-bounded catalog", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-catalog-cap-")); const sessions = join(directory, "sessions"); const reports = join(directory, "reports"); await mkdir(sessions); await mkdir(reports);
+  await Promise.all(Array.from({ length: 251 }, async (_, index) => writeFile(join(sessions, `${String(index).padStart(3, "0")}.jsonl`), `${JSON.stringify({ type: "session", id: `019fd4f3-b574-7953-a984-ffb49a51${String(index).padStart(4, "0")}`, timestamp: "2025-04-01T00:00:00.000Z", cwd: directory })}
+`)));
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "k".repeat(43), idleMs: 60_000 });
+  try { const response = await catalog(viewer); assert.equal(response.sessions.length, 250); assert.equal(response.capped, true); assert.equal(response.nextCursor, undefined); } finally { viewer.close(); }
+});
+
+test("viewer discovery and full catalog fetch do not project transcripts before selection", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-metadata-")); const sessions = join(directory, "sessions"); const reports = join(directory, "reports"); await mkdir(sessions); await mkdir(reports);
+  const id = "019fd4f3-b574-7953-a984-ffb49a519207"; const oversized = "x".repeat(VIEWER_MAX_SESSION_FILE_BYTES);
   await writeFile(join(sessions, "large.jsonl"), `${JSON.stringify({ type: "session", id, timestamp: "2025-02-03T04:05:06.000Z", cwd: directory })}
-${JSON.stringify({ type: "message", message: { role: "user", content: large } })}
+${JSON.stringify({ type: "message", message: { role: "user", content: oversized } })}
 `);
   const found = await discoverSessions({ sessionDirectory: sessions });
   assert.equal(found.length, 1); assert.equal(found[0].entries, undefined); assert.equal(found[0].messageCount, undefined); assert.match(found[0].file, /large\.jsonl$/);
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "m".repeat(43), idleMs: 60_000 });
+  try {
+    const response = await catalog(viewer); assert.equal(response.sessions.length, 1); assert.deepEqual(Object.keys(response.sessions[0]).sort(), ["classification", "handle", "modified"]);
+    assert.equal((await get(viewer.url, `api/sessions/${response.sessions[0].handle}/events`)).status, 404, "oversized transcript is opened and rejected only after selection");
+  } finally { viewer.close(); }
 });
-
 
 test("viewer classifies only complete bounded session_info.name markers and never exposes names", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-viewer-classification-")); const sessions = join(directory, "sessions"); const reports = join(directory, "reports"); await mkdir(sessions); await mkdir(reports);
@@ -234,6 +304,7 @@ test("viewer classifies only complete bounded session_info.name markers and neve
   try {
     const response = await catalog(viewer); const serialized = JSON.stringify(response);
     assert.deepEqual(new Set(response.sessions.map((session) => session.classification)), new Set(["main", "subagent"]));
+    for (const group of [response.sessions.filter((session) => session.classification === "main"), response.sessions.filter((session) => session.classification === "subagent")]) assert.deepEqual(group.map((session) => session.modified), [...group].sort((left, right) => right.modified.localeCompare(left.modified)).map((session) => session.modified));
     for (const secret of ["A main conversation", "Background SuBaGeNt work", "subagent beyond cap", "subagent-path", "exactName"]) assert.doesNotMatch(serialized, new RegExp(secret));
     for (const session of response.sessions) assert.deepEqual(Object.keys(session).sort(), ["classification", "handle", "modified"]);
   } finally { viewer.close(); }
@@ -246,5 +317,5 @@ test("viewer drawer has three independent semantic groups and keeps conversation
   assert.match(page, /<details class="drawer-section" open><summary id="reports-heading">Hindsight Reports<\/summary>/);
   assert.match(script, /#sessions-main/); assert.match(script, /#sessions-subagent/); assert.match(script, /x\.classification==='subagent'/);
   assert.match(script, /No main conversations found\./); assert.match(script, /No subagent conversations found\./); assert.match(script, /No hindsight reports found\./);
-  assert.match(script, /#sessions-more/); assert.match(script, /summary,\[href\]/);
+  assert.match(page, /id="sessions-capped"/); assert.match(script, /S\.catalog=d\.sessions/); assert.doesNotMatch(page + script, /Load more conversations|sessions-more|catalogCursor/); assert.match(script, /summary,\[href\]/);
 });
