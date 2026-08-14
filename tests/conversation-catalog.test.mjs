@@ -53,12 +53,13 @@ test("local reader shows selected content without raw session storage identifier
   for (const forbidden of [selected.id, selected.path, selected.cwd, entryId, callId]) assert.doesNotMatch(transcript, new RegExp(forbidden));
 });
 
-test("viewer session navigation uses server-issued handles, paging, and lazy event notes", () => {
+test("viewer session navigation uses server-issued handles, paging, and event-local lazy notes", () => {
   const script = viewerScript();
-  assert.match(script, /s\.handle/);
-  assert.match(script, /nextCursor/);
+  assert.match(script, /x\.handle/);
+  assert.match(script, /S\.catalogCursor/);
   assert.match(script, /Load more conversations/);
-  assert.match(script, /notes\.onclick=async/);
+  assert.match(script, /async function openNotes/);
+  assert.match(script, /notePath=e=>'api\/sessions\/'.*events.*notes/);
   assert.doesNotMatch(script, /api\(base\)/);
   assert.doesNotMatch(script, /session\.index/);
 });

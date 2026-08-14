@@ -93,11 +93,16 @@ test("viewer snapshot eviction invalidates held cursors without crossing session
   } finally { viewer.close(); }
 });
 
-test("viewer browser pages events with accessible Load more and lazy notes", async () => {
+test("viewer browser keeps the reader-first a11y and local-only UI contract", async () => {
   const page = viewerPage(); const script = viewerScript();
-  assert.match(page, /id="navigation-drawer"[^>]*role="dialog"/); assert.match(page, /id="load-more-events"[^>]*aria-label="Load more conversation events"/);
-  assert.match(script, /events\.filter\(e=>e\.category==='user'\|\|e\.category==='assistant'\)/); assert.match(script, /nextCursor/); assert.match(script, /Load more conversations/); assert.match(script, /d\.capped/); assert.match(script, /Conversation list is capped for local performance/); assert.match(script, /notes\.onclick=async/);
-  assert.doesNotMatch(script, /api\(base\)/); assert.match(script, /selectedHandle\+'\/events/);
+  assert.match(page, /id="navigation-drawer"[^>]*role="dialog"/); assert.match(page, /id="drawer-toggle"[^>]*aria-expanded="false"/); assert.match(page, /id="load-more-events"[^>]*aria-label="Load more conversation events"/);
+  assert.match(page, /id="transcript"[^>]*aria-busy="false"/); assert.doesNotMatch(page, /id="transcript"[^>]*aria-live/); assert.match(page, /id="copy-status"[^>]*role="status"/);
+  assert.match(script, /navigator\.clipboard\?\.writeText/); assert.match(script, /document\.execCommand\('copy'\)/); assert.match(script, /Could not copy Pi handoff/);
+  assert.match(script, /events\.filter\(e=>e\.category==='user'\|\|e\.category==='assistant'\)/); assert.match(script, /Showing '\+shown\.length\+' loaded events/); assert.match(script, /time\.dateTime=e\.timestamp/);
+  assert.match(script, /api\/sessions\/'.*events.*notes/); assert.match(script, /method:'POST'/); assert.match(script, /method:'PUT'/); assert.match(script, /method:'DELETE'/); assert.match(script, /Local-only, user-authored context/); assert.match(script, /async function openNotes/); assert.doesNotMatch(script, /loadNotes\(.*S\.events/);
+  assert.match(script, /toggle\.setAttribute\('aria-expanded','true'\)/); assert.match(script, /e\.key==='Escape'/); assert.match(script, /document\.activeElement===last/); assert.match(script, /aria-current','page/);
+  assert.match(script, /Load more conversations/); assert.match(script, /Conversation list is capped for local performance/); assert.doesNotMatch(script, /Promise\.all\(\[catalog/);
+  assert.doesNotMatch(script, /api\(base\)/); assert.doesNotMatch(script, /https:\/\//);
   const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-")); const syntaxFile = join(syntaxDirectory, "viewer-script.mjs"); await writeFile(syntaxFile, script);
   await new Promise((resolveCheck, rejectCheck) => { const child = spawn(process.execPath, ["--check", syntaxFile]); child.once("error", rejectCheck); child.once("exit", (code) => code === 0 ? resolveCheck() : rejectCheck(new Error("Viewer script has invalid syntax."))); });
 });
