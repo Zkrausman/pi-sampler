@@ -14,6 +14,7 @@ import {
   viewerScript,
   viewerShouldClose,
   sandboxedReportHtml,
+  VIEWER_HEADER_BYTES,
   VIEWER_MAX_SNAPSHOTS,
 } from "../extensions/conversation-catalog/src/viewer.mjs";
 import { pseudonymizeSession } from "../extensions/conversation-catalog/src/redaction.mjs";
@@ -193,4 +194,47 @@ ${JSON.stringify({ type: "message", message: { role: "user", content: large } })
 `);
   const found = await discoverSessions({ sessionDirectory: sessions });
   assert.equal(found.length, 1); assert.equal(found[0].entries, undefined); assert.equal(found[0].messageCount, undefined); assert.match(found[0].file, /large\.jsonl$/);
+});
+
+
+test("viewer classifies only complete bounded session_info.name markers and never exposes names", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-classification-")); const sessions = join(directory, "sessions"); const reports = join(directory, "reports"); await mkdir(sessions); await mkdir(reports);
+  const id = (index) => `019fd4f3-b574-7953-a984-ffb49a519${String(index).padStart(3, "0")}`;
+  const header = (index) => JSON.stringify({ type: "session", id: id(index), timestamp: `2025-04-01T00:00:${String(index).padStart(2, "0")}.000Z`, cwd: join(directory, "subagent-path") });
+  const file = async (name, index, records) => writeFile(join(sessions, name), [header(index), ...records.map(JSON.stringify)].join("\n") + "\n");
+  await file("main.jsonl", 1, [{ type: "session_info", name: "A main conversation" }]);
+  await file("case.jsonl", 2, [{ type: "session_info", name: "Background SuBaGeNt work" }]);
+  await file("subagent-filename.jsonl", 3, [{ type: "message", name: "subagent", path: "subagent", message: { role: "assistant", content: [{ type: "toolCall", name: "subagent" }] } }]);
+  await file("invalid.jsonl", 4, [{ type: "session_info", name: { marker: "subagent" } }, { type: "message", content: "subagent" }]);
+  await writeFile(join(sessions, "malformed.jsonl"), `${header(8)}\n{"type":"session_info","name":"subagent"\n`);
+  const exactHeader = header(5); const exactPrefix = `${exactHeader}\n{"type":"session_info","name":"`; const exactName = `subagent${"x".repeat(VIEWER_HEADER_BYTES - Buffer.byteLength(exactPrefix) - Buffer.byteLength("subagent") - Buffer.byteLength("\"}\n"))}`;
+  await writeFile(join(sessions, "exact-cap.jsonl"), `${exactPrefix}${exactName}"}\n`);
+  const afterHeader = header(6); const paddingPrefix = `${afterHeader}\n{"type":"message","content":"`; const padding = "x".repeat(VIEWER_HEADER_BYTES - Buffer.byteLength(paddingPrefix) - Buffer.byteLength("\"}\n"));
+  await writeFile(join(sessions, "beyond-cap.jsonl"), `${paddingPrefix}${padding}"}\n${JSON.stringify({ type: "session_info", name: "subagent beyond cap" })}\n`);
+  await writeFile(join(sessions, "header-beyond-cap.jsonl"), `${" ".repeat(VIEWER_HEADER_BYTES)}\n${header(7)}\n${JSON.stringify({ type: "session_info", name: "subagent" })}\n`);
+
+  const found = await discoverSessions({ sessionDirectory: sessions });
+  assert.equal(found.length, 7, "a header outside the fixed prefix is not discoverable");
+  const byId = new Map(found.map((session) => [session.id, session]));
+  assert.equal(byId.get(id(1)).classification, "main"); assert.equal(byId.get(id(2)).classification, "subagent");
+  for (const index of [3, 4, 6, 8]) assert.equal(byId.get(id(index)).classification, "main");
+  assert.equal(byId.get(id(5)).classification, "subagent", "a record ending exactly at the cap is complete");
+
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "g".repeat(43), idleMs: 60_000 });
+  try {
+    const response = await catalog(viewer); const serialized = JSON.stringify(response);
+    assert.deepEqual(new Set(response.sessions.map((session) => session.classification)), new Set(["main", "subagent"]));
+    for (const secret of ["A main conversation", "Background SuBaGeNt work", "subagent beyond cap", "subagent-path", "exactName"]) assert.doesNotMatch(serialized, new RegExp(secret));
+    for (const session of response.sessions) assert.deepEqual(Object.keys(session).sort(), ["classification", "handle", "modified"]);
+  } finally { viewer.close(); }
+});
+
+test("viewer drawer has three independent semantic groups and keeps conversation groups separate", () => {
+  const page = viewerPage(); const script = viewerScript();
+  assert.match(page, /<details class="drawer-section" open><summary id="main-sessions-heading">Conversations — Main<\/summary>/);
+  assert.match(page, /<details class="drawer-section" open><summary id="subagent-sessions-heading">Conversations — Subagent<\/summary>/);
+  assert.match(page, /<details class="drawer-section" open><summary id="reports-heading">Hindsight Reports<\/summary>/);
+  assert.match(script, /#sessions-main/); assert.match(script, /#sessions-subagent/); assert.match(script, /x\.classification==='subagent'/);
+  assert.match(script, /No main conversations found\./); assert.match(script, /No subagent conversations found\./); assert.match(script, /No hindsight reports found\./);
+  assert.match(script, /#sessions-more/); assert.match(script, /summary,\[href\]/);
 });
