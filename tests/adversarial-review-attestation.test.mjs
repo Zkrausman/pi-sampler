@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -62,6 +62,30 @@ function validInput(fixture, reviews = [review({ id: 1, commitId: fixture.head }
     reviews: [reviews],
   };
 }
+
+test("adversarial review gate runs only trusted base code while reading PR head objects", async () => {
+  const workflow = await readFile(join(root, ".github", "workflows", "validate.yml"), "utf8");
+  const start = workflow.indexOf("  adversarial-review-attestation:");
+  const end = workflow.indexOf("\n  governance:", start);
+  assert.ok(start >= 0 && end > start, "adversarial-review-attestation job must remain present");
+  const job = workflow.slice(start, end);
+
+  assert.match(workflow, /^  pull_request_target:$/m);
+  assert.match(job, /if: github\.event_name == 'pull_request_target'/);
+  assert.match(job, /name: Adversarial review evidence/);
+  assert.match(job, /contents: read/);
+  assert.match(job, /pull-requests: read/);
+  assert.match(job, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+  assert.match(job, /persist-credentials: false/);
+  assert.doesNotMatch(job, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(job, /git fetch --no-tags origin "\$ADVERSARIAL_REVIEW_HEAD_SHA"/);
+  assert.match(job, /git cat-file -e "\$ADVERSARIAL_REVIEW_HEAD_SHA\^\{commit\}"/);
+  assert.match(job, /pulls\/\$\{ADVERSARIAL_REVIEW_PR_NUMBER\}\/reviews\?per_page=100/);
+  assert.match(job, /trap 'rm -f "\$askpass"' EXIT/);
+  assert.match(job, /trap 'rm -f "\$ADVERSARIAL_REVIEW_REVIEWS_FILE"' EXIT/);
+  assert.match(job, /node scripts\/validate-adversarial-review-attestation\.mjs/);
+  assert.doesNotMatch(job, /npm run validate:adversarial-review/);
+});
 
 test("adversarial review attestation accepts a privacy-safe marker plus independent API approval on the PR head", async () => {
   const fixture = await repository();

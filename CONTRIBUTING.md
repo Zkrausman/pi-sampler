@@ -38,7 +38,9 @@ node --input-type=module -e "import { generateReviewPacket, reviewPacketSha256 }
 
 Before opening or updating the PR, replace the placeholders in the marker with those exact SHAs and digest. The complete check runs in GitHub Actions because it securely retrieves the PR author and review metadata; do not copy reviewer identities or review JSON into the PR body.
 
-The required **Adversarial review evidence** CI job reads the PR body as a bounded environment value, fetches paginated review metadata using read-only pull-request permission into the runner temporary directory, never executes or logs either input, regenerates the packet from the checked-out base/head commits, and fails for missing, malformed, multiple, stale, mismatched, self-authored, or no-longer-effective approval evidence. CI verifies the exact commit-bound marker and GitHub review relationship; maintainers must still ensure the reviewer used fresh context before merge.
+The required **Adversarial review evidence** CI job runs via `pull_request_target` from the trusted PR base branch. It checks out and executes only that base-branch validator, fetches the PR head as Git commit objects without checking it out, and regenerates the packet from the immutable base/head commits. The job reads the PR body as a bounded environment value, fetches paginated review metadata using read-only pull-request permission into the runner temporary directory, never executes or logs either input, and removes the temporary review data. It fails for missing, malformed, multiple, stale, mismatched, self-authored, or no-longer-effective approval evidence. CI verifies the exact commit-bound marker and GitHub review relationship; maintainers must still ensure the reviewer used fresh context before merge.
+
+**Bootstrap limitation:** a PR that first adds or changes this trusted workflow cannot enforce itself, because `pull_request_target` uses the workflow already on the base branch. Review that bootstrap PR manually. After its trusted workflow is merged to `main`, subsequent AIDEV ticket PRs are enforced by the required **Adversarial review evidence** check.
 
 ## Contribution provenance and DCO
 

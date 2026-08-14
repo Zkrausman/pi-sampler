@@ -2,6 +2,10 @@ name: Validate Pi packages
 
 on:
   pull_request:
+  # This event resolves this workflow from the trusted PR base branch. It is
+  # deliberately separate from ordinary PR validation, which may run PR code.
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
   push:
     branches: [main]
 
@@ -66,9 +70,10 @@ jobs:
       - run: npm run validate:dco -- --base "$DCO_BASE_REF" --head "$DCO_HEAD_REF"
 
   adversarial-review-attestation:
-    # Ticket branches need a bounded, commit-bound marker and an independent
-    # GitHub approval. The body and review JSON remain local to this runner.
-    if: github.event_name == 'pull_request'
+    # Required status check name: Adversarial review evidence. This job runs
+    # only from pull_request_target, whose workflow comes from the trusted base.
+    # It never checks out or executes PR-head files.
+    if: github.event_name == 'pull_request_target'
     name: Adversarial review evidence
     timeout-minutes: 5
     runs-on: ubuntu-latest
@@ -84,30 +89,46 @@ jobs:
       ADVERSARIAL_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
       ADVERSARIAL_REVIEW_REVIEWS_FILE: ${{ runner.temp }}/adversarial-review-reviews.json
     steps:
-      # A complete commit graph includes the immutable PR base and lets Git
-      # prove its ancestry to the head. The job timeout and validator bounds
-      # limit CI work and untrusted body input.
+      # Check out only the immutable base commit containing this trusted
+      # workflow and validator. Do not use the PR merge ref or head ref here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
-      - run: git cat-file -e "$ADVERSARIAL_REVIEW_BASE_SHA^{commit}"
+          persist-credentials: false
+      - name: Fetch PR head commit objects without checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          askpass="$RUNNER_TEMP/adversarial-review-git-askpass"
+          trap 'rm -f "$askpass"' EXIT
+          umask 077
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$GH_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git fetch --no-tags origin "$ADVERSARIAL_REVIEW_HEAD_SHA"
+          git cat-file -e "$ADVERSARIAL_REVIEW_BASE_SHA^{commit}"
+          git cat-file -e "$ADVERSARIAL_REVIEW_HEAD_SHA^{commit}"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-      - name: Fetch GitHub review metadata
+      - name: Fetch GitHub review metadata and validate without logging private inputs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           umask 077
+          trap 'rm -f "$ADVERSARIAL_REVIEW_REVIEWS_FILE"' EXIT
           gh api --method GET --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/${ADVERSARIAL_REVIEW_PR_NUMBER}/reviews?per_page=100" > "$ADVERSARIAL_REVIEW_REVIEWS_FILE"
           test -s "$ADVERSARIAL_REVIEW_REVIEWS_FILE"
-      - name: Validate attestation without logging private inputs
-        run: |
-          set -euo pipefail
-          trap 'rm -f "$ADVERSARIAL_REVIEW_REVIEWS_FILE"' EXIT
-          npm run validate:adversarial-review
+          node scripts/validate-adversarial-review-attestation.mjs
 
   governance:
     timeout-minutes: 5
