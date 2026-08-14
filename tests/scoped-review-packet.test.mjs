@@ -36,6 +36,10 @@ function invoke(cwd, ...args) {
   return execFileSync(process.execPath, [generator, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
+function invokeWithEnvironment(cwd, environment, ...args) {
+  return execFileSync(process.execPath, [generator, ...args], { cwd, env: environment, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
 async function committedRange(cwd, files) {
   for (const [filePath, content] of Object.entries(files.base)) await writeFile(join(cwd, filePath), content);
   git(cwd, "add", "--", ...Object.keys(files.base));
@@ -91,8 +95,9 @@ test("review packet applies no-replace-objects to every Git invocation and disab
     process.chdir(fixture.cwd);
     try { await generateReviewPacket({ base: fixture.base, head: fixture.head }, { onGitCommand: (args) => commands.push(args) }); } finally { process.chdir(previous); }
     assert.ok(commands.length > 0);
-    assert.ok(commands.every((args) => args[0] === "--no-replace-objects"));
-    const diffCommands = commands.filter(([, command]) => command === "diff");
+    assert.ok(commands.every((args) => args.includes("--no-replace-objects")));
+    assert.ok(commands.every((args) => args.includes("--no-pager") && args.includes("trace2.eventTarget=") && args.includes("trace2.normalTarget=") && args.includes("trace2.perfTarget=") && args.includes("core.hooksPath=/dev/null")));
+    const diffCommands = commands.filter((args) => args.includes("diff"));
     assert.equal(diffCommands.length, 4);
     assert.ok(diffCommands.every((args) => args.includes("--no-ext-diff") && args.includes("--no-textconv")));
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
@@ -113,6 +118,53 @@ test("review packet rejects replacement refs and reads the original committed tr
     assert.match(packet.patches.find((patch) => patch.path === "tracked.txt").hunks.join("\n"), /changed 0/);
     assert.doesNotMatch(JSON.stringify(packet), /replacement content must not appear/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet ignores inherited Git repository-selection variables", async () => {
+  const target = await repository();
+  const decoy = await repository();
+  try {
+    await writeFile(join(decoy.cwd, "decoy-only.txt"), "different repository content\n");
+    git(decoy.cwd, "add", "decoy-only.txt");
+    git(decoy.cwd, "commit", "--quiet", "-m", "decoy content");
+    const packet = JSON.parse(invokeWithEnvironment(target.cwd, {
+      ...process.env,
+      GIT_DIR: join(decoy.cwd, ".git"),
+      GIT_WORK_TREE: decoy.cwd,
+      gIt_OpTiOnAl_LoCkS: "0",
+    }, "--base", target.base, "--head", target.head));
+    assert.equal(packet.base, target.base);
+    assert.equal(packet.head, target.head);
+    assert.deepEqual(packet.changedFiles, [{ path: "added.txt", status: "A" }, { path: "tracked.txt", status: "M" }]);
+  } finally {
+    await rm(target.cwd, { recursive: true, force: true });
+    await rm(decoy.cwd, { recursive: true, force: true });
+  }
+});
+
+test("review packet ignores inherited Git trace destinations, including a symlink", async (t) => {
+  const fixture = await repository();
+  const outside = await mkdtemp(join(tmpdir(), "pi-scoped-review-trace-"));
+  const marker = join(outside, "marker.log");
+  const traceLink = join(fixture.cwd, "trace-target");
+  try {
+    await writeFile(marker, "must not change\n");
+    try { await symlink(marker, traceLink, "file"); } catch (error) { t.skip(`symlinks unavailable: ${error.code}`); return; }
+    const packet = JSON.parse(invokeWithEnvironment(fixture.cwd, {
+      ...process.env,
+      GIT_TRACE: traceLink,
+      GIT_TRACE2: traceLink,
+      GIT_TRACE2_EVENT: traceLink,
+      GIT_TRACE2_NORMAL: traceLink,
+      GIT_TRACE2_PERF: traceLink,
+    }, "--base", fixture.base, "--head", fixture.head));
+    assert.equal(packet.base, fixture.base);
+    assert.equal(packet.head, fixture.head);
+    assert.equal(await readFile(marker, "utf8"), "must not change\n");
+  } finally {
+    await rm(outside, { recursive: true, force: true });
+    await rm(fixture.cwd, { recursive: true, force: true });
+  }
 });
 
 test("review packet supplies committed base/head immutable blobs for truncated added, modified, and deleted paths", async () => {

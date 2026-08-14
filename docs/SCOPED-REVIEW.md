@@ -15,9 +15,20 @@ command or captures environment data. It resolves both refs to commits, requires
 `base` to be an ancestor of `head`, reads only Git objects in `base..head`, and
 rejects binary/non-UTF-8 or oversized changed files and ranges with too many
 files. Every Git invocation uses the global `--no-replace-objects` option, so
-replacement refs cannot change resolved commits or their content; every Git diff
-invocation also uses `--no-ext-diff --no-textconv`, preventing configured external
-diff and textconv execution. The generated packet contains
+replacement refs cannot change resolved commits or their content. It runs Git
+with a fixed allowlist environment: every inherited variable whose name begins
+`GIT_` is removed case-insensitively, including repository-selection and trace
+variables. Command-line Git configuration (which takes precedence over system,
+global, and repository configuration) disables Trace2 destinations and hooks;
+Git diffs additionally use `--no-ext-diff --no-textconv`, preventing configured
+external diff and textconv execution. The fixed environment retains only the
+platform's basic process-location and temporary/home variables (`PATH` plus
+`SystemRoot`/`ComSpec`/`PATHEXT` and conventional home/temp variables on
+Windows; `PATH` and conventional home/temp variables elsewhere). The hook-path
+setting is defense in depth: Git does not normally run hooks for these read-only
+subcommands. On Unix `/dev/null` is a non-directory null device; on Windows,
+Git for Windows path interpretation of `/dev/null` is implementation-specific,
+but the read-only command set remains non-hook-invoking. The generated packet contains
 resolved commit IDs, changed-file paths/statuses, a diff stat, and bounded
 textual hunks.
 

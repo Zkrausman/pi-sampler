@@ -35,13 +35,35 @@ function argumentsFrom(argv) {
   if (options.validation !== undefined) bounded(options.validation, "--validation", LIMITS.argument);
   return options;
 }
-const GIT_GLOBAL_OPTIONS = Object.freeze(["--no-replace-objects"]);
+// These commands only read committed objects. Keep their process boundary explicit:
+// do not inherit Git's environment-controlled repository, tracing, or config inputs.
+const SAFE_ENVIRONMENT_NAMES = Object.freeze(process.platform === "win32"
+  ? ["PATH", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA"]
+  : ["PATH", "HOME", "TMPDIR", "TMP", "TEMP"]);
+const GIT_GLOBAL_OPTIONS = Object.freeze([
+  "--no-pager", "--no-replace-objects",
+  // Command-line config has precedence over repository, global, and system config.
+  "-c", "trace2.eventTarget=", "-c", "trace2.normalTarget=", "-c", "trace2.perfTarget=",
+  "-c", "color.ui=false", "-c", "core.hooksPath=/dev/null",
+]);
+function fixedGitEnvironment(source = process.env) {
+  const environment = {};
+  for (const expectedName of SAFE_ENVIRONMENT_NAMES) {
+    const entry = Object.entries(source).find(([name]) => name.toLowerCase() === expectedName.toLowerCase());
+    // The allowlist is also deliberately non-GIT_, even when Windows supplies mixed case names.
+    if (entry && !/^git_/i.test(entry[0])) environment[entry[0]] = entry[1];
+  }
+  return environment;
+}
 function gitArguments(args) { return [...GIT_GLOBAL_OPTIONS, ...args]; }
-async function git(args, options = {}, onGitCommand) {
+async function runGit(args, options = {}, onGitCommand) {
   const command = gitArguments(args);
   onGitCommand?.([...command]);
   try {
-    return (await run("git", command, { cwd: process.cwd(), windowsHide: true, encoding: "utf8", maxBuffer: LIMITS.diff, ...options })).stdout;
+    return (await run("git", command, {
+      cwd: process.cwd(), env: fixedGitEnvironment(), windowsHide: true,
+      encoding: "utf8", maxBuffer: LIMITS.diff, ...options,
+    })).stdout;
   } catch (error) {
     fail(`git ${args[0]} failed: ${String(error.stderr || error.message).trim() || "command failed"}`);
   }
@@ -121,7 +143,7 @@ function immutableMaterial(file, baseBlob, headBlob) {
 export async function generateReviewPacket(options, { onGitCommand } = {}) {
   // Enforce CLI-equivalent bounds for programmatic callers too.
   if (Object.hasOwn(options ?? {}, "output")) fail("filesystem output is unsupported; capture the returned packet or stdout");
-  const gitCommand = (args, commandOptions) => git(args, commandOptions, onGitCommand);
+  const gitCommand = (args, commandOptions) => runGit(args, commandOptions, onGitCommand);
   options = argumentsFrom(["--base", options?.base, "--head", options?.head, ...(options?.validation === undefined ? [] : ["--validation", options.validation])]);
   const base = (await gitCommand(["rev-parse", "--verify", "--end-of-options", `${options.base}^{commit}`], { maxBuffer: 128 })).trim();
   const head = (await gitCommand(["rev-parse", "--verify", "--end-of-options", `${options.head}^{commit}`], { maxBuffer: 128 })).trim();
