@@ -1,6 +1,6 @@
 {
   "name": "@zkrausman/pi-delivery-controller",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Provider-neutral Pi controller for explicitly approved work dispatch.",
   "license": "UNLICENSED",
   "private": false,
@@ -18,11 +18,11 @@
     "access": "restricted"
   },
   "dependencies": {
-    "@zkrausman/pi-ticket-lifecycle": "^0.1.0"
+    "@zkrausman/pi-ticket-lifecycle": "^0.2.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@zkrausman/pi-ticket-cost": ">=0.2.1 <1",
+    "@zkrausman/pi-ticket-cost": ">=0.2.3",
     "typebox": "*"
   },
   "pi": {

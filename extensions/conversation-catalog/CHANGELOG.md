@@ -1,5 +1,16 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.6
+
+### Patch Changes
+
+- e21868b: Redesign the standalone local viewer as an accessible reader-first archive with working opaque Pi handoff copying and event-local note management.
+- a80c6ac: Group standalone viewer conversations by the bounded local session-name marker without exposing raw names.
+- 5b8f1f8: Bound local conversation discovery and viewer replay snapshots, and clarify capped catalog availability and hindsight prompt recovery.
+- ea14e61: Add a strict local-only lifecycle closeout summary package and optional view-only ticket closeout section for hindsight reports.
+- Updated dependencies [ea14e61]
+  - @zkrausman/pi-ticket-closeout-summary@0.2.0
+
 ## 0.5.5
 
 ### Patch Changes

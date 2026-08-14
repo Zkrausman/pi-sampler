@@ -1,6 +1,6 @@
 {
   "name": "@zkrausman/pi-conversation-catalog",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Local Pi conversation browser and redaction-reviewed, evidence-cited hindsight reports.",
   "license": "UNLICENSED",
   "private": false,
@@ -22,7 +22,7 @@
     "access": "restricted"
   },
   "dependencies": {
-    "@zkrausman/pi-ticket-closeout-summary": "^0.1.0"
+    "@zkrausman/pi-ticket-closeout-summary": "^0.2.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
