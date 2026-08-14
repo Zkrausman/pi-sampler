@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.8
+
+### Patch Changes
+
+- 97318ab: Add fixed report context and glossary to cited hindsight reports.
+
 ## 0.5.7
 
 ### Patch Changes
