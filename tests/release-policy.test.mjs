@@ -16,7 +16,7 @@ test("withdrawn output optimizer cannot be published", async () => {
 
 test("release workflow requires a confirmed main-branch production release", async () => {
   const workflowPath = join(root, ".github", "workflows", "release.yml");
-  const workflow = await readFile(workflowPath, "utf8");
+  const workflow = (await readFile(workflowPath, "utf8")).replace(/\r\n/g, "\n");
 
   assert.match(workflow, /workflow_dispatch:\n    inputs:\n      confirm_release:\n[\s\S]*?required: true\n        type: boolean\n        default: false/);
   assert.match(workflow, /^permissions:\n  contents: read\n  packages: write$/m);
