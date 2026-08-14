@@ -1,0 +1,25 @@
+name: Wiki governance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate wiki governance
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: governance
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: governance/go.mod
+          cache-dependency-path: governance/go.sum
+      - run: go run ./cmd/wiki-governance validate -repo-root .

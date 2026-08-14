@@ -17,6 +17,41 @@ func repositoryRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
+func TestLoadPolicyAcceptsValidInputAndRejectsUnknownField(t *testing.T) {
+	root := t.TempDir()
+	policyPath := filepath.Join(root, "docs", "wiki-governance", "path-policy-v1.json")
+	if err := os.MkdirAll(filepath.Dir(policyPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	valid := `{
+		"schema_version": "wiki-governance-path-policy/v1",
+		"canonical_versioned": ["canonical/**"],
+		"generated_local": ["generated/**"],
+		"external_immutable_evidence": ["raw/**"],
+		"sensitive_never_commit": ["sensitive/**"]
+	}`
+	if err := os.WriteFile(policyPath, []byte(valid), 0644); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := LoadPolicy(root)
+	if err != nil {
+		t.Fatalf("valid policy rejected: %v", err)
+	}
+	if got := policy.Classify("canonical/page.md"); got != Canonical {
+		t.Fatalf("valid policy did not classify canonical path: %q", got)
+	}
+
+	invalid := strings.Replace(valid, "\n\t}", `,
+		"unreviewed_default": true
+	}`, 1)
+	if err := os.WriteFile(policyPath, []byte(invalid), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicy(root); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("policy with an unknown field was accepted: %v", err)
+	}
+}
+
 func TestPolicyClassifiesCollaborationBoundary(t *testing.T) {
 	policy, err := LoadPolicy(repositoryRoot(t))
 	if err != nil {
