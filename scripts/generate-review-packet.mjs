@@ -12,7 +12,7 @@ const LIMITS = Object.freeze({
   immutableEndpoint: 24 * 1024, immutablePath: 52 * 1024,
   immutableTotal: 128 * 1024, packet: 1024 * 1024,
 });
-const SAFE_PATH = /^[A-Za-z0-9][A-Za-z0-9._/@+,-]*$/;
+const SAFE_PATH_SEGMENT = /^[A-Za-z0-9.][A-Za-z0-9._@+,-]*$/;
 
 function fail(message) { throw new Error(message); }
 function byteLength(value) { return Buffer.byteLength(JSON.stringify(value), "utf8"); }
@@ -68,8 +68,12 @@ async function runGit(args, options = {}, onGitCommand) {
     fail(`git ${args[0]} failed: ${String(error.stderr || error.message).trim() || "command failed"}`);
   }
 }
-function safeChangedPath(filePath) {
-  if (!filePath || filePath.length > LIMITS.path || !SAFE_PATH.test(filePath) || filePath.includes("//") || filePath.split("/").includes("..") || filePath.split("/").includes(".git")) fail(`changed path is unsafe or unsupported: ${JSON.stringify(filePath)}`);
+export function safeChangedPath(filePath) {
+  const segments = typeof filePath === "string" ? filePath.split("/") : [];
+  if (!filePath || filePath.length > LIMITS.path || filePath.includes("\\0") || filePath.includes("\\") || filePath.startsWith("/") || filePath.includes("//")
+    || segments.some((segment) => !segment || segment === "." || segment === ".." || segment === ".git" || !SAFE_PATH_SEGMENT.test(segment))) {
+    fail(`changed path is unsafe or unsupported: ${JSON.stringify(filePath)}`);
+  }
 }
 function changedFiles(raw) {
   const parts = raw.split("\0");
@@ -168,5 +172,20 @@ export async function generateReviewPacket(options, { onGitCommand } = {}) {
   if (byteLength(packet) > LIMITS.packet) fail("packet exceeds fixed packet bounds; produce a smaller range");
   return packet;
 }
-async function main() { try { process.stdout.write(`${JSON.stringify(await generateReviewPacket(argumentsFrom(process.argv.slice(2))), null, 2)}\n`); } catch (error) { process.stderr.write(`review-packet: ${error.message}\n`); process.exitCode = 1; } }
+/** The canonical bytes used for local packet exchange and attestation digests. */
+export function serializeReviewPacket(packet) {
+  return `${JSON.stringify(packet, null, 2)}\n`;
+}
+export function reviewPacketSha256(packet) {
+  return createHash("sha256").update(serializeReviewPacket(packet), "utf8").digest("hex");
+}
+async function main() {
+  try {
+    const packet = await generateReviewPacket(argumentsFrom(process.argv.slice(2)));
+    process.stdout.write(serializeReviewPacket(packet));
+  } catch (error) {
+    process.stderr.write(`review-packet: ${error.message}\n`);
+    process.exitCode = 1;
+  }
+}
 if (process.argv[1]?.endsWith("generate-review-packet.mjs")) await main();

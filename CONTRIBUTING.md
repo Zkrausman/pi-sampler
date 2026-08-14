@@ -20,6 +20,28 @@ Thanks for improving pi-sampler. By submitting a pull request, you agree that yo
 
   The CI validator accepts an exemption only when that exemption file is added or modified in the same PR, so an older exemption cannot cover later package work.
 
+## Adversarial review evidence for AIDEV ticket branches
+
+AIDEV ticket branches use this strict convention: `zkrausman/aidev-<positive-ticket-number>-<lowercase-kebab-description>` (for example, `zkrausman/aidev-108-enforce-adversarial-review-evidence`). A pull request whose head branch matches that exact convention requires an independent adversarial review in a fresh context before merge. Branches that do not match it do not require an attestation; a near match such as `zkrausman/AIDEV-108-example` is intentionally not a ticket branch.
+
+The reviewer keeps their report, prompts, sessions, credentials, and any generated review material local. Review the deterministic commit-only packet for the exact PR base and head, resolve every blocker or high finding, then add **one** single-line marker to the PR body. The marker is metadata only; do not include review text, session identifiers, personal identifiers, reviewer identities, or credentials. The independent reviewer must also submit a GitHub `APPROVED` review on that exact PR head commit; CI obtains the reviewer login privately from GitHub's review API and rejects an approval by the PR author.
+
+```html
+<!-- pi-sampler-adversarial-review-attestation:v2 {"format":"pi-sampler.adversarial-review-attestation","version":2,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","outcome":"clean","packetSha256":"<lowercase-sha256-of-the-commit-only-packet>"} -->
+```
+
+`outcome` must be exactly `clean`, which attests that no blocker or high finding remains unresolved. CI evaluates only each login's latest GitHub review state: a later comment, change request, dismissal, or review on another commit invalidates that login's earlier approval. To calculate the digest locally, use the same immutable commits that will be in the PR (for example `base=$(git rev-parse origin/main)` and `head=$(git rev-parse HEAD)`), then run:
+
+```sh
+node --input-type=module -e "import { generateReviewPacket, reviewPacketSha256 } from './scripts/generate-review-packet.mjs'; const [base, head] = process.argv.slice(1); console.log(reviewPacketSha256(await generateReviewPacket({ base, head })));" "$base" "$head"
+```
+
+Before opening or updating the PR, replace the placeholders in the marker with those exact SHAs and digest. The complete check runs in GitHub Actions because it securely retrieves the PR author and review metadata; do not copy reviewer identities or review JSON into the PR body.
+
+The required **Adversarial review evidence** CI job runs from trusted workflow definitions: `pull_request_target` handles PR lifecycle changes, and default-branch `pull_request_review` events rerun it whenever a review is submitted, edited, or dismissed. It checks out and executes only the immutable PR base-branch validator, fetches the PR head as Git commit objects without checking it out, and regenerates the packet from the immutable base/head commits. The job reads the PR body as a bounded environment value, fetches paginated review metadata using read-only pull-request permission into the runner temporary directory, never executes or logs either input, and removes the temporary review data. It fails for missing, malformed, multiple, stale, mismatched, self-authored, or no-longer-effective approval evidence. CI verifies the exact commit-bound marker and GitHub review relationship; maintainers must still ensure the reviewer used fresh context before merge.
+
+**Bootstrap limitation:** a PR that first adds or changes this trusted workflow cannot enforce itself, because `pull_request_target` uses the workflow already on the base branch. Review that bootstrap PR manually. After its trusted workflow is merged to `main`, subsequent AIDEV ticket PRs are enforced by the required **Adversarial review evidence** check.
+
 ## Contribution provenance and DCO
 
 Every pull-request commit must carry a Developer Certificate of Origin (DCO)
@@ -50,6 +72,7 @@ npm ci
 npm test
 npm run build
 npm run validate:compliance
+npm run validate:adversarial-review # requires the PR base/head/branch/body environment values
 cd governance; go test -race ./...
 ```
 

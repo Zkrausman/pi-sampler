@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const generator = join(root, "scripts", "generate-review-packet.mjs");
-const { generateReviewPacket } = await import(pathToFileURL(generator).href);
+const { generateReviewPacket, safeChangedPath } = await import(pathToFileURL(generator).href);
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -56,6 +56,22 @@ async function committedRange(cwd, files) {
 function immutable(packet, filePath) {
   return packet.immutableMaterial.find((entry) => entry.path === filePath);
 }
+
+test("review packet accepts safe dot-prefixed tracked path segments and rejects unsafe paths", async () => {
+  const fixture = await repository();
+  try {
+    await mkdir(join(fixture.cwd, ".changeset"));
+    await writeFile(join(fixture.cwd, ".changeset", "review-maintenance.md"), "safe tracked metadata\n");
+    git(fixture.cwd, "add", ".changeset/review-maintenance.md");
+    git(fixture.cwd, "commit", "--quiet", "-m", "add dot-prefixed tracked path");
+    const packet = JSON.parse(invoke(fixture.cwd, "--base", fixture.head, "--head", git(fixture.cwd, "rev-parse", "HEAD")));
+    assert.deepEqual(packet.changedFiles, [{ path: ".changeset/review-maintenance.md", status: "A" }]);
+    for (const unsafe of ["/absolute.txt", "", "one//two", "one/./two", "one/../two", ".git/config", "one/.git/two", "one\\two", "one/\0two", "one space/two"]) {
+      assert.throws(() => safeChangedPath(unsafe), /changed path is unsafe or unsupported/);
+    }
+    for (const safe of [".changeset/review.md", ".editorconfig", "docs/.well-known/example.txt"]) assert.doesNotThrow(() => safeChangedPath(safe));
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
 
 test("review packet is deterministic, bounded, stdout-only, and embeds immutable material for byte-truncated hunks", async () => {
   const fixture = await repository();
