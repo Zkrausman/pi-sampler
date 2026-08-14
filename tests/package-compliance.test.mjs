@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createComplianceArtifacts, publishablePackageDirectories, validatePackageCompliance } from "../scripts/generate-package-compliance.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const normalizeLineEndings = (value) => value.replace(/\r\n/g, "\n");
 
 test("every publishable package has current versioned notice and deterministic CycloneDX SBOM", async () => {
   const packages = await validatePackageCompliance({ repositoryRoot: root });
@@ -14,8 +15,8 @@ test("every publishable package has current versioned notice and deterministic C
   const workspacePackages = new Map(packages.map(({ manifest }) => [manifest.name, manifest]));
   for (const { directory, manifest } of packages) {
     const { notice, sbom } = createComplianceArtifacts(manifest, workspacePackages);
-    assert.equal(await readFile(join(directory, "THIRD-PARTY-NOTICES.md"), "utf8"), notice);
-    assert.equal(await readFile(join(directory, "sbom.cdx.json"), "utf8"), sbom);
+    assert.equal(normalizeLineEndings(await readFile(join(directory, "THIRD-PARTY-NOTICES.md"), "utf8")), notice);
+    assert.equal(normalizeLineEndings(await readFile(join(directory, "sbom.cdx.json"), "utf8")), sbom);
     const parsed = JSON.parse(sbom);
     assert.equal(parsed.bomFormat, "CycloneDX");
     assert.equal(parsed.specVersion, "1.5");

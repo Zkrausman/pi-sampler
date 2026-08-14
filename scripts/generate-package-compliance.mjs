@@ -130,8 +130,10 @@ export async function validatePackageCompliance({ repositoryRoot = root } = {}) 
     assert.ok(manifest.files?.includes(noticeFile), `${manifest.name}: package files must include ${noticeFile}`);
     assert.ok(manifest.files?.includes(sbomFile), `${manifest.name}: package files must include ${sbomFile}`);
     const expected = createComplianceArtifacts(manifest, workspacePackages);
-    assert.equal(await readFile(join(directory, noticeFile), "utf8"), expected.notice, `${manifest.name}: ${noticeFile} is stale; run npm run generate:compliance`);
-    assert.equal(await readFile(join(directory, sbomFile), "utf8"), expected.sbom, `${manifest.name}: ${sbomFile} is stale; run npm run generate:compliance`);
+    const notice = (await readFile(join(directory, noticeFile), "utf8")).replace(/\r\n/g, "\n");
+    assert.equal(notice, expected.notice, `${manifest.name}: ${noticeFile} is stale; run npm run generate:compliance`);
+    const sbom = (await readFile(join(directory, sbomFile), "utf8")).replace(/\r\n/g, "\n");
+    assert.equal(sbom, expected.sbom, `${manifest.name}: ${sbomFile} is stale; run npm run generate:compliance`);
   }
   return packages;
 }
