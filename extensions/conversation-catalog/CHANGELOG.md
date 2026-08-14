@@ -1,5 +1,12 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.5.7
+
+### Patch Changes
+
+- 31c5237: Return the complete hard-bounded opaque conversation catalog when the local viewer opens, keeping Main and Subagent sections complete without catalog pagination.
+- 5b18e26: Restore the standalone conversation viewer's dark green palette while retaining its reader-first accessibility behavior.
+
 ## 0.5.6
 
 ### Patch Changes
