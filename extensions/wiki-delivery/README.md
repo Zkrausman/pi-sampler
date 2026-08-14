@@ -74,7 +74,12 @@ The controller directs the agent through capture, ingestion, canonical-page
 creation, observation, linting, and attestations. After those steps and the
 canonical Wiki changes are committed, call `wiki_delivery_finalize` with the
 run ID and that clean commit SHA. The extension writes a manifest only when the
-installed validator accepts it.
+installed validator accepts it, at `evidence/delivery/<TICKET>.json`.
+
+After creating a pull request, synchronize its number and URL from the consumer
+project root with `node <extension>/src/sync-pr-evidence.mjs <TICKET>`. Without
+a manifest-path argument, synchronization reads and updates
+`evidence/delivery/<TICKET>.json`.
 
 ## Prerequisites
 

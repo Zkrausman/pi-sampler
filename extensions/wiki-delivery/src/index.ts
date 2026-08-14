@@ -13,6 +13,7 @@ import {
 } from "./controller.mjs";
 
 const REQUIRED_WIKI_TOOL_SET = new Set(REQUIRED_WIKI_TOOLS);
+const DELIVERY_MANIFEST_DIRECTORY = "evidence/delivery";
 const runs = new Map<string, ObservedWikiLifecycle>();
 
 function toolDetails(event: { details?: unknown }): Record<string, unknown> {
@@ -208,7 +209,7 @@ export default function wikiDeliveryController(pi: ExtensionAPI) {
   pi.registerTool({
     name: "wiki_delivery_finalize",
     label: "Wiki Delivery Finalize",
-    description: "Write a WORK-104 delivery manifest and run the authoritative Go validator after every Wiki stage is observed and attested.",
+    description: "Write a delivery manifest to evidence/delivery/<TICKET>.json and run the authoritative Go validator after every Wiki stage is observed and attested.",
     parameters: Type.Object({ run_id: Type.String(), expected_delivery_commit: Type.String() }),
     async execute(_id, params) {
       const run = runs.get(params.run_id);
@@ -218,16 +219,16 @@ export default function wikiDeliveryController(pi: ExtensionAPI) {
       try {
         const manifest = run.manifest(params.expected_delivery_commit);
         await assertExpectedDeliveryCommit({ inspect: async (expected: string) => inspectCommit(pi, expected) }, manifest.commit_sha);
-        manifestPath = resolve(process.cwd(), "evidence", "delivery", `${manifest.ticket_id}.json`);
+        manifestPath = resolve(process.cwd(), DELIVERY_MANIFEST_DIRECTORY, `${manifest.ticket_id}.json`);
         await mkdir(dirname(manifestPath), { recursive: true });
         await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
         manifestWritten = true;
         const result = await pi.exec("go", ["run", "./cmd/delivery-evidence-validator", "-manifest", relative(process.cwd(), manifestPath), "-repo-root", ".", "-expected-commit", manifest.commit_sha]);
         if (result.code !== 0) throw new DeliveryFailure("validation", "manifest_validation_failed");
-        const outcome = { run_id: params.run_id, status: "delivered", manifest_path: `delivery/evidence/${manifest.ticket_id}.json`, expected_delivery_commit: manifest.commit_sha };
+        const outcome = { run_id: params.run_id, status: "delivered", manifest_path: `${DELIVERY_MANIFEST_DIRECTORY}/${manifest.ticket_id}.json`, expected_delivery_commit: manifest.commit_sha };
         record(outcome);
         runs.delete(params.run_id);
-        return { content: [{ type: "text", text: `Wiki delivery manifest validated: delivery/evidence/${manifest.ticket_id}.json` }], details: outcome };
+        return { content: [{ type: "text", text: `Wiki delivery manifest validated: ${DELIVERY_MANIFEST_DIRECTORY}/${manifest.ticket_id}.json` }], details: outcome };
       } catch (error) {
         // Do not leave an unvalidated delivery manifest for an operator to
         // mistake as evidence. The safe local session receipt remains auditable.
