@@ -19,6 +19,7 @@
     "validate:pi-extensions": "node scripts/validate-pi-extensions.mjs",
     "validate:changesets": "node scripts/validate-changesets.mjs",
     "validate:dco": "node scripts/validate-dco.mjs",
+    "validate:adversarial-review": "node scripts/validate-adversarial-review-attestation.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version && npm run generate:compliance",
     "release": "changeset publish",

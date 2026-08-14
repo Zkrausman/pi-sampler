@@ -65,6 +65,31 @@ jobs:
           node-version: 22
       - run: npm run validate:dco -- --base "$DCO_BASE_REF" --head "$DCO_HEAD_REF"
 
+  adversarial-review-attestation:
+    # Ticket branches must supply only a bounded, commit-bound marker; review text stays local.
+    if: github.event_name == 'pull_request'
+    name: Adversarial review evidence
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    env:
+      ADVERSARIAL_REVIEW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      ADVERSARIAL_REVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      ADVERSARIAL_REVIEW_HEAD_REF: ${{ github.head_ref }}
+      ADVERSARIAL_REVIEW_PR_BODY: ${{ github.event.pull_request.body }}
+    steps:
+      # A complete commit graph includes the immutable PR base and lets Git
+      # prove its ancestry to the head. The job timeout and validator bounds
+      # limit CI work and untrusted body input.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - run: git cat-file -e "$ADVERSARIAL_REVIEW_BASE_SHA^{commit}"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - run: npm run validate:adversarial-review
+
   governance:
     timeout-minutes: 5
     runs-on: ubuntu-latest
