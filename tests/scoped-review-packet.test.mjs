@@ -36,7 +36,24 @@ function invoke(cwd, ...args) {
   return execFileSync(process.execPath, [generator, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
-test("review packet is deterministic, bounded, stdout-only, and excludes untracked files", async () => {
+async function committedRange(cwd, files) {
+  for (const [filePath, content] of Object.entries(files.base)) await writeFile(join(cwd, filePath), content);
+  git(cwd, "add", "--", ...Object.keys(files.base));
+  git(cwd, "commit", "--quiet", "-m", "range base");
+  const base = git(cwd, "rev-parse", "HEAD");
+  for (const filePath of Object.keys(files.base)) if (!(filePath in files.head)) git(cwd, "rm", "--quiet", filePath);
+  for (const [filePath, content] of Object.entries(files.head)) await writeFile(join(cwd, filePath), content);
+  const toAdd = Object.keys(files.head).filter((filePath) => files.head[filePath] !== files.base[filePath]);
+  if (toAdd.length) git(cwd, "add", "--", ...toAdd);
+  git(cwd, "commit", "--quiet", "-m", "range head");
+  return { base, head: git(cwd, "rev-parse", "HEAD") };
+}
+
+function immutable(packet, filePath) {
+  return packet.immutableMaterial.find((entry) => entry.path === filePath);
+}
+
+test("review packet is deterministic, bounded, stdout-only, and embeds immutable material for byte-truncated hunks", async () => {
   const fixture = await repository();
   try {
     const args = ["--base", fixture.base, "--head", fixture.head, "--validation", "targeted test: passed"];
@@ -56,24 +73,92 @@ test("review packet is deterministic, bounded, stdout-only, and excludes untrack
     assert.equal(packet.incomplete, true);
     assert.deepEqual(packet.omittedHunks, ["tracked.txt"]);
     assert.deepEqual(packet.byteTruncatedHunks, ["tracked.txt"]);
+    const material = immutable(packet, "tracked.txt");
+    assert.equal(material.status, "M");
+    assert.equal(material.base.content, "before\n");
+    assert.match(material.head.content, /x{9000}/);
+    assert.match(material.base.objectId, /^[0-9a-f]{40}$/);
+    assert.match(material.head.objectId, /^[0-9a-f]{40}$/);
     await assert.rejects(lstat(join(fixture.cwd, ".review", "packet.json")), { code: "ENOENT" });
-  } finally {
-    await rm(fixture.cwd, { recursive: true, force: true });
-  }
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet disables external diff and textconv on every diff invocation", async () => {
+  const fixture = await repository();
+  try {
+    const commands = [];
+    const previous = process.cwd();
+    process.chdir(fixture.cwd);
+    try { await generateReviewPacket({ base: fixture.base, head: fixture.head }, { onGitCommand: (args) => commands.push(args) }); } finally { process.chdir(previous); }
+    const diffCommands = commands.filter(([command]) => command === "diff");
+    assert.equal(diffCommands.length, 4);
+    assert.ok(diffCommands.every((args) => args.includes("--no-ext-diff") && args.includes("--no-textconv")));
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet supplies committed base/head immutable blobs for truncated added, modified, and deleted paths", async () => {
+  const fixture = await repository();
+  try {
+    const large = (label) => `${label}\n${"x".repeat(9_000)}\n`;
+    const range = await committedRange(fixture.cwd, { base: { "range-deleted.txt": large("deleted base"), "range-modified.txt": large("modified base") }, head: { "range-added.txt": large("added head"), "range-modified.txt": large("modified head") } });
+    const packet = JSON.parse(invoke(fixture.cwd, "--base", range.base, "--head", range.head));
+    assert.deepEqual(packet.omittedHunks, ["range-added.txt", "range-deleted.txt", "range-modified.txt"]);
+    assert.deepEqual(packet.immutableMaterial.map(({ path }) => path), packet.omittedHunks);
+    const added = immutable(packet, "range-added.txt");
+    assert.equal(added.status, "A"); assert.equal(added.base, null); assert.match(added.head.content, /added head/);
+    const deleted = immutable(packet, "range-deleted.txt");
+    assert.equal(deleted.status, "D"); assert.match(deleted.base.content, /deleted base/); assert.equal(deleted.head, null);
+    const modified = immutable(packet, "range-modified.txt");
+    assert.equal(modified.status, "M"); assert.match(modified.base.content, /modified base/); assert.match(modified.head.content, /modified head/);
+    for (const material of packet.immutableMaterial) for (const endpoint of [material.base, material.head]) if (endpoint) {
+      assert.equal(git(fixture.cwd, "cat-file", "blob", endpoint.objectId), endpoint.content.trimEnd());
+    }
+    await writeFile(join(fixture.cwd, "range-added.txt"), "mutable checkout tampering\n");
+    await writeFile(join(fixture.cwd, "range-modified.txt"), "mutable checkout tampering\n");
+    await writeFile(join(fixture.cwd, "range-deleted.txt"), "mutable checkout tampering\n");
+    assert.doesNotMatch(JSON.stringify(packet.immutableMaterial), /mutable checkout tampering/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet fails closed when immutable material exceeds fixed packet bounds", async () => {
+  const fixture = await repository();
+  try {
+    const range = await committedRange(fixture.cwd, { base: { "large.txt": "base\n" }, head: { "large.txt": `${"x".repeat(24 * 1024 + 1)}\n` } });
+    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /large\.txt cannot embed immutable material: head committed blob exceeds 24576 bytes; produce a smaller range/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet embeds immutable endpoints for hunk-count omission", async () => {
+  const fixture = await repository();
+  try {
+    const lines = Array.from({ length: 48 }, (_, index) => `line ${index}`).join("\n");
+    await writeFile(join(fixture.cwd, "many-hunks.txt"), `${lines}\n`); git(fixture.cwd, "add", "many-hunks.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "many hunks base");
+    const base = git(fixture.cwd, "rev-parse", "HEAD");
+    const changed = Array.from({ length: 48 }, (_, index) => index % 8 ? `line ${index}` : `changed ${index}`).join("\n");
+    await writeFile(join(fixture.cwd, "many-hunks.txt"), `${changed}\n`); git(fixture.cwd, "add", "many-hunks.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "many hunks head");
+    const packet = JSON.parse(invoke(fixture.cwd, "--base", base, "--head", git(fixture.cwd, "rev-parse", "HEAD")));
+    assert.deepEqual(packet.omittedHunks, ["many-hunks.txt"]);
+    assert.deepEqual(packet.byteTruncatedHunks, []);
+    const material = immutable(packet, "many-hunks.txt");
+    assert.equal(material.status, "M"); assert.match(material.base.content, /line 0/); assert.match(material.head.content, /changed 0/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet rejects oversized committed changes", async () => {
+  const fixture = await repository();
+  try {
+    await writeFile(join(fixture.cwd, "oversized.txt"), "x".repeat(128 * 1024 + 1)); git(fixture.cwd, "add", "oversized.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "oversized");
+    assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", git(fixture.cwd, "rev-parse", "HEAD")), /review-packet: oversized\.txt exceeds 131072 bytes/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
 test("review packet rejects the removed filesystem-output contract", async () => {
   const fixture = await repository();
   try {
     assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", fixture.head, "--output", ".review/packet.json"), /review-packet: expected supported option/);
-    const previous = process.cwd();
-    process.chdir(fixture.cwd);
-    try {
-      await assert.rejects(generateReviewPacket({ base: fixture.base, head: fixture.head, output: ".review/packet.json" }), /filesystem output is unsupported/);
-    } finally { process.chdir(previous); }
-  } finally {
-    await rm(fixture.cwd, { recursive: true, force: true });
-  }
+    const previous = process.cwd(); process.chdir(fixture.cwd);
+    try { await assert.rejects(generateReviewPacket({ base: fixture.base, head: fixture.head, output: ".review/packet.json" }), /filesystem output is unsupported/); } finally { process.chdir(previous); }
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
 test("review packet never follows a parent-directory symlink because it performs no filesystem publication", async (t) => {
@@ -87,59 +172,14 @@ test("review packet never follows a parent-directory symlink because it performs
     assert.equal(await readFile(join(outside, "marker.json"), "utf8"), "must not change");
     await assert.rejects(lstat(join(outside, "packet.json")), { code: "ENOENT" });
     await rm(outside, { recursive: true, force: true });
-  } finally {
-    await rm(fixture.cwd, { recursive: true, force: true });
-  }
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
 test("review packet rejects binary committed changes", async () => {
   const fixture = await repository();
   try {
-    await writeFile(join(fixture.cwd, "binary.bin"), Buffer.from([0, 1, 2]));
-    git(fixture.cwd, "add", "binary.bin");
-    git(fixture.cwd, "commit", "--quiet", "-m", "binary");
-    const binaryHead = git(fixture.cwd, "rev-parse", "HEAD");
-    assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", binaryHead), /review-packet: binary\.bin is binary/);
-  } finally {
-    await rm(fixture.cwd, { recursive: true, force: true });
-  }
-});
-
-test("review packet rejects oversized committed changes", async () => {
-  const fixture = await repository();
-  try {
-    await writeFile(join(fixture.cwd, "oversized.txt"), "x".repeat(128 * 1024 + 1));
-    git(fixture.cwd, "add", "oversized.txt");
-    git(fixture.cwd, "commit", "--quiet", "-m", "oversized");
-    const oversizedHead = git(fixture.cwd, "rev-parse", "HEAD");
-    assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", oversizedHead), /review-packet: oversized\.txt exceeds 131072 bytes/);
-  } finally {
-    await rm(fixture.cwd, { recursive: true, force: true });
-  }
-});
-
-test("review packet advertises omitted hunks and requires bounded follow-up inspection", async () => {
-  const fixture = await repository();
-  try {
-    const lines = Array.from({ length: 48 }, (_, index) => `line ${index}`).join("\n");
-    await writeFile(join(fixture.cwd, "tracked.txt"), `${lines}\n`);
-    git(fixture.cwd, "add", "tracked.txt");
-    git(fixture.cwd, "commit", "--quiet", "-m", "many hunks base");
-    const base = git(fixture.cwd, "rev-parse", "HEAD");
-    const changed = Array.from({ length: 48 }, (_, index) => index % 8 ? `line ${index}` : `changed ${index}`).join("\n");
-    await writeFile(join(fixture.cwd, "tracked.txt"), `${changed}\n`);
-    git(fixture.cwd, "add", "tracked.txt");
-    git(fixture.cwd, "commit", "--quiet", "-m", "many hunks head");
-    const head = git(fixture.cwd, "rev-parse", "HEAD");
-    const packet = JSON.parse(invoke(fixture.cwd, "--base", base, "--head", head));
-    assert.equal(packet.incomplete, true);
-    assert.deepEqual(packet.omittedHunks, ["tracked.txt"]);
-    assert.equal(packet.patches.find((patch) => patch.path === "tracked.txt").omittedHunks, true);
-    assert.deepEqual(packet.byteTruncatedHunks, []);
-    const template = await readFile(join(root, ".pi", "agents", "scoped-reviewer.md"), "utf8");
-    assert.match(template, /inspect every file named in `omittedHunks`/i);
-    assert.match(template, /byte-truncated/i);
-    assert.match(template, /scoped\s+review cannot be completed/i);
+    await writeFile(join(fixture.cwd, "binary.bin"), Buffer.from([0, 1, 2])); git(fixture.cwd, "add", "binary.bin"); git(fixture.cwd, "commit", "--quiet", "-m", "binary");
+    assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", git(fixture.cwd, "rev-parse", "HEAD")), /review-packet: binary\.bin is binary/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
@@ -147,25 +187,16 @@ test("review packet enforces file and validation-payload bounds", async () => {
   const fixture = await repository();
   try {
     for (let index = 0; index < 201; index += 1) await writeFile(join(fixture.cwd, `cap-${index}.txt`), "x\n");
-    git(fixture.cwd, "add", ".");
-    git(fixture.cwd, "commit", "--quiet", "-m", "file cap");
-    const capHead = git(fixture.cwd, "rev-parse", "HEAD");
-    assert.throws(() => invoke(fixture.cwd, "--base", fixture.head, "--head", capHead), /changed-file list exceeds bounds/);
+    git(fixture.cwd, "add", "."); git(fixture.cwd, "commit", "--quiet", "-m", "file cap");
+    assert.throws(() => invoke(fixture.cwd, "--base", fixture.head, "--head", git(fixture.cwd, "rev-parse", "HEAD")), /changed-file list exceeds bounds/);
     assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", fixture.head, "--validation", "x".repeat(4097)), /validation is missing, unsafe, or exceeds its bound/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
-test("scoped reviewer template enforces the packet boundary and escalation contract", async () => {
+test("scoped reviewer template enforces immutable packet-only incomplete review", async () => {
   const template = await readFile(join(root, ".pi", "agents", "scoped-reviewer.md"), "utf8");
-  assert.match(template, /^name: scoped-reviewer$/m);
-  assert.match(template, /^tools: read$/m);
-  assert.match(template, /^thinking: medium$/m);
-  assert.match(template, /^defaultContext: fresh$/m);
-  assert.match(template, /packet-listed changed files/i);
-  assert.match(template, /untracked files, history outside the packet range,\s+environment data, credentials, sessions, or governance/i);
-  assert.match(template, /direct import/i);
-  assert.match(template, /Report only \*\*blocker\*\* or \*\*high\*\* findings/i);
-  assert.match(template, /Standard reviewer/i);
-  assert.match(template, /High-reasoning escalation/i);
-  assert.match(template, /retains the same\s+packet and inspection boundary/i);
+  assert.match(template, /^name: scoped-reviewer$/m); assert.match(template, /^tools: read$/m); assert.match(template, /^thinking: medium$/m); assert.match(template, /^defaultContext: fresh$/m);
+  assert.match(template, /immutableMaterial/i); assert.match(template, /not.*working tree|never.*working tree/i); assert.match(template, /Do not read\s+working-tree source, direct imports/i);
+  assert.match(template, /untracked files,\s+history outside the packet range, environment data, credentials, sessions/i);
+  assert.match(template, /Report only \*\*blocker\*\* or \*\*high\*\* findings/i); assert.match(template, /High-reasoning escalation/i);
 });
