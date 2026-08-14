@@ -1,6 +1,6 @@
 {
   "name": "@zkrausman/pi-conversation-catalog",
-  "version": "0.5.8",
+  "version": "0.6.0",
   "description": "Local Pi conversation browser and redaction-reviewed, evidence-cited hindsight reports.",
   "license": "Apache-2.0",
   "private": false,
