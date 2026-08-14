@@ -16,6 +16,9 @@ and governance policy.
 | [Delivery controller](extensions/delivery-controller/README.md) | Dispatch one explicitly supplied work item to a configured provider. It does not select work, merge code, or update a tracker. | [Install and use](extensions/delivery-controller/README.md) |
 | [Conversation catalog](extensions/conversation-catalog/README.md) | Browses saved Pi conversations locally, manages secure per-session hindsight notes, and creates redaction-reviewed, evidence-cited reports. | [Install and use](extensions/conversation-catalog/README.md) |
 | [Wiki delivery](extensions/wiki-delivery/README.md) | Coordinates a fail-closed LLM Wiki delivery lifecycle and validates its manifest. | [Install and use](extensions/wiki-delivery/README.md) |
+| [Ticket closeout summary](extensions/ticket-closeout-summary/README.md) | Local read-only summaries of finalized Pi ticket lifecycle receipts. | [Install and use](extensions/ticket-closeout-summary/README.md) |
+| [Ticket cost](extensions/ticket-cost/README.md) | Local, session-scoped Pi ticket cost receipts. | [Install and use](extensions/ticket-cost/README.md) |
+| [Ticket lifecycle](extensions/ticket-lifecycle/README.md) | Local, tracker-neutral durable ticket lifecycle and aggregate cost receipts. | [Install and use](extensions/ticket-lifecycle/README.md) |
 | Pi Excalidraw (project-local) | Creates and reads local `.excalidraw` architecture diagrams with deterministic parsing; it makes no cloud/API calls. | [Load locally](#pi-excalidraw-project-local-extension) |
 
 ## Install an extension

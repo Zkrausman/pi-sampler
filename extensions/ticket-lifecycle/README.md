@@ -6,6 +6,16 @@ contact a tracker, make model/network calls, parse chat text, or register Pi
 tools/events. A trusted ticket-loop adapter supplies only authoritative,
 versioned transition data.
 
+## Install
+
+This package is published to GitHub Packages. Configure its scoped registry, then authenticate with GitHub Packages before `pi install -l`:
+
+```powershell
+npm config set @zkrausman:registry https://npm.pkg.github.com --location=project
+npm login --scope=@zkrausman --auth-type=legacy --registry=https://npm.pkg.github.com
+pi install -l npm:@zkrausman/pi-ticket-lifecycle
+```
+
 ## Lifecycle contract
 
 The adapter appends v1 transitions in this order:

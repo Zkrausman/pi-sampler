@@ -136,3 +136,7 @@ From the repository root:
 ```powershell
 node --test tests/delivery-controller-generic.test.mjs tests/delivery-controller-lifecycle.test.mjs
 ```
+
+## Providers and Worker
+
+The controller currently delegates dispatch to the **Jules Provider** (`jules-provider.mjs` and `jules-adapter.mjs`), which processes the dispatch utilizing a Jules prompt pack. Additionally, the extension includes a local `pi-review-worker.mjs` that can execute isolated Git worktree reviews and generate feedback according to the `project-review/v1` contract.
