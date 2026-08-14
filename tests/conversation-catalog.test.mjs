@@ -23,7 +23,7 @@ const other = { ...selected, id: "other-session-id", name: "Other saved session"
 
 test("unselected browser labels expose only ordinal and safe session metadata", () => {
   const label = browserPickerLabel(selected, 0);
-  assert.match(label, /^1\. Saved conversation — 2025-02-03 04:05:06 UTC \(2 messages\)$/);
+  assert.match(label, new RegExp(`^1\\. Conversation ${pseudonymizeSession(selected)} — 2025-02-03 04:05:06 UTC \\(2 messages\\)$`));
   for (const forbidden of [selected.id, selected.name, selected.firstMessage, selected.path, selected.cwd]) {
     assert.doesNotMatch(label, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }

@@ -3,7 +3,7 @@ import test from "node:test";
 import { request } from "node:http";
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
-import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,7 +16,9 @@ import {
   viewerStyles,
   sandboxedReportHtml,
   VIEWER_HEADER_BYTES,
+  VIEWER_PACKAGE_VERSION,
   VIEWER_MAX_SESSION_FILE_BYTES,
+  sessionLoadFailure,
   VIEWER_MAX_SNAPSHOTS,
   VIEWER_MAX_CURSORS,
 } from "../extensions/conversation-catalog/src/viewer.mjs";
@@ -87,7 +89,7 @@ test("viewer returns the complete bounded opaque catalog immediately while selec
     assert.equal(response.sessions.filter((session) => session.classification === "subagent").length, 30);
     for (const session of response.sessions) {
       assert.match(session.handle, /^s_[A-Za-z0-9_-]{32}$/);
-      assert.deepEqual(Object.keys(session).sort(), ["classification", "handle", "modified"]);
+      assert.deepEqual(Object.keys(session).sort(), ["classification", "handle", "modified", "reference"]); assert.match(session.reference, /^session-[a-z0-9]+$/);
     }
     assert.doesNotMatch(JSON.stringify(response), new RegExp(`${id}|cwd|file|index|private subagent work`));
 
@@ -122,7 +124,7 @@ test("viewer archive search is on-demand, literal, bounded, opaque, and reaches 
   try {
     const listed = await catalog(viewer); assert.equal(listed.sessions.length, 250); assert.equal(listed.capped, true);
     const response = await search(viewer, { query: "LITERAL [NEEDLE] CAFÉ" }); assert.equal(response.status, 200); const body = await response.json();
-    assert.deepEqual(Object.keys(body).sort(), ["results"]); assert.equal(body.results.length, 1); assert.deepEqual(Object.keys(body.results[0]).sort(), ["classification", "handle", "modified", "snippets"]); assert.match(body.results[0].handle, /^s_[A-Za-z0-9_-]{32}$/); assert.match(body.results[0].snippets[0], /&lt;b&gt;Literal \[needle\] café&lt;\/b&gt;/); const forbiddenResponseFields = new RegExp(`${id(250)}|entry-250|tool-argument-needle|private-tool|cwd|\\.jsonl`); assert.match("session.jsonl", forbiddenResponseFields); assert.doesNotMatch("sessionXjsonl", forbiddenResponseFields); assert.doesNotMatch(JSON.stringify(body), forbiddenResponseFields);
+    assert.deepEqual(Object.keys(body).sort(), ["results"]); assert.equal(body.results.length, 1); assert.deepEqual(Object.keys(body.results[0]).sort(), ["classification", "handle", "modified", "reference", "snippets"]); assert.match(body.results[0].reference, /^session-[a-z0-9]+$/); assert.match(body.results[0].handle, /^s_[A-Za-z0-9_-]{32}$/); assert.match(body.results[0].snippets[0], /&lt;b&gt;Literal \[needle\] café&lt;\/b&gt;/); const forbiddenResponseFields = new RegExp(`${id(250)}|entry-250|tool-argument-needle|private-tool|cwd|\\.jsonl`); assert.match("session.jsonl", forbiddenResponseFields); assert.doesNotMatch("sessionXjsonl", forbiddenResponseFields); assert.doesNotMatch(JSON.stringify(body), forbiddenResponseFields);
     assert.equal((await eventPage(viewer, body.results[0].handle)).events.length, 3, "a cross-session search handle opens through the existing reader");
     assert.equal((await get(viewer.url, "api/session-search?query=needle")).status, 404, "query text is never accepted in a URL");
     const firstPage = await search(viewer, { query: "ordinary" }); const firstBody = await firstPage.json(); assert.equal(firstBody.results.length, 20); assert.match(firstBody.nextCursor, /^q_[A-Za-z0-9_-]{32}$/); const secondPage = await search(viewer, { cursor: firstBody.nextCursor }); const secondBody = await secondPage.json(); assert.equal(secondBody.results.length, 20); assert.match(secondBody.nextCursor, /^q_[A-Za-z0-9_-]{32}$/);
@@ -149,7 +151,7 @@ test("viewer invalidates a replaced catalog path and binds a search result to th
     ].join("\n") + "\n");
     await rename(replacement, target);
 
-    const stale = await get(viewer.url, `api/sessions/${originalHandle}/events`); assert.equal(stale.status, 404, "the pre-replacement catalog handle cannot read the new file");
+    const stale = await get(viewer.url, `api/sessions/${originalHandle}/events`); assert.equal(stale.status, 409, "the pre-replacement catalog handle reports a safe changed-source recovery"); assert.deepEqual(await stale.json(), { error: "conversation_changed" });
     const response = await search(viewer, { query: "replacement-only searchable" }); assert.equal(response.status, 200); const body = await response.json();
     assert.equal(body.results.length, 1); assert.notEqual(body.results[0].handle, originalHandle, "search does not reuse the invalidated catalog handle");
     const selectedResponse = await get(viewer.url, `api/sessions/${body.results[0].handle}/events`); assert.equal(selectedResponse.status, 200); const selected = await selectedResponse.json();
@@ -195,13 +197,15 @@ test("viewer preserves held cursors at capacity and explicitly rejects a new ini
 
 test("viewer browser keeps the reader-first a11y and local-only UI contract", async () => {
   const page = viewerPage(); const script = viewerScript();
+  assert.equal(page.includes(`>● v${VIEWER_PACKAGE_VERSION}</p>`), true); assert.doesNotMatch(page, /Local reader/);
+  const viewerSource = await readFile(new URL("../extensions/conversation-catalog/src/viewer.mjs", import.meta.url), "utf8"); assert.equal(viewerSource.includes(`"${VIEWER_PACKAGE_VERSION}"`), false, "the viewer imports rather than duplicates its package version");
   assert.match(page, /id="navigation-drawer"[^>]*role="dialog"/); assert.match(page, /id="drawer-toggle"[^>]*aria-expanded="false"/); assert.match(page, /id="load-more-events"[^>]*aria-label="Load more conversation events"/);
   assert.match(page, /id="transcript"[^>]*aria-busy="false"/); assert.doesNotMatch(page, /id="transcript"[^>]*aria-live/); assert.match(page, /id="copy-status"[^>]*role="status"/);
   assert.match(script, /navigator\.clipboard\?\.writeText/); assert.match(script, /document\.execCommand\('copy'\)/); assert.match(script, /Could not copy Pi handoff/);
   assert.match(script, /events\.filter\(e=>e\.category==='user'\|\|e\.category==='assistant'\)/); assert.match(script, /Showing '\+shown\.length\+' loaded events/); assert.match(script, /time\.dateTime=e\.timestamp/);
   assert.match(script, /api\/sessions\/'.*events.*notes/); assert.match(script, /method:'POST'/); assert.match(script, /method:'PUT'/); assert.match(script, /method:'DELETE'/); assert.match(script, /Local-only, user-authored context/); assert.match(script, /async function openNotes/); assert.doesNotMatch(script, /loadNotes\(.*S\.events/);
   assert.match(script, /toggle\.setAttribute\('aria-expanded','true'\)/); assert.match(script, /e\.key==='Escape'/); assert.match(script, /document\.activeElement===last/); assert.match(script, /aria-current','page/);
-  assert.match(page, /id="archive-search"[^>]*aria-labelledby="search-heading"/); assert.match(page, /id="archive-search-query"[^>]*type="search"/); assert.match(page, /id="search-status"[^>]*role="status"/); assert.match(script, /api\/session-search/); assert.match(script, /method:'POST'/); assert.match(script, /TextEncoder\(\)\.encode\(query\.trim\(\)\)/); assert.doesNotMatch(script, /api\/session-search\?query/); assert.match(page, /id="sessions-capped"[^>]*role="status"/); assert.match(script, /S\.catalog=d\.sessions/); assert.match(page, /Conversation list is capped for local performance/); assert.match(script, /r\.status===429&&body\?\.capacity===true/); assert.match(script, /Conversation paging is temporarily at capacity\. Retry opening it\./); assert.match(script, /Conversation paging is temporarily at capacity\. Retry loading more events\./); assert.doesNotMatch(script, /Load more conversations|catalogCursor|sessions-more|Promise\.all\(\[catalog/);
+  assert.match(page, /id="archive-search"[^>]*aria-labelledby="search-heading"/); assert.match(page, /id="archive-search-query"[^>]*type="search"/); assert.match(page, /id="search-status"[^>]*role="status"/); assert.match(script, /api\/session-search/); assert.match(script, /method:'POST'/); assert.match(script, /TextEncoder\(\)\.encode\(query\.trim\(\)\)/); assert.doesNotMatch(script, /api\/session-search\?query/); assert.match(page, /id="sessions-capped"[^>]*role="status"/); assert.match(script, /S\.catalog=d\.sessions/); assert.match(script, /Conversation '\+x\.reference/); for (const failure of ["conversation_invalid", "conversation_unreadable", "conversation_changed", "conversation_size", "conversation_event_limit"]) assert.match(script, new RegExp(failure)); assert.match(page, /Conversation list is capped for local performance/); assert.match(script, /r\.status===429&&body\?\.capacity===true/); assert.match(script, /Conversation paging is temporarily at capacity\. Retry opening it\./); assert.match(script, /Conversation paging is temporarily at capacity\. Retry loading more events\./); assert.doesNotMatch(script, /Load more conversations|catalogCursor|sessions-more|Promise\.all\(\[catalog/);
   assert.doesNotMatch(script, /api\(base\)/); assert.doesNotMatch(script, /https:\/\//);
   const syntaxDirectory = await mkdtemp(join(tmpdir(), "pi-viewer-syntax-")); const syntaxFile = join(syntaxDirectory, "viewer-script.mjs"); await writeFile(syntaxFile, script);
   await new Promise((resolveCheck, rejectCheck) => { const child = spawn(process.execPath, ["--check", syntaxFile]); child.once("error", rejectCheck); child.once("exit", (code) => code === 0 ? resolveCheck() : rejectCheck(new Error("Viewer script has invalid syntax."))); });
@@ -320,8 +324,8 @@ ${JSON.stringify({ type: "message", message: { role: "user", content: oversized 
   assert.equal(found.length, 1); assert.equal(found[0].entries, undefined); assert.equal(found[0].messageCount, undefined); assert.match(found[0].file, /large\.jsonl$/);
   const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "m".repeat(43), idleMs: 60_000 });
   try {
-    const response = await catalog(viewer); assert.equal(response.sessions.length, 1); assert.deepEqual(Object.keys(response.sessions[0]).sort(), ["classification", "handle", "modified"]);
-    assert.equal((await get(viewer.url, `api/sessions/${response.sessions[0].handle}/events`)).status, 404, "oversized transcript is opened and rejected only after selection");
+    const response = await catalog(viewer); assert.equal(response.sessions.length, 1); assert.deepEqual(Object.keys(response.sessions[0]).sort(), ["classification", "handle", "modified", "reference"]);
+    const oversizedResponse = await get(viewer.url, `api/sessions/${response.sessions[0].handle}/events`); assert.equal(oversizedResponse.status, 413, "oversized transcript is opened and rejected only after selection"); assert.deepEqual(await oversizedResponse.json(), { error: "conversation_size" });
   } finally { viewer.close(); }
 });
 
@@ -354,7 +358,37 @@ test("viewer classifies only complete bounded session_info.name markers and neve
     assert.deepEqual(new Set(response.sessions.map((session) => session.classification)), new Set(["main", "subagent"]));
     for (const group of [response.sessions.filter((session) => session.classification === "main"), response.sessions.filter((session) => session.classification === "subagent")]) assert.deepEqual(group.map((session) => session.modified), [...group].sort((left, right) => right.modified.localeCompare(left.modified)).map((session) => session.modified));
     for (const secret of ["A main conversation", "Background SuBaGeNt work", "subagent beyond cap", "subagent-path", "exactName"]) assert.doesNotMatch(serialized, new RegExp(secret));
-    for (const session of response.sessions) assert.deepEqual(Object.keys(session).sort(), ["classification", "handle", "modified"]);
+    for (const session of response.sessions) assert.deepEqual(Object.keys(session).sort(), ["classification", "handle", "modified", "reference"]);
+  } finally { viewer.close(); }
+});
+
+test("viewer discovery prioritizes current local files deterministically before applying candidate limits", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-recent-")); const sessions = join(directory, "sessions"); await mkdir(sessions);
+  const writeSession = async (name, id, timestamp, modified) => { const file = join(sessions, name); await writeFile(file, `${JSON.stringify({ type: "session", id, timestamp, cwd: directory })}\n`); await utimes(file, modified, modified); return file; };
+  const oldId = "019fd4f3-b574-7953-a984-ffb49a519211"; const recentId = "019fd4f3-b574-7953-a984-ffb49a519212"; const currentId = "019fd4f3-b574-7953-a984-ffb49a519213";
+  await writeSession("z-old.jsonl", oldId, "2099-01-01T00:00:00.000Z", new Date("2025-01-01T00:00:00.000Z"));
+  await writeSession("a-recent.jsonl", recentId, "2000-01-01T00:00:00.000Z", new Date("2025-02-01T00:00:00.000Z"));
+  await writeSession("m-current.jsonl", currentId, "2001-01-01T00:00:00.000Z", new Date("2025-03-01T00:00:00.000Z"));
+  const found = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 2, maxResults: 2 });
+  assert.deepEqual(found.map((session) => session.id), [currentId, recentId]); assert.equal(found.capped, true);
+  assert.deepEqual(found.map((session) => session.modified), ["2025-03-01 00:00:00 UTC", "2025-02-01 00:00:00 UTC"]);
+});
+
+test("viewer returns safe specific load failures and recovery classifications", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-viewer-load-failures-")); const sessions = join(directory, "sessions"); const reports = join(directory, "reports"); await mkdir(sessions); await mkdir(reports);
+  const id = (suffix) => `019fd4f3-b574-7953-a984-ffb49a5192${suffix}`; const header = (suffix) => JSON.stringify({ type: "session", id: id(suffix), timestamp: "2025-03-01T00:00:00.000Z", cwd: directory });
+  await writeFile(join(sessions, "invalid.jsonl"), `${header("11")}\n{"type":"message"\n`);
+  await writeFile(join(sessions, "large.jsonl"), `${header("12")}\n${"x".repeat(VIEWER_MAX_SESSION_FILE_BYTES)}\n`);
+  await writeFile(join(sessions, "events.jsonl"), [header("13"), ...Array.from({ length: 2_001 }, () => JSON.stringify({ type: "message", message: { role: "user", content: "event" } }))].join("\n"));
+  await writeFile(join(sessions, "changed.jsonl"), `${header("14")}\n${JSON.stringify({ type: "message", message: { role: "user", content: "before change" } })}\n`);
+  const viewer = await startViewer({ sessionDirectory: sessions, reportDirectory: reports, token: "l".repeat(43), idleMs: 60_000 });
+  try {
+    const before = await catalog(viewer); const failures = new Set(); let changedHandle;
+    for (const session of before.sessions) { const response = await get(viewer.url, `api/sessions/${session.handle}/events`); if (response.ok) changedHandle = session.handle; else failures.add(JSON.stringify(await response.json())); }
+    assert.deepEqual(failures, new Set([JSON.stringify({ error: "conversation_invalid" }), JSON.stringify({ error: "conversation_size" }), JSON.stringify({ error: "conversation_event_limit" })]));
+    await writeFile(join(sessions, "changed.jsonl"), `${header("14")}\n${JSON.stringify({ type: "message", message: { role: "user", content: "after change" } })}\n`);
+    const changed = await get(viewer.url, `api/sessions/${changedHandle}/events`); assert.equal(changed.status, 409); assert.deepEqual(await changed.json(), { error: "conversation_changed" });
+    assert.equal(sessionLoadFailure({ code: "EACCES" }), "unreadable"); assert.equal(sessionLoadFailure({ code: "ENOENT" }), "changed");
   } finally { viewer.close(); }
 });
 
