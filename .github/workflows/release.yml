@@ -44,9 +44,16 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - run: npm run validate:compliance
       - run: npm run validate:governance
       - run: npm run validate:pi-extensions
       - run: npm run validate:packages
       - run: npm run release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload immutable published-package SBOMs
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        with:
+          name: package-sboms-${{ github.sha }}
+          path: extensions/*/sbom.cdx.json
+          if-no-files-found: error

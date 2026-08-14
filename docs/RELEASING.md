@@ -60,6 +60,30 @@ exact version for reproducible automation.
 Exact versions and Git commits are not advanced by `pi update --extensions`.
 Update them deliberately in the consumer configuration.
 
+## Package licensing and SBOMs
+
+Every supported package artifact includes `LICENSE`, a versioned
+`THIRD-PARTY-NOTICES.md`, and a deterministic CycloneDX 1.5 `sbom.cdx.json`.
+The notices state whether third-party software is bundled and record declared
+runtime and peer dependencies without guessing licenses that are not available
+in this repository. The SBOM is generated only from the package manifest and
+workspace package versions; it is not a claim about dependencies installed by a
+consumer outside the artifact.
+
+Regenerate the six package artifacts after changing a supported package version
+or dependency declaration, then validate that committed output is current:
+
+```powershell
+npm run generate:compliance
+npm run validate:compliance
+```
+
+The release workflow validates this output before publishing. It also uploads
+the six exact committed SBOM files as a GitHub Actions artifact named with the
+release commit SHA after publication. GitHub Actions artifacts are immutable
+per upload, and the package tarballs retain the same SBOM files at their
+published package versions.
+
 ## Maintainer release flow
 
 1. Add a Changeset for every user-visible extension change:
@@ -85,15 +109,16 @@ Update them deliberately in the consumer configuration.
    git push
    ```
 
-   The command updates package versions, changelogs, and the lockfile, and
-   consumes the included Changeset files.
+   The command updates package versions, changelogs, the lockfile, and the
+   versioned package notice/SBOM files, and consumes the included Changeset
+   files. Review and commit all of that generated output together.
 3. Merge the version PR.
 4. In **Actions**, select **Release Pi packages**, choose the `main` branch in
    **Run workflow**, check the release-confirmation input, and dispatch it.
    The workflow rejects any ref other than `refs/heads/main` before checkout
    or publishing, reruns Node tests, the root build, governance tests, Pi
-   extension entry-point validation, and publishable-package dry-run artifact
-   checks before using `changeset publish` to publish only versions that are
+   extension entry-point validation, package compliance/SBOM validation, and
+   publishable-package dry-run artifact checks before using `changeset publish` to publish only versions that are
    not already present in GitHub Packages.
 5. Approve the resulting `production` environment deployment before the
    release job continues. `Zkrausman` is currently the sole required reviewer

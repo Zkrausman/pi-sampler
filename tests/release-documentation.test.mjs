@@ -26,6 +26,9 @@ test("release documentation inventories supported packages and centralizes GitHu
       registry: "https://npm.pkg.github.com",
       access: "restricted",
     }, `${manifest.name} must remain a restricted GitHub Packages distribution`);
+    for (const file of ["LICENSE", "THIRD-PARTY-NOTICES.md", "sbom.cdx.json"]) {
+      assert.ok(manifest.files.includes(file), `${manifest.name} must ship ${file}`);
+    }
 
     const inventoryRows = releasing
       .split(/\r?\n/)
@@ -40,6 +43,26 @@ test("release documentation inventories supported packages and centralizes GitHu
     assert.equal(readme.split(canonicalSetupLink).length - 1, 1, `${manifest.name} README must link to the one canonical setup procedure`);
     assert.doesNotMatch(readme, /npm login|npm config set @zkrausman/i, `${manifest.name} README must not duplicate authentication setup`);
   }
+});
+
+test("public documentation states source, privacy, security, and platform boundaries", async () => {
+  const documents = await Promise.all([
+    readFile(join(root, "README.md"), "utf8"),
+    readFile(join(root, "docs", "PRIVACY.md"), "utf8"),
+    readFile(join(root, "docs", "PLATFORM-AND-TRADEMARKS.md"), "utf8"),
+    readFile(join(root, "SECURITY.md"), "utf8"),
+    readFile(join(root, "CONTRIBUTING.md"), "utf8"),
+    readFile(join(root, "docs", "RELEASING.md"), "utf8"),
+  ]);
+  const [readme, privacy, platform, security, contributing, releasing] = documents;
+  assert.match(readme, /not affiliated with or endorsed by/);
+  assert.match(readme, /public, while the six supported extension packages are[\s\S]*restricted access/);
+  assert.match(privacy, /does not provide a\s+hosted service, account system, analytics endpoint, or telemetry configuration/);
+  assert.match(platform, /not affiliated with, sponsored\s+by, or endorsed by/);
+  assert.match(security, /private vulnerability reporting/);
+  assert.match(contributing, /Developer Certificate of Origin \(DCO\)\s*1\.1/);
+  assert.match(releasing, /CycloneDX 1\.5/);
+  assert.match(releasing, /immutable/);
 });
 
 test("release documentation retains the withdrawn output optimizer status", async () => {

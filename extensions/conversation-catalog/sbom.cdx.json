@@ -1,0 +1,117 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:c0d611de-0a8c-5715-8731-f2d72220e85d",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "name": "@zkrausman/pi-conversation-catalog",
+      "version": "0.6.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40zkrausman%2Fpi-conversation-catalog@0.6.0"
+    },
+    "tools": [
+      {
+        "vendor": "pi-sampler",
+        "name": "generate-package-compliance",
+        "version": "1"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "@zkrausman/pi-ticket-closeout-summary",
+      "version": "0.2.0",
+      "purl": "pkg:npm/%40zkrausman%2Fpi-ticket-closeout-summary@0.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pi-sampler:dependency-kind",
+          "value": "dependencies"
+        },
+        {
+          "name": "pi-sampler:declared-version",
+          "value": "^0.2.0"
+        },
+        {
+          "name": "pi-sampler:workspace",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@earendil-works/pi-coding-agent",
+      "version": "*",
+      "licenses": [
+        {
+          "license": {
+            "id": "NOASSERTION"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pi-sampler:dependency-kind",
+          "value": "peerDependencies"
+        },
+        {
+          "name": "pi-sampler:declared-version",
+          "value": "*"
+        },
+        {
+          "name": "pi-sampler:workspace",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "typebox",
+      "version": "*",
+      "licenses": [
+        {
+          "license": {
+            "id": "NOASSERTION"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "pi-sampler:dependency-kind",
+          "value": "peerDependencies"
+        },
+        {
+          "name": "pi-sampler:declared-version",
+          "value": "*"
+        },
+        {
+          "name": "pi-sampler:workspace",
+          "value": "false"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:npm/%40zkrausman%2Fpi-conversation-catalog@0.6.0",
+      "dependsOn": [
+        "pkg:npm/%40zkrausman%2Fpi-ticket-closeout-summary@0.2.0"
+      ]
+    }
+  ]
+}

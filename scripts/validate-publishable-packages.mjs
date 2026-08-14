@@ -3,6 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
+import { validatePackageCompliance } from "./generate-package-compliance.mjs";
 
 const root = resolve(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -82,6 +83,7 @@ export function run(command, args, options) {
 }
 
 export async function validatePublishablePackages({ repositoryRoot = root, commandRunner = run } = {}) {
+  await validatePackageCompliance({ repositoryRoot });
   const packages = await publishablePackages(repositoryRoot);
   assert.ok(packages.length > 0, "no publishable workspace packages found");
 
@@ -99,7 +101,7 @@ export async function validatePublishablePackages({ repositoryRoot = root, comma
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   validatePublishablePackages().catch((error) => {
     console.error(error.stack ?? error.message);
     process.exitCode = 1;

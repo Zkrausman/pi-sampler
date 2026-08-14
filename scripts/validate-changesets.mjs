@@ -187,7 +187,7 @@ function optionValue(option) {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const baseRef = optionValue("--base") ?? process.env.CHANGESET_BASE_REF;
   const headRef = optionValue("--head") ?? process.env.CHANGESET_HEAD_REF ?? "HEAD";
   changedTrackedPaths({ baseRef, headRef })

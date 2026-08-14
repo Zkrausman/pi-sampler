@@ -17,16 +17,19 @@ test("withdrawn output optimizer cannot be published", async () => {
 test("PR and release workflows run every documented validation gate before publishing", async () => {
   const validatePath = join(root, ".github", "workflows", "validate.yml");
   const validate = (await readFile(validatePath, "utf8")).replace(/\r\n/g, "\n");
-  for (const command of ["npm test", "npm run build", "npm run validate:pi-extensions", "npm run validate:packages", "go test -race ./..."]) {
+  for (const command of ["npm test", "npm run build", "npm run validate:compliance", "npm run validate:pi-extensions", "npm run validate:packages", "go test -race ./..."]) {
     assert.match(validate, new RegExp(`- run: ${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   }
 
   const releasePath = join(root, ".github", "workflows", "release.yml");
   const release = (await readFile(releasePath, "utf8")).replace(/\r\n/g, "\n");
   assert.match(release, /uses: actions\/setup-go@[a-f0-9]{40}\s+# v7/);
-  const releaseCommandPositions = ["npm test", "npm run build", "npm run validate:governance", "npm run validate:pi-extensions", "npm run validate:packages", "npm run release"].map((command) => release.indexOf(`- run: ${command}`));
+  const releaseCommandPositions = ["npm test", "npm run build", "npm run validate:compliance", "npm run validate:governance", "npm run validate:pi-extensions", "npm run validate:packages", "npm run release"].map((command) => release.indexOf(`- run: ${command}`));
   assert.ok(releaseCommandPositions.every((position) => position >= 0), "release must run every validation gate");
   assert.deepEqual([...releaseCommandPositions].sort((left, right) => left - right), releaseCommandPositions, "release gates must run before publishing");
+  assert.match(release, /uses: actions\/upload-artifact@[a-f0-9]{40}\s+# v4/);
+  assert.match(release, /name: package-sboms-\$\{\{ github\.sha \}\}/);
+  assert.match(release, /path: extensions\/\*\/sbom\.cdx\.json/);
 });
 
 test("PR validation compares verified base and head SHAs for the Changeset policy", async () => {
@@ -38,6 +41,16 @@ test("PR validation compares verified base and head SHAs for the Changeset polic
   assert.match(workflow, /CHANGESET_HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
   assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n          fetch-depth: 0/);
   assert.match(workflow, /npm run validate:changesets -- --base "\$CHANGESET_BASE_REF" --head "\$CHANGESET_HEAD_REF"/);
+});
+
+test("PR validation requires DCO sign-offs for commits introduced by the pull request", async () => {
+  const workflowPath = join(root, ".github", "workflows", "validate.yml");
+  const workflow = (await readFile(workflowPath, "utf8")).replace(/\r\n/g, "\n");
+
+  assert.match(workflow, /dco:\n    if: github\.event_name == 'pull_request'/);
+  assert.match(workflow, /DCO_BASE_REF: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+  assert.match(workflow, /DCO_HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(workflow, /npm run validate:dco -- --base "\$DCO_BASE_REF" --head "\$DCO_HEAD_REF"/);
 });
 
 test("release workflow requires a confirmed main-branch production release", async () => {
