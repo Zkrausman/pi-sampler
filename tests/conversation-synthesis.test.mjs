@@ -120,9 +120,9 @@ test("note-dominated oversized prompts report measured components and preserve n
 
 test("only approved public commands remain and flow/map modules are deleted", () => {
   const index = readFileSync(join(root, "extensions/conversation-catalog/src/index.ts"), "utf8");
-  assert.equal((index.match(/registerCommand\(/g) || []).length, 3); assert.equal((index.match(/registerTool\(/g) || []).length, 1);
+  assert.equal((index.match(/registerCommand\(/g) || []).length, 3); assert.equal((index.match(/registerTool\(/g) || []).length, 3);
   for (const command of ["conversation-catalog", "hindsight-document", "hindsight-notes"]) assert.ok(index.includes(`registerCommand("${command}"`));
-  for (const removed of ["conversation-flow", "conversation-map", "flow.mjs", "map.mjs", "createRedactionMetadata", "generateExcludedConversationHtml", "writeRelationshipMapExport"]) assert.doesNotMatch(index, new RegExp(removed, "i"));
+  for (const removed of ["conversation-flow", "conversation-map", "createRedactionMetadata", "generateExcludedConversationHtml", "writeRelationshipMapExport"]) assert.doesNotMatch(index, new RegExp(removed, "i"));
   assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/flow.mjs")), false); assert.equal(existsSync(join(root, "extensions/conversation-catalog/src/map.mjs")), false);
 });
 
@@ -159,6 +159,15 @@ test("canonical chunk plans are deterministic, UTF-8 bounded, ordered, and exclu
   assert.throws(() => planCanonicalSynthesisChunks([{ reference: "session-one", events: [{ summary: "x".repeat(1000), evidence: { reference: "session-one:event-oversized" } }] }], { maxBytes: 256 }), /Redact that event further/);
 });
 
-test("oversized single-prompt hindsight fails closed without fake multi-turn synthesis", () => {
-  assert.throws(() => preflightSynthesisPrompt(source("x".repeat(MAX_SYNTHESIS_PROMPT_BYTES)), {}, { tokens: 0, contextWindow: 1_000_000 }), /cannot create isolated model turns.*no partial or multi-prompt generation/i);
+test("bounded chunk workflow cuts evidence, bounds every submission, and validates retained citations", async () => {
+  const { MAX_CHUNK_CAPTURE_BYTES, MAX_REDUCTION_BYTES, MAX_SYNTHESIS_PROMPT_BYTES: limit, buildChunkedFinalPrompt, buildReductionGroups, buildReductionPrompt, planChunkedHindsightPrompts, validateChunkDigest } = await import("../extensions/conversation-catalog/src/chunk-workflow.mjs");
+  const sources = [{ reference: "session-one", events: Array.from({ length: 5 }, (_, index) => ({ category: "assistant", timestamp: "2025-01-01", title: `Event ${index}`, summary: "é".repeat(6000), evidence: { reference: `session-one:event-${index}` } })) }];
+  const plan = planChunkedHindsightPrompts(sources); assert.ok(plan.prompts.length > 1); for (const prompt of plan.prompts) assert.ok(Buffer.byteLength(prompt, "utf8") <= limit);
+  const allowed = new Set(["session-one:event-0"]); assert.deepEqual(validateChunkDigest({ summary: "kept", evidenceReferences: ["session-one:event-0"] }, allowed, MAX_CHUNK_CAPTURE_BYTES), { summary: "kept", evidenceReferences: ["session-one:event-0"] }); assert.throws(() => validateChunkDigest({ summary: "kept", evidenceReferences: ["outside"] }, allowed, MAX_CHUNK_CAPTURE_BYTES), /outside/);
+  const captures = Array.from({ length: 20 }, (_, index) => ({ summary: "summary ".repeat(200), evidenceReferences: [`session-one:event-${index % 5}`] })); const groups = buildReductionGroups(captures); assert.ok(groups.length < captures.length); for (const [index, group] of groups.entries()) assert.ok(Buffer.byteLength(buildReductionPrompt(group, index + 1, groups.length), "utf8") <= limit);
+  assert.ok(Buffer.byteLength(buildChunkedFinalPrompt([{ summary: "small", evidenceReferences: ["session-one:event-0"] }]), "utf8") <= limit); assert.equal(MAX_REDUCTION_BYTES, 1200);
+});
+
+test("oversized single-prompt hindsight remains preflight-rejected only outside the chunk workflow", () => {
+  assert.throws(() => preflightSynthesisPrompt(source("x".repeat(MAX_SYNTHESIS_PROMPT_BYTES)), {}, { tokens: 0, contextWindow: 1_000_000 }), /direct single-prompt preflight does not perform chunk synthesis/i);
 });
