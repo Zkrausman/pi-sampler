@@ -106,7 +106,7 @@ until its adapter/configuration is supplied.
 1. Install and configure the LLM Wiki extension/tools in the consumer project.
 2. Add the compatible governance validator and ensure `go run
    ./cmd/delivery-evidence-validator` succeeds from the project root.
-3. With GitHub Packages access configured, install the released package:
+3. Follow [the canonical GitHub Packages scoped-registry and authentication procedure](../../docs/RELEASING.md#consumer-setup), then install the released package:
 
    ```powershell
    pi install -l npm:@zkrausman/pi-wiki-delivery

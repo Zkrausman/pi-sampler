@@ -74,7 +74,7 @@ environment.
 
 ## Install
 
-1. With GitHub Packages access configured, install the released package:
+1. Follow [the canonical GitHub Packages scoped-registry and authentication procedure](../../docs/RELEASING.md#consumer-setup), then install the released package:
 
    ```powershell
    pi install -l npm:@zkrausman/pi-delivery-controller
