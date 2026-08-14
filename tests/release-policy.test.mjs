@@ -23,7 +23,7 @@ test("PR and release workflows run every documented validation gate before publi
 
   const releasePath = join(root, ".github", "workflows", "release.yml");
   const release = (await readFile(releasePath, "utf8")).replace(/\r\n/g, "\n");
-  assert.match(release, /uses: actions\/setup-go@v7/);
+  assert.match(release, /uses: actions\/setup-go@[a-f0-9]{40}\s+# v7/);
   const releaseCommandPositions = ["npm test", "npm run build", "npm run validate:governance", "npm run validate:pi-extensions", "npm run validate:packages", "npm run release"].map((command) => release.indexOf(`- run: ${command}`));
   assert.ok(releaseCommandPositions.every((position) => position >= 0), "release must run every validation gate");
   assert.deepEqual([...releaseCommandPositions].sort((left, right) => left - right), releaseCommandPositions, "release gates must run before publishing");
@@ -51,7 +51,7 @@ test("release workflow requires a confirmed main-branch production release", asy
 
   const guard = workflow.indexOf('if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then');
   const confirmation = workflow.indexOf('if [[ "$CONFIRM_RELEASE" != "true" ]]; then');
-  const checkout = workflow.indexOf("uses: actions/checkout@v7");
+  const checkout = workflow.indexOf("uses: actions/checkout@");
 
   assert.ok(guard >= 0, "the workflow must reject non-main refs");
   assert.ok(confirmation >= 0, "the workflow must require confirmation");
