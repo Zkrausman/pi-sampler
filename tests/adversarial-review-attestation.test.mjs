@@ -63,12 +63,15 @@ function validInput(fixture, reviews = [review({ id: 1, commitId: fixture.head }
   };
 }
 
-test("adversarial review gate revalidates trusted PR and review events without executing PR-head code", async () => {
-  const workflow = (await readFile(join(root, ".github", "workflows", "validate.yml"), "utf8")).replace(/\r\n/g, "\n");
+test("adversarial review gate is isolated from ordinary validation and revalidates trusted PR and review events", async () => {
+  const validate = (await readFile(join(root, ".github", "workflows", "validate.yml"), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(validate, /^on:\n  pull_request:\n  push:\n    branches: \[main\]$/m);
+  assert.doesNotMatch(validate, /pull_request_target|pull_request_review|adversarial-review-attestation/);
+
+  const workflow = (await readFile(join(root, ".github", "workflows", "adversarial-review.yml"), "utf8")).replace(/\r\n/g, "\n");
   const start = workflow.indexOf("  adversarial-review-attestation:");
-  const end = workflow.indexOf("\n  governance:", start);
-  assert.ok(start >= 0 && end > start, "adversarial-review-attestation job must remain present");
-  const job = workflow.slice(start, end);
+  assert.ok(start >= 0, "adversarial-review-attestation job must remain present");
+  const job = workflow.slice(start);
 
   assert.match(workflow, /^  pull_request_target:\n    types: \[opened, reopened, synchronize, edited\]$/m);
   assert.match(workflow, /^  pull_request_review:\n    types: \[submitted, edited, dismissed\]$/m);
