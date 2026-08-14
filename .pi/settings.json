@@ -1,0 +1,13 @@
+{
+  "packages": [
+    "local-packages\\pi-answer",
+    "npm:@zkrausman/pi-conversation-catalog@0.5.6"
+  ],
+  "subagents": {
+    "agentOverrides": {
+      "researcher": {
+        "disabled": true
+      }
+    }
+  }
+}
