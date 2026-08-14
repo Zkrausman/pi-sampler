@@ -16,13 +16,16 @@ Run `pi-conversation-viewer` on demand to open a local browser viewer. It starts
 
 The viewer uses package-local assets only and makes no network request, Pi invocation, model call, or report generation. It is a dependency-free, reader-first local archive: a responsive overlay drawer / reader-first layout, system fonts, proportional reading text (with monospace reserved for commands), high contrast focus states, keyboard-operable navigation, reduced-motion support, and no remote assets. Its only file mutations are explicit add, edit, and delete operations in the secure per-session hindsight-note store. It discovers Pi sessions only from the default local Pi session directory and hindsight reports only from the default per-platform report directory documented below. Discovery is deliberately bounded: it reads only a fixed 64KiB prefix per candidate, uses the session header plus complete bounded JSONL records only to inspect the user-reserved `session_info.name` `subagent` marker, caps traversal and catalog results; the viewer returns that entire already-bounded catalog in one local request and shows a path-free notice when more local sessions are not shown. This local sorting classification is non-authoritative: raw names are never exposed, no parent/child relationship is inferred, and an absent, invalid, or marker-beyond-the-cap name remains Main. The list exposes only safe metadata and classification, never raw local session names or IDs, storage paths, or saved JSON. A selected transcript is rendered incrementally after selection; use **Load more events** to continue. The **Conversation only** control announces the count of loaded events it shows. Its copy control copies only the displayed `/hindsight-document session-…` command and provides local success or recovery feedback; it never exposes a raw ID or storage path. That stable opaque reference identifies the exact current raw session ID, which Pi resolves before its required redaction review.
 
-## Commands
+## Commands and Tools
 
+The extension registers the following host commands:
 ```text
 /conversation-catalog
 /hindsight-document [session-identifier] [output-path] [--ticket-closeout <absolute-summary-or-receipt-path>]
 /hindsight-notes
 ```
+
+It also provides the `hindsight_document_write` tool to the agent during redaction-reviewed synthesis to generate the safe cited HTML report.
 
 ## Browse, read, and hand off
 
