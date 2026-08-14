@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
@@ -8,7 +9,8 @@ import { browserPickerLabel, formatLocalConversationReader, resolveSessionRefere
 import { projectConversation } from "./conversation.mjs";
 import { attachEvidenceReferences } from "./evidence.mjs";
 import { restrictToolsForHindsightSynthesis } from "./hindsight-tools.mjs";
-import { buildHindsightDocument, preflightSynthesisPrompt } from "./synthesis.mjs";
+import { buildHindsightDocument, measureSynthesisPrompt, preflightSynthesisPrompt } from "./synthesis.mjs";
+import { MAX_CHUNK_CAPTURE_BYTES, MAX_REDUCTION_BYTES, buildChunkedFinalPrompt, buildReductionGroups, buildReductionPrompt, planChunkedHindsightPrompts, validateChunkDigest } from "./chunk-workflow.mjs";
 import { HindsightNotesError, addHindsightNote, deleteHindsightNote, editHindsightNote, hindsightNotesEventReference, hindsightNotesSessionReference, migrateLegacyHindsightNote, readHindsightNotes } from "./hindsight-notes.mjs";
 import { compileSensitivePatterns, findSensitiveContent, pseudonymizeSession, redactProjection } from "./redaction.mjs";
 import { defaultHindsightReportDirectory, resolveExplicitHindsightOutputPath, writeDefaultHindsightReport, writeHindsightReport } from "./hindsight-output.mjs";
@@ -88,8 +90,20 @@ async function reviewRedactionChoices(ctx: any, findings: any[]) {
 
 /** Read-only catalog and redaction-reviewed hindsight reports of saved Pi conversations. */
 export default function conversationCatalog(pi: ExtensionAPI) {
-  let pendingHindsight: { sources: any[]; hindsightNotes: any[]; ticketCloseout?: any; outputPath?: string; defaultDirectory?: string; reference: string; restoreTools: () => void } | undefined;
-  pi.on("agent_settled", () => { const pending = pendingHindsight; if (pending) { pendingHindsight = undefined; pending.restoreTools(); } });
+  type PendingHindsight = { sources: any[]; hindsightNotes: any[]; ticketCloseout?: any; outputPath?: string; defaultDirectory?: string; reference: string; restoreTools: () => void; mode: "single" | "chunked"; stage: "capture" | "reduce" | "final" | "complete"; queued: number; chunks?: any[]; prompts?: string[]; nextChunk?: number; captures?: any[]; reductionGroups?: any[][]; reductionIndex?: number; reductionResults?: any[]; currentReferences?: Set<string>; workflowPrompt?: string; activeWorkflowPrompt?: string; workflowActive?: boolean };
+  let pendingHindsight: PendingHindsight | undefined;
+  const clearPending = () => { const pending = pendingHindsight; if (pending) { pendingHindsight = undefined; pending.restoreTools(); } };
+  // A queued follow-up has not begun yet; do not restore tools between loop turns.
+  pi.on("agent_settled", () => { if (pendingHindsight && pendingHindsight.queued === 0) clearPending(); });
+  pi.on("context", (event) => {
+    const pending = pendingHindsight;
+    if (pending?.mode !== "chunked") return;
+    const prompt = [...event.messages].reverse().find((message: any) => message.role === "user" && message?.content?.every?.((item: any) => item?.type === "text") && message.content.map((item: any) => item.text).join("") === pending.workflowPrompt);
+    if (!prompt) { pending.workflowActive = false; return; }
+    if (pending.activeWorkflowPrompt !== pending.workflowPrompt) { pending.activeWorkflowPrompt = pending.workflowPrompt; pending.queued = Math.max(0, pending.queued - 1); }
+    pending.workflowActive = true;
+    event.messages.length = 0; event.messages.push(prompt);
+  });
   pi.registerTool({
     name: "hindsight_document_write", label: "Write safe hindsight document",
     description: "Writes structured claims, optional story steps, and Fix/Harden proposals through the safe cited HTML contract.",
@@ -104,15 +118,55 @@ export default function conversationCatalog(pi: ExtensionAPI) {
       recommendations: Type.Array(Type.Object({ recommendation: Type.String({ minLength: 1, maxLength: 1000 }), actionType: Type.Union([Type.Literal("fix"), Type.Literal("harden")]), priority: Type.Union([Type.Literal("critical"), Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]), expectedImpact: Type.String({ minLength: 1, maxLength: 500 }), suggestedOwner: Type.String({ minLength: 1, maxLength: 200 }), dependencies: Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { maxItems: 20 }), acceptanceCriteria: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { minItems: 1, maxItems: 20 }), status: Type.Literal("proposed"), source: Type.Literal("model-suggestion"), evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 20 }) }, { additionalProperties: false }), { maxItems: 40 }),
     }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
-      if (!pendingHindsight) return { content: [{ type: "text", text: "No hindsight document draft is awaiting generation." }] };
+      if (!pendingHindsight || pendingHindsight.stage !== "final" || pendingHindsight.workflowActive === false) return { content: [{ type: "text", text: "No final hindsight document draft is awaiting generation." }] };
       try {
         const html = buildHindsightDocument(pendingHindsight.sources, params, pendingHindsight.hindsightNotes, pendingHindsight.ticketCloseout);
         const outputPath = pendingHindsight.outputPath
           ? (await writeHindsightReport(pendingHindsight.outputPath, html), pendingHindsight.outputPath)
           : await writeDefaultHindsightReport({ directory: pendingHindsight.defaultDirectory!, reference: pendingHindsight.reference, html });
+        // Keep the restricted tool set until agent_settled; a model turn can continue after this tool result.
+        pendingHindsight.stage = "complete";
         return { content: [{ type: "text", text: `Hindsight document written to ${outputPath}.` }] };
       }
       catch (error) { return { content: [{ type: "text", text: error instanceof Error ? `Unable to write hindsight document: ${error.message}` : "Unable to write hindsight document." }] }; }
+    },
+  });
+  const queue = (pending: PendingHindsight, prompt: string) => { pending.workflowActive = false; pending.activeWorkflowPrompt = undefined; pending.workflowPrompt = `[[hindsight-workflow:${randomBytes(24).toString("base64url")}]]\n${prompt}`; pending.queued++; pi.sendUserMessage(pending.workflowPrompt, { deliverAs: "followUp" }); };
+  const continueChunked = (pending: PendingHindsight) => {
+    if (pending.nextChunk! < pending.chunks!.length) {
+      const index = pending.nextChunk!++; const chunk = pending.chunks![index]; pending.stage = "capture"; pending.currentReferences = new Set(chunk.references); queue(pending, pending.prompts![index]); return;
+    }
+    try { pending.stage = "final"; const prompt = buildChunkedFinalPrompt(pending.captures!, pending.hindsightNotes); queue(pending, prompt); return; }
+    catch (error) {
+      if (pending.captures!.length < 2) throw error;
+      const groups = buildReductionGroups(pending.captures!); pending.stage = "reduce"; pending.reductionGroups = groups; pending.reductionIndex = 0; pending.reductionResults = []; const group = groups[0]; pending.currentReferences = new Set(group.flatMap((item: any) => item.evidenceReferences)); queue(pending, buildReductionPrompt(group, 1, groups.length));
+    }
+  };
+  const continueReduction = (pending: PendingHindsight) => {
+    const index = ++pending.reductionIndex!;
+    if (index < pending.reductionGroups!.length) { const group = pending.reductionGroups![index]; pending.currentReferences = new Set(group.flatMap((item: any) => item.evidenceReferences)); queue(pending, buildReductionPrompt(group, index + 1, pending.reductionGroups!.length)); return; }
+    pending.captures = pending.reductionResults!; pending.reductionGroups = undefined; pending.reductionResults = undefined; continueChunked(pending);
+  };
+  pi.registerTool({
+    name: "hindsight_chunk_capture", label: "Capture chunked hindsight evidence", description: "Stores one bounded evidence digest for the current redacted hindsight chunk.",
+    parameters: Type.Object({ summary: Type.String({ minLength: 1, maxLength: MAX_CHUNK_CAPTURE_BYTES }), evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 80 }) }, { additionalProperties: false }),
+    async execute(_toolCallId, params) {
+      const pending = pendingHindsight;
+      if (!pending || pending.mode !== "chunked" || pending.stage !== "capture") return { content: [{ type: "text", text: "No chunk capture is awaiting generation." }] };
+      if (!pending.workflowActive) return { content: [{ type: "text", text: "Chunk capture is waiting for its isolated workflow turn." }], isError: true };
+      try { pending.captures!.push(validateChunkDigest(params, pending.currentReferences!, MAX_CHUNK_CAPTURE_BYTES)); continueChunked(pending); return { content: [{ type: "text", text: "Chunk evidence captured; the next bounded workflow turn is queued." }] }; }
+      catch (error) { clearPending(); return { content: [{ type: "text", text: error instanceof Error ? error.message : "Unable to capture chunk evidence." }], isError: true }; }
+    },
+  });
+  pi.registerTool({
+    name: "hindsight_chunk_reduce", label: "Reduce chunked hindsight digests", description: "Stores one bounded reduction of intermediate hindsight evidence digests.",
+    parameters: Type.Object({ summary: Type.String({ minLength: 1, maxLength: MAX_REDUCTION_BYTES }), evidenceReferences: Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 80 }) }, { additionalProperties: false }),
+    async execute(_toolCallId, params) {
+      const pending = pendingHindsight;
+      if (!pending || pending.mode !== "chunked" || pending.stage !== "reduce") return { content: [{ type: "text", text: "No digest reduction is awaiting generation." }] };
+      if (!pending.workflowActive) return { content: [{ type: "text", text: "Digest reduction is waiting for its isolated workflow turn." }], isError: true };
+      try { pending.reductionResults!.push(validateChunkDigest(params, pending.currentReferences!, MAX_REDUCTION_BYTES)); continueReduction(pending); return { content: [{ type: "text", text: "Digest reduction captured; the next bounded workflow turn is queued." }] }; }
+      catch (error) { clearPending(); return { content: [{ type: "text", text: error instanceof Error ? error.message : "Unable to reduce chunk evidence." }], isError: true }; }
     },
   });
   async function selectSession(ctx: any, sessions: any[], title: string) {
@@ -144,10 +198,17 @@ export default function conversationCatalog(pi: ExtensionAPI) {
     const hindsightNotes = noteStore ? await reviewHindsightNotes(ctx, noteStore.notes, noteReviewPatterns(await configuredPatterns(ctx.cwd), session.id)) : [];
     const outputPath = requested.outputPath ? resolveExplicitHindsightOutputPath(requested.outputPath, ctx.cwd) : undefined;
     const defaultDirectory = outputPath ? undefined : defaultHindsightReportDirectory({ home: homedir() });
-    const prompt = preflightSynthesisPrompt(sources, { hindsightNotes }, ctx.getContextUsage?.()); const restoreTools = restrictToolsForHindsightSynthesis(pi);
-    try { pendingHindsight = { sources, hindsightNotes, ticketCloseout, outputPath, defaultDirectory, reference, restoreTools }; pi.sendUserMessage(prompt); } catch (error) { pendingHindsight = undefined; restoreTools(); throw error; }
+    const measure = measureSynthesisPrompt(sources, { hindsightNotes }); const chunked = !review.excluded && measure.totalBytes > 24 * 1024;
+    const restoreTools = restrictToolsForHindsightSynthesis(pi, chunked ? ["hindsight_chunk_capture", "hindsight_chunk_reduce", "hindsight_document_write"] : ["hindsight_document_write"]);
+    try {
+      if (!chunked) {
+        const prompt = preflightSynthesisPrompt(sources, { hindsightNotes }, ctx.getContextUsage?.()); pendingHindsight = { sources, hindsightNotes, ticketCloseout, outputPath, defaultDirectory, reference, restoreTools, mode: "single", stage: "final", queued: 0 }; pi.sendUserMessage(prompt);
+      } else {
+        const plan = planChunkedHindsightPrompts(sources); pendingHindsight = { sources, hindsightNotes, ticketCloseout, outputPath, defaultDirectory, reference, restoreTools, mode: "chunked", stage: "capture", queued: 0, chunks: plan.chunks, prompts: plan.prompts, nextChunk: 0, captures: [] }; continueChunked(pendingHindsight);
+      }
+    } catch (error) { if (pendingHindsight) clearPending(); else restoreTools(); throw error; }
     const destination = outputPath || defaultDirectory;
-    ctx.ui.notify(`Redacted evidence submitted to the active model. It can only generate the hindsight document through the safe report contract at ${destination}.`, "info");
+    ctx.ui.notify(`${chunked ? "Bounded chunked evidence" : "Redacted evidence"} submitted to the active model. It can only generate the hindsight document through the safe report contract at ${destination}.`, "info");
   }
 
   pi.registerCommand("conversation-catalog", { description: "Browse and read saved Pi conversations locally", async handler(_args, ctx) {
