@@ -2,7 +2,7 @@
   "name": "@zkrausman/pi-wiki-delivery",
   "version": "0.1.0",
   "description": "Fail-closed Pi controller for governed LLM Wiki delivery.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "private": false,
   "files": [
     "src",

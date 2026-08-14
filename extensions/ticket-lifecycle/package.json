@@ -2,7 +2,7 @@
   "name": "@zkrausman/pi-ticket-lifecycle",
   "version": "0.2.0",
   "description": "Local, tracker-neutral durable ticket lifecycle and aggregate cost receipts.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "private": false,
   "type": "module",
   "exports": "./src/index.mjs",

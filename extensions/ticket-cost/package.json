@@ -2,7 +2,7 @@
   "name": "@zkrausman/pi-ticket-cost",
   "version": "0.2.3",
   "description": "Local, session-scoped Pi ticket cost receipts.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "private": false,
   "files": [
     "src",

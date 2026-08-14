@@ -2,7 +2,7 @@
   "name": "@zkrausman/pi-delivery-controller",
   "version": "0.2.0",
   "description": "Provider-neutral Pi controller for explicitly approved work dispatch.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "private": false,
   "files": [
     "src",

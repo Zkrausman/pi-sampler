@@ -2,7 +2,7 @@
   "name": "@zkrausman/pi-conversation-catalog",
   "version": "0.5.8",
   "description": "Local Pi conversation browser and redaction-reviewed, evidence-cited hindsight reports.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "private": false,
   "bin": {
     "pi-conversation-viewer": "bin/pi-conversation-viewer.mjs"
