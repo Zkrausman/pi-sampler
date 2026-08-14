@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "description": "Source monorepo for reusable Pi extension packages.",
   "license": "Apache-2.0",
-  "private": true,
   "type": "module",
-  "workspaces": ["extensions/*"],
+  "workspaces": [
+    "extensions/*"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -17,11 +18,16 @@
     "validate:packages": "node scripts/validate-publishable-packages.mjs",
     "validate:pi-extensions": "node scripts/validate-pi-extensions.mjs",
     "validate:changesets": "node scripts/validate-changesets.mjs",
+    "validate:dco": "node scripts/validate-dco.mjs",
     "changeset": "changeset",
-    "version-packages": "changeset version",
-    "release": "changeset publish"
+    "version-packages": "changeset version && npm run generate:compliance",
+    "release": "changeset publish",
+    "generate:compliance": "node scripts/generate-package-compliance.mjs",
+    "validate:compliance": "node scripts/generate-package-compliance.mjs --check"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
     "react": "^19.2.8",

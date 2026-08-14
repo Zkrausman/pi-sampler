@@ -1,9 +1,15 @@
 # pi-sampler
 
-Reusable [Pi](https://github.com/earendil-works/pi-mono) extensions and optional
-AI-development tooling. The repository owns reusable mechanisms; a consuming
-repository owns its work-item format, repository source, credentials, commands,
-and governance policy.
+Reusable Pi extensions and optional AI-development tooling. The repository owns
+reusable mechanisms; a consuming repository owns its work-item format,
+repository source, credentials, commands, and governance policy. Pi is a
+third-party platform; this repository is not affiliated with or endorsed by
+Pi's maintainers.
+
+The source repository is public, while the six supported extension packages are
+published only to GitHub Packages with restricted access. Public source access
+does not grant package-download access; see [the release guide](docs/RELEASING.md)
+for the exact consumer setup and package inventory.
 
 > **Security:** Pi extensions execute with your user permissions. Install only
 > reviewed revisions, use project-local configuration only in trusted projects,
@@ -66,8 +72,15 @@ between path validation and open, so run only in a trusted local project.
 > from GitHub Packages. Use Pith and install its Pi hook with `pith install --pi` instead.
 
 Each extension README lists its prerequisites, configuration, and concrete
-usage examples. See [`docs/RELEASING.md`](docs/RELEASING.md) for private-registry
-setup, semantic versioning, and release operations.
+usage examples. See [`docs/RELEASING.md`](docs/RELEASING.md) for restricted
+registry setup, semantic versioning, release operations, and package SBOMs.
+
+## Public-project policies
+
+- [Privacy and local-data boundaries](docs/PRIVACY.md)
+- [Security reporting](SECURITY.md)
+- [Platform, trademark, and non-affiliation notice](docs/PLATFORM-AND-TRADEMARKS.md)
+- [Contribution provenance and DCO](CONTRIBUTING.md#contribution-provenance-and-dco)
 
 ## Project profiles
 
