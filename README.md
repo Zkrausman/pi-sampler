@@ -86,7 +86,12 @@ reconciliation helpers, schemas, and templates. Validate it independently:
 ```powershell
 cd governance
 go test -race ./...
+go run ./cmd/wiki-governance validate -repo-root .
 ```
+
+The wiki-governance command is also run by
+[`.github/workflows/wiki-governance.yml`](.github/workflows/wiki-governance.yml)
+on pull requests and pushes to `main`.
 
 ## Development
 
