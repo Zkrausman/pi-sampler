@@ -2,6 +2,16 @@
 
 `@zkrausman/pi-ticket-closeout-summary` is a dependency-free, local-only, read-only validator and renderer for one explicitly supplied finalized `@zkrausman/pi-ticket-lifecycle` v1 receipt. It never discovers receipts, writes lifecycle storage, invokes a shell, model, network, or tracker.
 
+## Install
+
+This package is published to GitHub Packages. Configure its scoped registry, then authenticate with GitHub Packages before `pi install -l`:
+
+```powershell
+npm config set @zkrausman:registry https://npm.pkg.github.com --location=project
+npm login --scope=@zkrausman --auth-type=legacy --registry=https://npm.pkg.github.com
+pi install -l npm:@zkrausman/pi-ticket-closeout-summary
+```
+
 ## API
 
 ```js
