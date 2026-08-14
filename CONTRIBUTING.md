@@ -8,7 +8,17 @@ Thanks for improving pi-sampler. By submitting a pull request, you agree that yo
 - Never commit credentials, session archives, generated delivery evidence, or consumer-owned configuration.
 - Add or update tests for behavior changes.
 - Update package documentation when installation, configuration, or commands change.
-- Add a Changeset for a user-visible change to a publishable extension. Do not add one for repository-only maintenance unless a package release is intended.
+- Add a Changeset for every tracked source, package, or documentation change to a publishable extension. Repository-only maintenance is automatically exempt; PR titles and labels are not release-policy inputs.
+- If a publishable-package change intentionally needs no release, add a changed file at `.changeset/exemptions/<descriptive-name>.json` with exactly a non-empty `reason` and the affected `packages`, for example:
+
+  ```json
+  {
+    "packages": ["@zkrausman/pi-example"],
+    "reason": "This correction changes development-only guidance and does not affect the published package."
+  }
+  ```
+
+  The CI validator accepts an exemption only when that exemption file is added or modified in the same PR, so an older exemption cannot cover later package work.
 
 ## Local checks
 

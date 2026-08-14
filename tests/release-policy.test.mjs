@@ -29,6 +29,17 @@ test("PR and release workflows run every documented validation gate before publi
   assert.deepEqual([...releaseCommandPositions].sort((left, right) => left - right), releaseCommandPositions, "release gates must run before publishing");
 });
 
+test("PR validation compares verified base and head SHAs for the Changeset policy", async () => {
+  const workflowPath = join(root, ".github", "workflows", "validate.yml");
+  const workflow = (await readFile(workflowPath, "utf8")).replace(/\r\n/g, "\n");
+
+  assert.match(workflow, /changesets:\n[\s\S]*?if: github\.event_name == 'pull_request'/);
+  assert.match(workflow, /CHANGESET_BASE_REF: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+  assert.match(workflow, /CHANGESET_HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n          fetch-depth: 0/);
+  assert.match(workflow, /npm run validate:changesets -- --base "\$CHANGESET_BASE_REF" --head "\$CHANGESET_HEAD_REF"/);
+});
+
 test("release workflow requires a confirmed main-branch production release", async () => {
   const workflowPath = join(root, ".github", "workflows", "release.yml");
   const workflow = (await readFile(workflowPath, "utf8")).replace(/\r\n/g, "\n");

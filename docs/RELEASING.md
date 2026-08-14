@@ -43,7 +43,12 @@ Update them deliberately in the consumer configuration.
    ```
 
    Select only the affected package and choose patch, minor, or major according
-   to semantic versioning.
+   to semantic versioning. Pull-request CI requires this for every tracked
+   publishable-package source, manifest, or documentation change. Repository-only
+   maintenance needs no Changeset. For an intentional no-release package change,
+   add a changed `.changeset/exemptions/<descriptive-name>.json` file containing
+   exactly `packages` (the affected package names) and a non-empty `reason`; see
+   [CONTRIBUTING.md](../CONTRIBUTING.md) for the machine-checked format.
 
 2. Create the version PR locally after reviewing the pending bump:
 
