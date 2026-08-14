@@ -1,5 +1,11 @@
 # @zkrausman/pi-conversation-catalog
 
+## 0.6.0
+
+### Minor Changes
+
+- 9d8c919: Add bounded, local-only archive search to the standalone conversation viewer, with safe opaque results and reader handoff.
+
 ## 0.5.8
 
 ### Patch Changes

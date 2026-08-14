@@ -12,12 +12,12 @@ access even when they can read the source.
 
 | Supported extension | Package | Current manifest version | Distribution |
 | --- | --- | --- | --- |
-| Conversation catalog | `@zkrausman/pi-conversation-catalog` | `0.5.8` | Supported -- GitHub Packages (restricted) |
+| Conversation catalog | `@zkrausman/pi-conversation-catalog` | `0.6.0` | Supported -- GitHub Packages (restricted) |
 | Delivery controller | `@zkrausman/pi-delivery-controller` | `0.2.0` | Supported -- GitHub Packages (restricted) |
 | Ticket closeout summary | `@zkrausman/pi-ticket-closeout-summary` | `0.2.0` | Supported -- GitHub Packages (restricted) |
 | Ticket cost | `@zkrausman/pi-ticket-cost` | `0.2.3` | Supported -- GitHub Packages (restricted) |
 | Ticket lifecycle | `@zkrausman/pi-ticket-lifecycle` | `0.2.0` | Supported -- GitHub Packages (restricted) |
-| Wiki delivery | `@zkrausman/pi-wiki-delivery` | `0.1.0` | Supported -- GitHub Packages (restricted) |
+| Wiki delivery | `@zkrausman/pi-wiki-delivery` | `0.1.1` | Supported -- GitHub Packages (restricted) |
 
 The output optimizer source remains in this repository only for history; it is
 not a supported or publishable package:
