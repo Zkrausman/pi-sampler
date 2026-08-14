@@ -59,6 +59,14 @@ function assertDirectoryNotSymlink(path, label) {
   }
 }
 
+function assertContainedProjectDirectory(root, path) {
+  const stat = lstatSync(path);
+  const resolved = realpathSync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (resolved !== root && !isInside(root, resolved))) {
+    throw workspaceError("unsafe_project_path", "path must remain beneath non-symlink project directories");
+  }
+}
+
 /** Create the one fixed workspace location below a trusted project root. */
 export function resolveWorkspacePaths(projectRoot) {
   if (typeof projectRoot !== "string" || !projectRoot.trim()) throw new TypeError("projectRoot must be a non-empty path");
@@ -283,13 +291,18 @@ export function resolveProjectScenePath(projectRoot, requestedPath, allowMissing
   const target = resolve(root, clean);
   if (!isInside(root, target)) throw workspaceError("unsafe_project_path", "path escapes project root");
   const parent = dirname(target);
-  if (allowMissing && !existsSync(parent)) mkdirSync(parent, { recursive: true, mode: 0o700 });
+  assertContainedProjectDirectory(root, root);
   let cursor = root;
   for (const part of relative(root, parent).split(sep).filter(Boolean)) {
     cursor = resolve(cursor, part);
-    if (!existsSync(cursor) || lstatSync(cursor).isSymbolicLink() || !lstatSync(cursor).isDirectory() || !isInside(root, realpathSync(cursor))) {
-      throw workspaceError("unsafe_project_path", "path must remain beneath non-symlink project directories");
+    if (existsSync(cursor)) {
+      assertContainedProjectDirectory(root, cursor);
+      continue;
     }
+    if (!allowMissing) throw workspaceError("unsafe_project_path", "path must remain beneath non-symlink project directories");
+    // Do not use recursive mkdir: it could traverse an unchecked symlinked ancestor.
+    mkdirSync(cursor, { recursive: false, mode: 0o700 });
+    assertContainedProjectDirectory(root, cursor);
   }
   if (!allowMissing && !existsSync(target)) throw workspaceError("project_file_not_found", "project-local Excalidraw file does not exist");
   if (existsSync(target) && (lstatSync(target).isSymbolicLink() || !lstatSync(target).isFile() || !isInside(root, realpathSync(target)))) {

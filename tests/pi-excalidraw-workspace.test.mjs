@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { request as httpRequest } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -87,6 +87,16 @@ test("native file import/export is contained, bounded, and atomically replaces t
     assert.deepEqual(JSON.parse(readFileSync(exported.path, "utf8")).files, scene().files);
     assert.throws(() => store.importNativeFile("escape", "../outside.excalidraw", 0), /project-relative/);
     assert.throws(() => store.exportNativeFile("native", "/tmp/outside.excalidraw"), /project-relative/);
+  } finally { store.close(); }
+});
+
+test("native export rejects a symlinked parent without creating external directories", async () => {
+  const root = project(); const external = project(); const store = await openExcalidrawWorkspace(root);
+  try {
+    store.save("native", scene(), 0);
+    symlinkSync(external, join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
+    assert.throws(() => store.exportNativeFile("native", "linked/new-dir/output.excalidraw"), /non-symlink project directories/);
+    assert.equal(existsSync(join(external, "new-dir")), false);
   } finally { store.close(); }
 });
 
