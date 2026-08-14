@@ -66,16 +66,23 @@ jobs:
       - run: npm run validate:dco -- --base "$DCO_BASE_REF" --head "$DCO_HEAD_REF"
 
   adversarial-review-attestation:
-    # Ticket branches must supply only a bounded, commit-bound marker; review text stays local.
+    # Ticket branches need a bounded, commit-bound marker and an independent
+    # GitHub approval. The body and review JSON remain local to this runner.
     if: github.event_name == 'pull_request'
     name: Adversarial review evidence
     timeout-minutes: 5
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       ADVERSARIAL_REVIEW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       ADVERSARIAL_REVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       ADVERSARIAL_REVIEW_HEAD_REF: ${{ github.head_ref }}
       ADVERSARIAL_REVIEW_PR_BODY: ${{ github.event.pull_request.body }}
+      ADVERSARIAL_REVIEW_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      ADVERSARIAL_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+      ADVERSARIAL_REVIEW_REVIEWS_FILE: ${{ runner.temp }}/adversarial-review-reviews.json
     steps:
       # A complete commit graph includes the immutable PR base and lets Git
       # prove its ancestry to the head. The job timeout and validator bounds
@@ -88,7 +95,19 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-      - run: npm run validate:adversarial-review
+      - name: Fetch GitHub review metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          gh api --method GET --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/${ADVERSARIAL_REVIEW_PR_NUMBER}/reviews?per_page=100" > "$ADVERSARIAL_REVIEW_REVIEWS_FILE"
+          test -s "$ADVERSARIAL_REVIEW_REVIEWS_FILE"
+      - name: Validate attestation without logging private inputs
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$ADVERSARIAL_REVIEW_REVIEWS_FILE"' EXIT
+          npm run validate:adversarial-review
 
   governance:
     timeout-minutes: 5

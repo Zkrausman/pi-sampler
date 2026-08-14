@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const validator = join(root, "scripts", "validate-adversarial-review-attestation.mjs");
 const packetGenerator = join(root, "scripts", "generate-review-packet.mjs");
+const ticketBranch = "zkrausman/aidev-108-enforce-adversarial-review-evidence";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -30,22 +31,44 @@ function digest(cwd, base, head) {
   const packet = execFileSync(process.execPath, [packetGenerator, "--base", base, "--head", head], { cwd, encoding: "utf8" });
   return createHash("sha256").update(packet, "utf8").digest("hex");
 }
-function marker({ base, head, packetSha256, reviewerRole = "independent-fresh-context-reviewer", outcome = "clean" }) {
-  return `<!-- pi-sampler-adversarial-review-attestation:v1 ${JSON.stringify({ format: "pi-sampler.adversarial-review-attestation", version: 1, base, head, reviewerRole, outcome, packetSha256 })} -->`;
+function marker({ base, head, packetSha256, outcome = "clean" }) {
+  return `<!-- pi-sampler-adversarial-review-attestation:v2 ${JSON.stringify({ format: "pi-sampler.adversarial-review-attestation", version: 2, base, head, outcome, packetSha256 })} -->`;
 }
-function invoke(cwd, { base, head, branch, body }) {
+function review({ id, login = "independent-reviewer", state = "APPROVED", commitId }) {
+  return { id, state, commit_id: commitId, user: { login } };
+}
+async function invoke(cwd, { base, head, branch, body, author = "pr-author", reviews = [[]] }) {
+  const reviewsFile = join(cwd, "reviews.json");
+  await writeFile(reviewsFile, typeof reviews === "string" ? reviews : JSON.stringify(reviews));
   return spawnSync(process.execPath, [validator], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ADVERSARIAL_REVIEW_BASE_SHA: base, ADVERSARIAL_REVIEW_HEAD_SHA: head, ADVERSARIAL_REVIEW_HEAD_REF: branch, ADVERSARIAL_REVIEW_PR_BODY: body },
+    env: {
+      ...process.env,
+      ADVERSARIAL_REVIEW_BASE_SHA: base,
+      ADVERSARIAL_REVIEW_HEAD_SHA: head,
+      ADVERSARIAL_REVIEW_HEAD_REF: branch,
+      ADVERSARIAL_REVIEW_PR_BODY: body,
+      ADVERSARIAL_REVIEW_PR_AUTHOR: author,
+      ADVERSARIAL_REVIEW_REVIEWS_FILE: reviewsFile,
+    },
   });
 }
+function validInput(fixture, reviews = [review({ id: 1, commitId: fixture.head })]) {
+  return {
+    ...fixture,
+    branch: ticketBranch,
+    body: marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head) }),
+    reviews: [reviews],
+  };
+}
 
-test("adversarial review attestation accepts one clean, commit-bound marker for a ticket branch", async () => {
+test("adversarial review attestation accepts a privacy-safe marker plus independent API approval on the PR head", async () => {
   const fixture = await repository();
   try {
-    const body = `## Summary\n\n${marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head) })}\n`;
-    const result = invoke(fixture.cwd, { ...fixture, branch: "zkrausman/aidev-108-enforce-adversarial-review-evidence", body });
+    const input = validInput(fixture);
+    assert.doesNotMatch(input.body, /reviewer|independent-reviewer/);
+    const result = await invoke(fixture.cwd, input);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /attestation validated/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
@@ -54,35 +77,96 @@ test("adversarial review attestation accepts one clean, commit-bound marker for 
 test("adversarial review attestation permits no marker only for strict non-ticket branches", async () => {
   const fixture = await repository();
   try {
-    const nonTicket = invoke(fixture.cwd, { ...fixture, branch: "maintenance/update-ci", body: "No review marker." });
+    const nonTicket = await invoke(fixture.cwd, { ...fixture, branch: "maintenance/update-ci", body: "No review marker." });
     assert.equal(nonTicket.status, 0, nonTicket.stderr);
-    const ticket = invoke(fixture.cwd, { ...fixture, branch: "zkrausman/aidev-108-enforce-adversarial-review-evidence", body: "No review marker." });
+    const ticket = await invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body: "No review marker." });
     assert.notEqual(ticket.status, 0);
     assert.match(ticket.stderr, /required for an AIDEV ticket branch/);
-    const nearMiss = invoke(fixture.cwd, { ...fixture, branch: "zkrausman/AIDEV-108-enforce-adversarial-review-evidence", body: "" });
+    const nearMiss = await invoke(fixture.cwd, { ...fixture, branch: "zkrausman/AIDEV-108-enforce-adversarial-review-evidence", body: "" });
     assert.equal(nearMiss.status, 0, nearMiss.stderr);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
-test("adversarial review attestation fails closed for malformed, multiple, stale, non-independent, and non-clean evidence", async () => {
+test("adversarial review attestation fails closed for malformed, multiple, stale, and non-clean markers", async () => {
   const fixture = await repository();
   try {
-    const valid = marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head) });
-    const common = { ...fixture, branch: "zkrausman/aidev-108-enforce-adversarial-review-evidence" };
+    const valid = validInput(fixture);
     const cases = [
-      ["malformed", "<!-- pi-sampler-adversarial-review-attestation:v1 not-json -->", /exactly once|invalid JSON/],
-      ["multiple", `${valid}\n${valid}`, /exactly once/],
+      ["old self-asserted role field", marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head) }).replace('"outcome"', '"reviewerRole":"independent-human-reviewer","outcome"'), /unsupported or missing fields/],
+      ["malformed", "<!-- pi-sampler-adversarial-review-attestation:v2 not-json -->", /exactly once|invalid JSON/],
+      ["multiple", `${valid.body}\n${valid.body}`, /exactly once/],
       ["stale digest", marker({ ...fixture, packetSha256: "0".repeat(64) }), /packet digest/],
       ["stale base", marker({ ...fixture, base: "0".repeat(40), packetSha256: digest(fixture.cwd, fixture.base, fixture.head) }), /base or head does not match/],
-      ["non-independent reviewer", marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head), reviewerRole: "author" }), /independent reviewer role/],
       ["unresolved outcome", marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head), outcome: "blocker" }), /outcome must be clean/],
       ["private body is not printed", "private-example $(do-not-execute)", /required for an AIDEV ticket branch/],
     ];
     for (const [name, body, expected] of cases) {
-      const result = invoke(fixture.cwd, { ...common, body });
+      const result = await invoke(fixture.cwd, { ...valid, body });
       assert.notEqual(result.status, 0, name);
       assert.match(result.stderr, expected, name);
       assert.doesNotMatch(result.stderr, /private-example|do-not-execute/, name);
+    }
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("adversarial review attestation rejects self, stale-head, and missing approvals", async () => {
+  const fixture = await repository();
+  try {
+    const otherCommit = "a".repeat(40);
+    const cases = [
+      ["self approval", [review({ id: 1, login: "pr-author", commitId: fixture.head })]],
+      ["case-variant self approval", [review({ id: 1, login: "Pr-Author", commitId: fixture.head })]],
+      ["approval on another commit", [review({ id: 1, commitId: otherCommit })]],
+      ["no approval", [review({ id: 1, state: "COMMENTED", commitId: fixture.head })]],
+      ["no reviews", []],
+    ];
+    for (const [name, reviews] of cases) {
+      const result = await invoke(fixture.cwd, validInput(fixture, reviews));
+      assert.notEqual(result.status, 0, name);
+      assert.match(result.stderr, /does not prove an independent approval/, name);
+    }
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("adversarial review attestation uses the latest review state per reviewer regardless of API ordering", async () => {
+  const fixture = await repository();
+  try {
+    const cases = [
+      ["later comment invalidates approval", [review({ id: 9, state: "COMMENTED", commitId: fixture.head }), review({ id: 2, commitId: fixture.head })]],
+      ["later change request invalidates approval", [review({ id: 9, state: "CHANGES_REQUESTED", commitId: fixture.head }), review({ id: 2, commitId: fixture.head })]],
+      ["later approval on another commit invalidates approval", [review({ id: 9, commitId: "b".repeat(40) }), review({ id: 2, commitId: fixture.head })]],
+    ];
+    for (const [name, reviews] of cases) {
+      const result = await invoke(fixture.cwd, validInput(fixture, reviews));
+      assert.notEqual(result.status, 0, name);
+      assert.match(result.stderr, /does not prove an independent approval/, name);
+    }
+    const independent = await invoke(fixture.cwd, validInput(fixture, [
+      review({ id: 10, login: "pr-author", commitId: fixture.head }),
+      review({ id: 9, login: "independent-reviewer", commitId: fixture.head }),
+    ]));
+    assert.equal(independent.status, 0, independent.stderr);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("adversarial review attestation rejects malformed review data without disclosing review contents", async () => {
+  const fixture = await repository();
+  try {
+    const cases = [
+      ["invalid JSON", "{private-review-content"],
+      ["non-page root", JSON.stringify([{}])],
+      ["missing login", JSON.stringify([[{ id: 1, state: "APPROVED", commit_id: fixture.head, user: {} }]])],
+      ["invalid review id", JSON.stringify([[{ id: "one", state: "APPROVED", commit_id: fixture.head, user: { login: "secret-reviewer" } }]])],
+      ["unsupported state", JSON.stringify([[{ id: 1, state: "UNKNOWN", commit_id: fixture.head, user: { login: "secret-reviewer" } }]])],
+      ["duplicate ids", JSON.stringify([[{ id: 1, state: "APPROVED", commit_id: fixture.head, user: { login: "secret-reviewer" } }, { id: 1, state: "COMMENTED", commit_id: fixture.head, user: { login: "another-reviewer" } }]])],
+    ];
+    for (const [name, reviews] of cases) {
+      const input = validInput(fixture);
+      input.reviews = reviews;
+      const result = await invoke(fixture.cwd, input);
+      assert.notEqual(result.status, 0, name);
+      assert.match(result.stderr, /GitHub (review data|reviewer login)/, name);
+      assert.doesNotMatch(result.stderr, /private-review-content|secret-reviewer/, name);
     }
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });

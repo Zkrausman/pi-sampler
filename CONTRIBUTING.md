@@ -24,25 +24,21 @@ Thanks for improving pi-sampler. By submitting a pull request, you agree that yo
 
 AIDEV ticket branches use this strict convention: `zkrausman/aidev-<positive-ticket-number>-<lowercase-kebab-description>` (for example, `zkrausman/aidev-108-enforce-adversarial-review-evidence`). A pull request whose head branch matches that exact convention requires an independent adversarial review in a fresh context before merge. Branches that do not match it do not require an attestation; a near match such as `zkrausman/AIDEV-108-example` is intentionally not a ticket branch.
 
-The reviewer keeps their report, prompts, sessions, credentials, and any generated review material local. Review the deterministic commit-only packet for the exact PR base and head, resolve every blocker or high finding, then add **one** single-line marker to the PR body. The marker is metadata only; do not include review text, session identifiers, personal identifiers, or credentials.
+The reviewer keeps their report, prompts, sessions, credentials, and any generated review material local. Review the deterministic commit-only packet for the exact PR base and head, resolve every blocker or high finding, then add **one** single-line marker to the PR body. The marker is metadata only; do not include review text, session identifiers, personal identifiers, reviewer identities, or credentials. The independent reviewer must also submit a GitHub `APPROVED` review on that exact PR head commit; CI obtains the reviewer login privately from GitHub's review API and rejects an approval by the PR author.
 
 ```html
-<!-- pi-sampler-adversarial-review-attestation:v1 {"format":"pi-sampler.adversarial-review-attestation","version":1,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","reviewerRole":"independent-fresh-context-reviewer","outcome":"clean","packetSha256":"<lowercase-sha256-of-the-commit-only-packet>"} -->
+<!-- pi-sampler-adversarial-review-attestation:v2 {"format":"pi-sampler.adversarial-review-attestation","version":2,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","outcome":"clean","packetSha256":"<lowercase-sha256-of-the-commit-only-packet>"} -->
 ```
 
-Use `independent-human-reviewer` or `independent-fresh-context-reviewer` for `reviewerRole`; no other identity values are accepted. `outcome` must be exactly `clean`, which attests that no blocker or high finding remains unresolved. To calculate the digest locally, use the same immutable commits that will be in the PR (for example `base=$(git rev-parse origin/main)` and `head=$(git rev-parse HEAD)`), then run:
+`outcome` must be exactly `clean`, which attests that no blocker or high finding remains unresolved. CI evaluates only each login's latest GitHub review state: a later comment, change request, dismissal, or review on another commit invalidates that login's earlier approval. To calculate the digest locally, use the same immutable commits that will be in the PR (for example `base=$(git rev-parse origin/main)` and `head=$(git rev-parse HEAD)`), then run:
 
 ```sh
 node --input-type=module -e "import { generateReviewPacket, reviewPacketSha256 } from './scripts/generate-review-packet.mjs'; const [base, head] = process.argv.slice(1); console.log(reviewPacketSha256(await generateReviewPacket({ base, head })));" "$base" "$head"
 ```
 
-Before opening or updating the PR, replace the placeholders in the marker with those exact SHAs and digest, then locally check the marker without passing it through a shell command:
+Before opening or updating the PR, replace the placeholders in the marker with those exact SHAs and digest. The complete check runs in GitHub Actions because it securely retrieves the PR author and review metadata; do not copy reviewer identities or review JSON into the PR body.
 
-```sh
-ADVERSARIAL_REVIEW_BASE_SHA="$base" ADVERSARIAL_REVIEW_HEAD_SHA="$head" ADVERSARIAL_REVIEW_HEAD_REF="zkrausman/aidev-108-enforce-adversarial-review-evidence" ADVERSARIAL_REVIEW_PR_BODY='<!-- paste the marker here -->' npm run validate:adversarial-review
-```
-
-The required **Adversarial review evidence** CI job reads the PR body as a bounded environment value, never executes it, regenerates the packet from the checked-out base/head commits, and fails for missing, malformed, multiple, stale, or mismatched markers. CI verifies commit-bound evidence, not the quality of reviewer judgment; maintainers must still ensure the reviewer was independent and used fresh context before merge.
+The required **Adversarial review evidence** CI job reads the PR body as a bounded environment value, fetches paginated review metadata using read-only pull-request permission into the runner temporary directory, never executes or logs either input, regenerates the packet from the checked-out base/head commits, and fails for missing, malformed, multiple, stale, mismatched, self-authored, or no-longer-effective approval evidence. CI verifies the exact commit-bound marker and GitHub review relationship; maintainers must still ensure the reviewer used fresh context before merge.
 
 ## Contribution provenance and DCO
 
