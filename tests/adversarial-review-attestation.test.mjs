@@ -63,21 +63,26 @@ function validInput(fixture, reviews = [review({ id: 1, commitId: fixture.head }
   };
 }
 
-test("adversarial review gate runs only trusted base code while reading PR head objects", async () => {
-  const workflow = await readFile(join(root, ".github", "workflows", "validate.yml"), "utf8");
+test("adversarial review gate revalidates trusted PR and review events without executing PR-head code", async () => {
+  const workflow = (await readFile(join(root, ".github", "workflows", "validate.yml"), "utf8")).replace(/\r\n/g, "\n");
   const start = workflow.indexOf("  adversarial-review-attestation:");
   const end = workflow.indexOf("\n  governance:", start);
   assert.ok(start >= 0 && end > start, "adversarial-review-attestation job must remain present");
   const job = workflow.slice(start, end);
 
-  assert.match(workflow, /^  pull_request_target:$/m);
-  assert.match(job, /if: github\.event_name == 'pull_request_target'/);
+  assert.match(workflow, /^  pull_request_target:\n    types: \[opened, reopened, synchronize, edited\]$/m);
+  assert.match(workflow, /^  pull_request_review:\n    types: \[submitted, edited, dismissed\]$/m);
+  assert.match(job, /if: github\.event_name == 'pull_request_target' \|\| github\.event_name == 'pull_request_review'/);
   assert.match(job, /name: Adversarial review evidence/);
   assert.match(job, /contents: read/);
   assert.match(job, /pull-requests: read/);
+  assert.match(job, /ADVERSARIAL_REVIEW_HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.ref \}\}/);
+  assert.doesNotMatch(job, /ADVERSARIAL_REVIEW_HEAD_REF: \$\{\{ github\.head_ref \}\}/);
+  assert.equal((job.match(/uses: actions\/checkout/g) ?? []).length, 1, "gate must use one explicitly pinned checkout");
   assert.match(job, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
   assert.match(job, /persist-credentials: false/);
   assert.doesNotMatch(job, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.doesNotMatch(job, /\bgit checkout\b/);
   assert.match(job, /git fetch --no-tags origin "\$ADVERSARIAL_REVIEW_HEAD_SHA"/);
   assert.match(job, /git cat-file -e "\$ADVERSARIAL_REVIEW_HEAD_SHA\^\{commit\}"/);
   assert.match(job, /pulls\/\$\{ADVERSARIAL_REVIEW_PR_NUMBER\}\/reviews\?per_page=100/);

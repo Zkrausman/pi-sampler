@@ -6,6 +6,10 @@ on:
   # deliberately separate from ordinary PR validation, which may run PR code.
   pull_request_target:
     types: [opened, reopened, synchronize, edited]
+  # Review events resolve this workflow from the trusted default branch, so a
+  # submitted, edited, or dismissed review revalidates the required check.
+  pull_request_review:
+    types: [submitted, edited, dismissed]
   push:
     branches: [main]
 
@@ -70,10 +74,10 @@ jobs:
       - run: npm run validate:dco -- --base "$DCO_BASE_REF" --head "$DCO_HEAD_REF"
 
   adversarial-review-attestation:
-    # Required status check name: Adversarial review evidence. This job runs
-    # only from pull_request_target, whose workflow comes from the trusted base.
-    # It never checks out or executes PR-head files.
-    if: github.event_name == 'pull_request_target'
+    # Required status check name: Adversarial review evidence. These events
+    # resolve this workflow from a trusted branch. It never checks out or
+    # executes PR-head files.
+    if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review'
     name: Adversarial review evidence
     timeout-minutes: 5
     runs-on: ubuntu-latest
@@ -83,7 +87,9 @@ jobs:
     env:
       ADVERSARIAL_REVIEW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       ADVERSARIAL_REVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      ADVERSARIAL_REVIEW_HEAD_REF: ${{ github.head_ref }}
+      # github.head_ref is not set for pull_request_review events; this
+      # payload field is available for both trusted event types.
+      ADVERSARIAL_REVIEW_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       ADVERSARIAL_REVIEW_PR_BODY: ${{ github.event.pull_request.body }}
       ADVERSARIAL_REVIEW_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       ADVERSARIAL_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
