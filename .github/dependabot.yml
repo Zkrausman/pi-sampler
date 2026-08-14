@@ -8,6 +8,12 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    ignore:
+      # TypeScript 7 removes the JavaScript compiler API used by local test loaders.
+      # Migrate that harness deliberately rather than accepting an automated major bump.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: gomod
     directory: /governance
