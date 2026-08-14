@@ -276,6 +276,7 @@ export class ObservedWikiLifecycle {
     }
     if (this.phase === "capture") {
       assert(SOURCE_ID.test(details?.sourceId ?? ""), "capture", "invalid_source_id");
+      assert(!this.sourceIds.includes(details.sourceId), "capture", "duplicate_source_id");
       this.sourceIds.push(details.sourceId);
       this.sourceIndex += 1;
       if (this.sourceIndex === this.input.sources.length) this.phase = "ingest";
@@ -294,6 +295,7 @@ export class ObservedWikiLifecycle {
     }
     if (this.phase === "ensure") {
       assert(PAGE_ID.test(details?.pageId ?? ""), "canonical_pages", "invalid_page_id");
+      assert(!this.pageIds.includes(details.pageId), "canonical_pages", "duplicate_page_id");
       this.pageIds.push(details.pageId);
       this.pageIndex += 1;
       this.phase = this.pageIndex === this.input.canonicalPages.length ? "observe" : "search";

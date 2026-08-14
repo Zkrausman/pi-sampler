@@ -43,15 +43,15 @@ configuration options.
 
 Use this after implementing a feature whose design notes, verification results,
 and code-review outcome should become durable project knowledge. Start a run
-with the delivery metadata and redacted source files. This abbreviated example
-shows the shape of `wiki_delivery_begin`; a real run supplies at least five
-sources and one or more canonical pages:
+with the delivery metadata and redacted source files. This example shows the
+complete accepted `wiki_delivery_begin` source set; each source must use one of
+the controller's accepted local Markdown paths:
 
 ```json
 {
   "ticket_id": "ENG-42",
   "recall_query": "health endpoint design and verification",
-  "okf_path": "docs/specifications/ENG-42-health-endpoint.md",
+  "okf_path": "docs/specs/ENG-42-health-endpoint.md",
   "delivery_state": "review_ready",
   "pr_number": 42,
   "pr_url": "https://github.com/acme/example-service/pull/42",
@@ -59,7 +59,11 @@ sources and one or more canonical pages:
   "review_verdict": "approved",
   "merge_status": "not_merged",
   "sources": [
-    { "kind": "specification", "title": "Feature specification", "file_path": "docs/specifications/ENG-42-health-endpoint.md" }
+    { "kind": "ticket", "title": "Feature ticket", "file_path": "docs/okf/ENG-42-ticket.md" },
+    { "kind": "spec", "title": "Feature specification", "file_path": "docs/specs/ENG-42-health-endpoint.md" },
+    { "kind": "pull_request", "title": "Pull request", "file_path": "docs/okf/ENG-42-pull-request.md" },
+    { "kind": "review", "title": "Code review", "file_path": "docs/okf/ENG-42-review.md" },
+    { "kind": "verification", "title": "Verification results", "file_path": "docs/okf/ENG-42-verification.md" }
   ],
   "canonical_pages": [
     { "type": "requirement", "title": "Health endpoint" }
@@ -136,8 +140,15 @@ until its adapter/configuration is supplied.
 
 ## Verify
 
-The repository's legacy Wiki-controller tests have not yet been restored. Run
-the governance suite after installing its validator/template:
+Run the repository test suite, which includes the Wiki-delivery controller and
+extension-registration lifecycle coverage:
+
+```powershell
+npm test
+```
+
+After installing the compatible validator/template in a consumer project, also
+run its governance suite:
 
 ```powershell
 cd governance
