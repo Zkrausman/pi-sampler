@@ -14,6 +14,21 @@ test("withdrawn output optimizer cannot be published", async () => {
   assert.equal("publishConfig" in manifest, false);
 });
 
+test("PR and release workflows run every documented validation gate before publishing", async () => {
+  const validatePath = join(root, ".github", "workflows", "validate.yml");
+  const validate = (await readFile(validatePath, "utf8")).replace(/\r\n/g, "\n");
+  for (const command of ["npm test", "npm run build", "npm run validate:pi-extensions", "npm run validate:packages", "go test -race ./..."]) {
+    assert.match(validate, new RegExp(`- run: ${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  }
+
+  const releasePath = join(root, ".github", "workflows", "release.yml");
+  const release = (await readFile(releasePath, "utf8")).replace(/\r\n/g, "\n");
+  assert.match(release, /uses: actions\/setup-go@v7/);
+  const releaseCommandPositions = ["npm test", "npm run build", "npm run validate:governance", "npm run validate:pi-extensions", "npm run validate:packages", "npm run release"].map((command) => release.indexOf(`- run: ${command}`));
+  assert.ok(releaseCommandPositions.every((position) => position >= 0), "release must run every validation gate");
+  assert.deepEqual([...releaseCommandPositions].sort((left, right) => left - right), releaseCommandPositions, "release gates must run before publishing");
+});
+
 test("release workflow requires a confirmed main-branch production release", async () => {
   const workflowPath = join(root, ".github", "workflows", "release.yml");
   const workflow = (await readFile(workflowPath, "utf8")).replace(/\r\n/g, "\n");

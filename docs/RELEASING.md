@@ -60,8 +60,10 @@ Update them deliberately in the consumer configuration.
 4. In **Actions**, select **Release Pi packages**, choose the `main` branch in
    **Run workflow**, check the release-confirmation input, and dispatch it.
    The workflow rejects any ref other than `refs/heads/main` before checkout
-   or publishing, reruns tests, and uses `changeset publish` to publish only
-   versions that are not already present in GitHub Packages.
+   or publishing, reruns Node tests, the root build, governance tests, Pi
+   extension entry-point validation, and publishable-package dry-run artifact
+   checks before using `changeset publish` to publish only versions that are
+   not already present in GitHub Packages.
 5. Approve the resulting `production` environment deployment before the
    release job continues. `Zkrausman` is currently the sole required reviewer
    and may self-approve while they are the only maintainer. Add maintainers as
