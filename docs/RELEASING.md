@@ -57,9 +57,15 @@ Update them deliberately in the consumer configuration.
    The command updates package versions, changelogs, and the lockfile, and
    consumes the included Changeset files.
 3. Merge the version PR.
-4. From the default branch, run the **Release Pi packages** GitHub Actions
-   workflow manually. It reruns tests and uses `changeset publish` to publish
-   only versions that are not already present in GitHub Packages.
+4. In **Actions**, select **Release Pi packages**, choose the `main` branch in
+   **Run workflow**, check the release-confirmation input, and dispatch it.
+   The workflow rejects any ref other than `refs/heads/main` before checkout
+   or publishing, reruns tests, and uses `changeset publish` to publish only
+   versions that are not already present in GitHub Packages.
+5. Approve the resulting `production` environment deployment before the
+   release job continues. `Zkrausman` is currently the sole required reviewer
+   and may self-approve while they are the only maintainer. Add maintainers as
+   required reviewers and revisit self-approval when that changes.
 
 The release workflow uses `GITHUB_TOKEN`; repository Actions settings must
 permit it to write packages. The version PR is intentionally created by a
