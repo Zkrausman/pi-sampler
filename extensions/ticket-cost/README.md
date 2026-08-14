@@ -4,15 +4,11 @@
 
 ## Install
 
-This package is published to GitHub Packages. Configure its scoped registry, then authenticate with GitHub Packages before `pi install -l` (do not change global npm configuration automatically):
+Follow [the canonical GitHub Packages scoped-registry and authentication procedure](../../docs/RELEASING.md#consumer-setup), then install the released package:
 
 ```powershell
-npm config set @zkrausman:registry https://npm.pkg.github.com --location=project
-npm login --scope=@zkrausman --auth-type=legacy --registry=https://npm.pkg.github.com
 pi install -l npm:@zkrausman/pi-ticket-cost
 ```
-
-Use GitHub Packages credentials with permission to read the package when prompted.
 
 ## Harness lifecycle API
 

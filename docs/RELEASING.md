@@ -1,28 +1,54 @@
 # Releasing Pi extension packages
 
-Each extension is an independently versioned private npm package published to
-GitHub Packages:
+## Package inventory and distribution
 
-| Extension | Package | Initial version |
-| --- | --- | --- |
-| Delivery controller | `@zkrausman/pi-delivery-controller` | `0.1.0` |
-| Wiki delivery | `@zkrausman/pi-wiki-delivery` | `0.1.0` |
+The `pi-sampler` source repository is public. Source visibility and GitHub
+Packages access are separate: viewing this repository does not authorize a
+package download. The supported package workspaces below are configured to
+publish to the GitHub Packages npm registry with restricted access. GitHub
+evaluates the token against each package's access policy (including any
+repository-linked permission inheritance), so consumers need package read
+access even when they can read the source.
+
+| Supported extension | Package | Current manifest version | Distribution |
+| --- | --- | --- | --- |
+| Conversation catalog | `@zkrausman/pi-conversation-catalog` | `0.5.8` | Supported -- GitHub Packages (restricted) |
+| Delivery controller | `@zkrausman/pi-delivery-controller` | `0.2.0` | Supported -- GitHub Packages (restricted) |
+| Ticket closeout summary | `@zkrausman/pi-ticket-closeout-summary` | `0.2.0` | Supported -- GitHub Packages (restricted) |
+| Ticket cost | `@zkrausman/pi-ticket-cost` | `0.2.3` | Supported -- GitHub Packages (restricted) |
+| Ticket lifecycle | `@zkrausman/pi-ticket-lifecycle` | `0.2.0` | Supported -- GitHub Packages (restricted) |
+| Wiki delivery | `@zkrausman/pi-wiki-delivery` | `0.1.0` | Supported -- GitHub Packages (restricted) |
+
+The output optimizer source remains in this repository only for history; it is
+not a supported or publishable package:
+
+| Extension | Package | Source version | Distribution |
+| --- | --- | --- | --- |
+| Output optimizer | `@zkrausman/pi-output-optimizer` | `0.1.0` | Withdrawn from GitHub Packages -- do not publish |
 
 ## Consumer setup
 
-A consumer with GitHub Packages read access configures npm once:
+Use this procedure for every supported package. It configures only the
+`@zkrausman` scope and keeps the token outside the consumer project's files.
 
-```ini
-@zkrausman:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}
-```
+1. Obtain GitHub Packages **read** access to the package from its owner. Public
+   source access alone is insufficient.
+2. In the consumer project's `.npmrc`, add the scoped registry and an
+   environment-variable token reference:
 
-`GITHUB_PACKAGES_TOKEN` must be a read-only token with access to these private
-packages. Then install the desired package in Pi project settings:
+   ```ini
+   @zkrausman:registry=https://npm.pkg.github.com
+   //npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}
+   ```
 
-```powershell
-pi install -l npm:@zkrausman/pi-delivery-controller
-```
+3. Set `GITHUB_PACKAGES_TOKEN` in the shell or secret store used to run Pi. The
+   token must be accepted by GitHub Packages and have read access to the package;
+   do not put a token value in `.npmrc` or commit it.
+4. Install the desired package in Pi project settings, for example:
+
+   ```powershell
+   pi install -l npm:@zkrausman/pi-delivery-controller
+   ```
 
 An unversioned npm source lets Pi show its package-update notice at session
 start; run `pi update --extensions` after reviewing the release notes. Pin an

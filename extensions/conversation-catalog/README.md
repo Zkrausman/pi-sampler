@@ -4,6 +4,8 @@
 
 ## Install
 
+Follow [the canonical GitHub Packages scoped-registry and authentication procedure](../../docs/RELEASING.md#consumer-setup), then install the released package:
+
 ```powershell
 pi install -l npm:@zkrausman/pi-conversation-catalog
 ```
