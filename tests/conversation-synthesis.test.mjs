@@ -30,6 +30,25 @@ test("safe report makes cited evidence and matching Fix/Harden proposals inspect
   assert.match(html, /default-src 'none'/); assert.match(html, /model suggestions and require human review/); assert.doesNotMatch(html, /Visualizations|narrative map|localStorage|disposition|feedback|outcome|linear|<script/i);
 });
 
+test("renderer-owned report context and glossary are fixed across report variants and do not enter synthesis", () => {
+  const sensitiveSentinels = ["RAW-SESSION-SENTINEL", "RAW-EVENT-SENTINEL", "RAW-CALL-SENTINEL", "C:/private/RAW-PATH-SENTINEL", "NOTE-SENTINEL", "AIDEV-99"];
+  const normalSource = [{ reference: "session-one", rawSessionId: sensitiveSentinels[0], path: sensitiveSentinels[3], events: [{ id: sensitiveSentinels[1], callId: sensitiveSentinels[2], category: "user", timestamp: "2025-01-01", summary: "Inspectable redacted evidence", evidence: { reference: "session-one:event-0001" } }], edges: [] }];
+  const note = { noteId: "note-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", eventReference: "event-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", eventLabel: "Reviewed event", text: sensitiveSentinels[4], provenance: { source: "user-authored", confirmation: "user-confirmed", createdAt: "2025-01-01T00:00:00.000Z" } };
+  const closeout = { version: 1, ticket: sensitiveSentinels[5], pickedUpAt: "2026-01-01T00:00:00.000Z", closedAt: "2026-01-01T00:01:00.000Z", durationMs: 60000, coverage: "complete", completedSegments: 1, totalSegments: 1, totals: { total: 3, parentDelta: 1, subagentTotal: 2, subagentRuns: 1 }, gaps: [], mergedEvidenceCount: 1, closedEvidenceCount: 1 };
+  const staticSection = (html) => html.match(/<section id="report-context" class="section">.*?<\/section>/)?.[0];
+  const normal = staticSection(buildHindsightDocument(normalSource, fullOutput()));
+  const excluded = staticSection(buildHindsightDocument([{ reference: "session-hidden", excluded: true, rawSessionId: sensitiveSentinels[0], events: [{ summary: "EXCLUDED-SOURCE-SENTINEL" }] }], { claims: [], recommendations: [] }));
+  const notes = staticSection(buildHindsightDocument(normalSource, fullOutput(), [note]));
+  const closeoutReport = staticSection(buildHindsightDocument(normalSource, fullOutput(), undefined, closeout));
+  assert.ok(normal);
+  assert.equal(normal, excluded); assert.equal(normal, notes); assert.equal(normal, closeoutReport);
+  for (const marker of ["Report Context", "How to read this report", "Glossary: report labels and boundaries", "Redacted evidence context", "Citation", "Direct evidence", "Inference", "Fix", "Harden", "Proposed", "Excluded source", "User-authored context", "Linked ticket closeout"]) assert.match(normal, new RegExp(marker));
+  assert.doesNotMatch(normal, /href="#citation-|session-one:event|EXCLUDED-SOURCE-SENTINEL/);
+  for (const sentinel of sensitiveSentinels) assert.doesNotMatch(normal, new RegExp(sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  const prompt = buildSynthesisPrompt(normalSource, { hindsightNotes: [note] });
+  assert.doesNotMatch(prompt, /How to read this report|Glossary: report labels and boundaries|A bounded excerpt from the selected conversation after the required review and redaction process/);
+});
+
 test("safe writer validates action types, citations, and matching cited findings", () => {
   assert.throws(() => buildHindsightDocument(source(), { claims: [], recommendations: [{ ...proposal(), actionType: "ship" }] }), /actionType/);
   assert.throws(() => buildHindsightDocument(source(), { claims: [{ statement: "x", classification: "direct evidence", evidenceReferences: ["session-one:event-0001"] }], recommendations: [proposal("fix")] }), /matching harden/);
