@@ -35,9 +35,13 @@ function argumentsFrom(argv) {
   if (options.validation !== undefined) bounded(options.validation, "--validation", LIMITS.argument);
   return options;
 }
-async function git(args, options = {}) {
+const GIT_GLOBAL_OPTIONS = Object.freeze(["--no-replace-objects"]);
+function gitArguments(args) { return [...GIT_GLOBAL_OPTIONS, ...args]; }
+async function git(args, options = {}, onGitCommand) {
+  const command = gitArguments(args);
+  onGitCommand?.([...command]);
   try {
-    return (await run("git", args, { cwd: process.cwd(), windowsHide: true, encoding: "utf8", maxBuffer: LIMITS.diff, ...options })).stdout;
+    return (await run("git", command, { cwd: process.cwd(), windowsHide: true, encoding: "utf8", maxBuffer: LIMITS.diff, ...options })).stdout;
   } catch (error) {
     fail(`git ${args[0]} failed: ${String(error.stderr || error.message).trim() || "command failed"}`);
   }
@@ -117,10 +121,7 @@ function immutableMaterial(file, baseBlob, headBlob) {
 export async function generateReviewPacket(options, { onGitCommand } = {}) {
   // Enforce CLI-equivalent bounds for programmatic callers too.
   if (Object.hasOwn(options ?? {}, "output")) fail("filesystem output is unsupported; capture the returned packet or stdout");
-  const gitCommand = async (args, commandOptions) => {
-    onGitCommand?.([...args]);
-    return git(args, commandOptions);
-  };
+  const gitCommand = (args, commandOptions) => git(args, commandOptions, onGitCommand);
   options = argumentsFrom(["--base", options?.base, "--head", options?.head, ...(options?.validation === undefined ? [] : ["--validation", options.validation])]);
   const base = (await gitCommand(["rev-parse", "--verify", "--end-of-options", `${options.base}^{commit}`], { maxBuffer: 128 })).trim();
   const head = (await gitCommand(["rev-parse", "--verify", "--end-of-options", `${options.head}^{commit}`], { maxBuffer: 128 })).trim();

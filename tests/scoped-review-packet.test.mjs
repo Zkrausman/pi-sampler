@@ -83,16 +83,35 @@ test("review packet is deterministic, bounded, stdout-only, and embeds immutable
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
-test("review packet disables external diff and textconv on every diff invocation", async () => {
+test("review packet applies no-replace-objects to every Git invocation and disables external diff/textconv", async () => {
   const fixture = await repository();
   try {
     const commands = [];
     const previous = process.cwd();
     process.chdir(fixture.cwd);
     try { await generateReviewPacket({ base: fixture.base, head: fixture.head }, { onGitCommand: (args) => commands.push(args) }); } finally { process.chdir(previous); }
-    const diffCommands = commands.filter(([command]) => command === "diff");
+    assert.ok(commands.length > 0);
+    assert.ok(commands.every((args) => args[0] === "--no-replace-objects"));
+    const diffCommands = commands.filter(([, command]) => command === "diff");
     assert.equal(diffCommands.length, 4);
     assert.ok(diffCommands.every((args) => args.includes("--no-ext-diff") && args.includes("--no-textconv")));
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet rejects replacement refs and reads the original committed tree", async () => {
+  const fixture = await repository();
+  try {
+    git(fixture.cwd, "checkout", "--quiet", fixture.base);
+    await writeFile(join(fixture.cwd, "tracked.txt"), "replacement content must not appear\n");
+    git(fixture.cwd, "add", "tracked.txt");
+    git(fixture.cwd, "commit", "--quiet", "-m", "replacement head");
+    const replacementHead = git(fixture.cwd, "rev-parse", "HEAD");
+    git(fixture.cwd, "replace", fixture.head, replacementHead);
+
+    const packet = JSON.parse(invoke(fixture.cwd, "--base", fixture.base, "--head", fixture.head));
+    assert.equal(packet.head, fixture.head);
+    assert.match(packet.patches.find((patch) => patch.path === "tracked.txt").hunks.join("\n"), /changed 0/);
+    assert.doesNotMatch(JSON.stringify(packet), /replacement content must not appear/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 

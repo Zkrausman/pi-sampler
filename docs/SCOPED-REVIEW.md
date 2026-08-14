@@ -14,8 +14,10 @@ an approved caller); it deliberately has no `--output` option.
 command or captures environment data. It resolves both refs to commits, requires
 `base` to be an ancestor of `head`, reads only Git objects in `base..head`, and
 rejects binary/non-UTF-8 or oversized changed files and ranges with too many
-files. Every Git diff invocation uses `--no-ext-diff --no-textconv`, preventing
-configured external diff and textconv execution. The generated packet contains
+files. Every Git invocation uses the global `--no-replace-objects` option, so
+replacement refs cannot change resolved commits or their content; every Git diff
+invocation also uses `--no-ext-diff --no-textconv`, preventing configured external
+diff and textconv execution. The generated packet contains
 resolved commit IDs, changed-file paths/statuses, a diff stat, and bounded
 textual hunks.
 
