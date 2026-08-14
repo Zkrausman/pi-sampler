@@ -1,5 +1,11 @@
 # @zkrausman/pi-ticket-cost
 
+## 0.2.3
+
+### Patch Changes
+
+- c5d3e5a: Reject merge-path transitions with unsettled segments and restore the ticket-cost lifecycle listener after retained-instance session restarts.
+
 ## 0.2.2
 
 ### Patch Changes

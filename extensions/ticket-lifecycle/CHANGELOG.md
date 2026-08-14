@@ -1,5 +1,15 @@
 # @zkrausman/pi-ticket-lifecycle
 
+## 0.2.0
+
+### Minor Changes
+
+- 45687bb: Add a tracker-neutral local ticket lifecycle ledger with crash recovery, ownership-token locking, and immutable aggregate cost receipts.
+
+### Patch Changes
+
+- c5d3e5a: Reject merge-path transitions with unsettled segments and restore the ticket-cost lifecycle listener after retained-instance session restarts.
+
 ## 0.1.1
 
 ### Patch Changes
