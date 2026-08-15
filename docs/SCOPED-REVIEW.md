@@ -47,6 +47,18 @@ per-path-total, aggregate-total, Git-diff, or final-packet overflow fails
 closed: produce a smaller range. The generator never truncates a hunk or
 falls back to complete blob endpoints.
 
+The only endpoint-size admission exception is a repository-root
+`package-lock.json` above 128 KiB and at most 512 KiB. It must be canonical
+npm `lockfileVersion: 3` JSON and satisfy the strict bounded schema for every
+top-level, package, dependency, and nested metadata value (including safe
+package locations, npm-registry tarball references, and bounded depth). Its
+intentionally narrow dependency-range parser is linear rather than a
+backtracking regular expression. This admits the committed object only for
+validation; it does not omit, segment, embed, or otherwise substitute its
+content. The same complete-hunk limits still apply, so an oversized lockfile
+diff normally fails closed and must be split into a smaller range. All other
+oversized paths and unsupported lockfiles fail closed.
+
 It also deliberately does not emit segmented chunks. A Git blob object ID is a
 hash of the whole blob and does not provide a cryptographic proof that
 independently disclosed bytes occur at a claimed offset. A packet-generated
