@@ -20,6 +20,7 @@ export const VIEWER_MAX_SESSION_EVENTS = 2_000;
 export const VIEWER_MAX_SNAPSHOTS = 32;
 export const VIEWER_MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
 export const VIEWER_MAX_DISCOVERY_CANDIDATES = 500;
+export const VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY = 16;
 export const VIEWER_MAX_DISCOVERY_DEPTH = 8;
 export const VIEWER_MAX_CATALOG_RESULTS = 250;
 export const VIEWER_MAX_CURSORS = 1_000;
@@ -66,9 +67,14 @@ export function defaultPiSessionDirectory({ home = homedir() } = {}) {
 
 async function recentEntries(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
-  const ranked = await Promise.all(entries.map(async (entry) => {
-    try { return { entry, mtimeMs: (await stat(join(directory, entry.name))).mtimeMs }; } catch { return { entry, mtimeMs: Number.NEGATIVE_INFINITY }; }
-  }));
+  const ranked = new Array(entries.length); let next = 0;
+  const workers = Array.from({ length: Math.min(entries.length, VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY) }, async () => {
+    while (next < entries.length) {
+      const index = next; next += 1; const entry = entries[index];
+      try { ranked[index] = { entry, mtimeMs: (await stat(join(directory, entry.name))).mtimeMs }; } catch { ranked[index] = { entry, mtimeMs: Number.NEGATIVE_INFINITY }; }
+    }
+  });
+  await Promise.all(workers);
   // Pi appends to its current session, so filesystem modification time is the
   // only local recency signal used before the bounded header inspection.
   return ranked.sort((left, right) => right.mtimeMs - left.mtimeMs || right.entry.name.localeCompare(left.entry.name)).map(({ entry }) => entry);
