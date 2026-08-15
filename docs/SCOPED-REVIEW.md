@@ -32,23 +32,34 @@ but the read-only command set remains non-hook-invoking. The generated packet co
 resolved commit IDs, changed-file paths/statuses, a diff stat, and bounded
 textual hunks.
 
-When a file has more hunks than the packet can include **or any included hunk
-is byte-truncated**, `incomplete` is `true` and `omittedHunks` lists every
-affected path; `byteTruncatedHunks` identifies the latter subset. For every
-such path, `immutableMaterial` embeds the bounded canonical committed `base`
-and/or `head` blobs appropriate for its status (`A`, `D`, or `M`). Each endpoint
-contains its Git blob object ID, byte length, and UTF-8 content. The generator
-checks that each content payload hashes to the embedded object ID and that the
-object is present at the resolved endpoint commit. It fails rather than omitting
-this material; if immutable material or the complete packet would exceed its
-fixed bounds, recover by producing a smaller range.
+Packets use `pi-sampler.scoped-review-packet.v2` and contain only complete
+Git-generated textual hunks. A packet has `incomplete: false` with empty
+`omittedHunks`, `byteTruncatedHunks`, and `immutableMaterial` arrays. The
+legacy fields remain present so consumers can reject incomplete packets
+unambiguously; they are never evidence substitutes.
+
+Each file may have at most 64 hunks, each hunk may be at most 8 KiB, all hunks
+for one path may be at most 128 KiB, and all packet hunks may be at most
+768 KiB. The final serialized packet remains capped at 1 MiB. These fixed
+limits allow normal large source files with many small, fully represented
+changes while preserving bounded review input. Any hunk-count, per-hunk-byte,
+per-path-total, aggregate-total, Git-diff, or final-packet overflow fails
+closed: produce a smaller range. The generator never truncates a hunk or
+falls back to complete blob endpoints.
+
+It also deliberately does not emit segmented chunks. A Git blob object ID is a
+hash of the whole blob and does not provide a cryptographic proof that
+independently disclosed bytes occur at a claimed offset. A packet-generated
+chunk hash or Merkle root would only authenticate packet-supplied data, not
+bind it to an existing Git blob, unless a separately trusted committed
+attestation or a zero-knowledge preimage proof were added. Neither trust
+mechanism is part of this local packet protocol.
 
 Generated packets are local artifacts under the existing `.pi` ignore policy.
-Reviewers must inspect the embedded `immutableMaterial` for incomplete paths,
-not mutable working-tree files. Normal scope remains the packet and direct
-listed immutable content only: do not run broad discovery or use workspace,
-untracked, history-outside-range, environment, credential, session, or
-governance data.
+Reviewers inspect only the complete packet hunks, never mutable working-tree
+files or embedded endpoint/chunk alternatives. Normal scope remains the packet
+data only: do not run broad discovery or use workspace, untracked,
+history-outside-range, environment, credential, session, or governance data.
 
 Node's supported cross-platform filesystem APIs do not provide a portable
 descriptor-relative, no-follow directory publication primitive. An `lstat`

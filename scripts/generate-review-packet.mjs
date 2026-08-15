@@ -8,9 +8,8 @@ import { promisify } from "node:util";
 const run = promisify(execFile);
 const LIMITS = Object.freeze({
   argument: 4096, ref: 256, files: 200, path: 240, blob: 128 * 1024,
-  stat: 32 * 1024, diff: 384 * 1024, hunks: 4, hunk: 8 * 1024,
-  immutableEndpoint: 24 * 1024, immutablePath: 52 * 1024,
-  immutableTotal: 128 * 1024, packet: 1024 * 1024,
+  stat: 32 * 1024, diff: 384 * 1024, hunks: 64, hunk: 8 * 1024,
+  patch: 128 * 1024, patches: 768 * 1024, packet: 1024 * 1024,
 });
 const SAFE_PATH_SEGMENT = /^[A-Za-z0-9.][A-Za-z0-9._@+,-]*$/;
 
@@ -110,13 +109,6 @@ async function blobAt(gitCommand, commit, filePath, endpoint) {
   if (calculatedObjectId !== objectId) fail(`${filePath} ${endpoint} blob content does not match its committed object ID`);
   return { objectId, byteLength: size, content: text };
 }
-function truncate(value, maximum) {
-  const buffer = Buffer.from(value, "utf8");
-  if (buffer.length <= maximum) return { value, truncated: false };
-  let end = maximum;
-  while (end && (buffer[end] & 0xc0) === 0x80) end -= 1;
-  return { value: `${buffer.subarray(0, end).toString("utf8")}\n[... hunk truncated by review-packet bound ...]`, truncated: true };
-}
 function patchHunks(diff, filePath) {
   const hunks = [];
   let current;
@@ -128,21 +120,13 @@ function patchHunks(diff, filePath) {
   }
   if (current) hunks.push(current.join("\n"));
   if (!hunks.length) fail(`${filePath} has no textual patch hunks`);
-  const boundedHunks = hunks.slice(0, LIMITS.hunks).map((hunk) => truncate(hunk, LIMITS.hunk));
-  const byteTruncated = boundedHunks.some((hunk) => hunk.truncated);
-  return { path: filePath, hunks: boundedHunks.map((hunk) => hunk.value), omittedHunks: hunks.length > LIMITS.hunks || byteTruncated, byteTruncated };
-}
-function immutableEndpoint(blob, filePath, endpoint) {
-  if (!blob) return null;
-  if (Buffer.byteLength(blob.content, "utf8") > LIMITS.immutableEndpoint) fail(`${filePath} cannot embed immutable material: ${endpoint} committed blob exceeds ${LIMITS.immutableEndpoint} bytes; produce a smaller range`);
-  return blob;
-}
-function immutableMaterial(file, baseBlob, headBlob) {
-  const material = { path: file.path, status: file.status, base: immutableEndpoint(baseBlob, file.path, "base"), head: immutableEndpoint(headBlob, file.path, "head") };
-  const expected = { A: [null, true], D: [true, null], M: [true, true] }[file.status];
-  if (!expected || Boolean(material.base) !== Boolean(expected[0]) || Boolean(material.head) !== Boolean(expected[1])) fail(`${file.path} has inconsistent committed endpoints`);
-  if (byteLength(material) > LIMITS.immutablePath) fail(`${file.path} immutable material exceeds fixed packet bounds; produce a smaller range`);
-  return material;
+  if (hunks.length > LIMITS.hunks) fail(`${filePath} has ${hunks.length} patch hunks, exceeding the fixed ${LIMITS.hunks}-hunk review-packet bound; produce a smaller range`);
+  const hunkBytes = hunks.map((hunk) => Buffer.byteLength(hunk, "utf8"));
+  const oversized = hunkBytes.findIndex((size) => size > LIMITS.hunk);
+  if (oversized !== -1) fail(`${filePath} patch hunk ${oversized + 1} exceeds the fixed ${LIMITS.hunk}-byte review-packet bound; produce a smaller range`);
+  const totalBytes = hunkBytes.reduce((total, size) => total + size, 0);
+  if (totalBytes > LIMITS.patch) fail(`${filePath} patch hunks exceed the fixed ${LIMITS.patch}-byte review-packet bound; produce a smaller range`);
+  return { patch: { path: filePath, hunks }, totalBytes };
 }
 export async function generateReviewPacket(options, { onGitCommand } = {}) {
   // Enforce CLI-equivalent bounds for programmatic callers too.
@@ -155,20 +139,26 @@ export async function generateReviewPacket(options, { onGitCommand } = {}) {
   await gitCommand(["merge-base", "--is-ancestor", base, head], { maxBuffer: 128 });
   // Every diff form disables configured external diff and textconv execution.
   const files = changedFiles(await gitCommand(["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--no-renames", base, head], { maxBuffer: 64 * 1024 }));
-  const blobs = new Map();
-  for (const { path: filePath } of files) blobs.set(filePath, { base: await blobAt(gitCommand, base, filePath, "base"), head: await blobAt(gitCommand, head, filePath, "head") });
+  // Validate changed endpoints before emitting textual evidence. Their content
+  // never becomes packet material; only complete Git-generated hunks do.
+  for (const { path: filePath } of files) {
+    await blobAt(gitCommand, base, filePath, "base");
+    await blobAt(gitCommand, head, filePath, "head");
+  }
   const diffStat = await gitCommand(["diff", "--no-ext-diff", "--no-textconv", "--stat", "--no-renames", base, head], { maxBuffer: LIMITS.stat });
   const patches = [];
-  for (const { path: filePath } of files) patches.push(patchHunks(await gitCommand(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, head, "--", filePath]), filePath));
-  const omittedHunks = patches.filter((patch) => patch.omittedHunks).map((patch) => patch.path);
-  const byteTruncatedHunks = patches.filter((patch) => patch.byteTruncated).map((patch) => patch.path);
-  const immutableMaterialByPath = omittedHunks.map((filePath) => {
-    const file = files.find(({ path }) => path === filePath);
-    const endpoints = blobs.get(filePath);
-    return immutableMaterial(file, endpoints.base, endpoints.head);
-  });
-  if (immutableMaterialByPath.reduce((total, material) => total + byteLength(material), 0) > LIMITS.immutableTotal) fail("immutable material exceeds fixed packet bounds; produce a smaller range");
-  const packet = { format: "pi-sampler.scoped-review-packet.v1", base, head, changedFiles: files, diffStat: diffStat.trimEnd(), patches, incomplete: omittedHunks.length > 0, omittedHunks, byteTruncatedHunks, immutableMaterial: immutableMaterialByPath, ...(options.validation === undefined ? {} : { validationEvidence: options.validation }) };
+  let totalPatchBytes = 0;
+  for (const { path: filePath } of files) {
+    const diff = await gitCommand(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, head, "--", filePath]);
+    const { patch, totalBytes } = patchHunks(diff, filePath);
+    totalPatchBytes += totalBytes;
+    if (totalPatchBytes > LIMITS.patches) fail(`patch hunks exceed the fixed ${LIMITS.patches}-byte total review-packet bound; produce a smaller range`);
+    patches.push(patch);
+  }
+  // A complete Git-generated patch is the only review evidence. Truncation or
+  // omission fails before packet construction; never substitute blob endpoints
+  // or packet-authenticated source chunks, which Git object IDs do not bind.
+  const packet = { format: "pi-sampler.scoped-review-packet.v2", base, head, changedFiles: files, diffStat: diffStat.trimEnd(), patches, incomplete: false, omittedHunks: [], byteTruncatedHunks: [], immutableMaterial: [], ...(options.validation === undefined ? {} : { validationEvidence: options.validation }) };
   if (byteLength(packet) > LIMITS.packet) fail("packet exceeds fixed packet bounds; produce a smaller range");
   return packet;
 }
