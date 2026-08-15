@@ -112,7 +112,7 @@ published package versions.
    The command updates package versions, changelogs, the lockfile, and the
    versioned package notice/SBOM files, and consumes the included Changeset
    files. Review and commit all of that generated output together.
-3. Merge the version PR.
+3. Merge the version PR. If its head is an AIDEV ticket branch, first complete the required fresh-context adversarial review and have the solo maintainer record its clean, exact commit-bound attestation as described in [CONTRIBUTING.md](../CONTRIBUTING.md). No separate GitHub reviewer approval is required while the repository has one developer.
 4. In **Actions**, select **Release Pi packages**, choose the `main` branch in
    **Run workflow**, check the release-confirmation input, and dispatch it.
    The workflow rejects any ref other than `refs/heads/main` before checkout

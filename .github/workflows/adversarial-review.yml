@@ -4,36 +4,25 @@ on:
   # This event resolves the workflow from the trusted PR base/default branch.
   pull_request_target:
     types: [opened, reopened, synchronize, edited]
-  # Review-event workflows resolve from the trusted default branch. These
-  # lifecycle transitions revalidate the same required gate context.
-  pull_request_review:
-    types: [submitted, edited, dismissed]
 
 permissions:
   contents: read
 
 jobs:
   adversarial-review-attestation:
-    # Required status check name: Adversarial review evidence. These events
-    # resolve this workflow from a trusted branch. It never checks out or
+    # Required status check name: Adversarial review evidence. This event
+    # resolves the workflow from a trusted branch. It never checks out or
     # executes PR-head files.
-    if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review'
     name: Adversarial review evidence
     timeout-minutes: 5
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
     env:
       ADVERSARIAL_REVIEW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       ADVERSARIAL_REVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      # github.head_ref is not set for pull_request_review events; this
-      # payload field is available for both trusted event types.
       ADVERSARIAL_REVIEW_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       ADVERSARIAL_REVIEW_PR_BODY: ${{ github.event.pull_request.body }}
-      ADVERSARIAL_REVIEW_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-      ADVERSARIAL_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
-      ADVERSARIAL_REVIEW_REVIEWS_FILE: ${{ runner.temp }}/adversarial-review-reviews.json
     steps:
       # Check out only the immutable base commit containing this trusted
       # workflow and validator. Do not use the PR merge ref or head ref here.
@@ -65,13 +54,5 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-      - name: Fetch GitHub review metadata and validate without logging private inputs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          umask 077
-          trap 'rm -f "$ADVERSARIAL_REVIEW_REVIEWS_FILE"' EXIT
-          gh api --method GET --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/${ADVERSARIAL_REVIEW_PR_NUMBER}/reviews?per_page=100" > "$ADVERSARIAL_REVIEW_REVIEWS_FILE"
-          test -s "$ADVERSARIAL_REVIEW_REVIEWS_FILE"
-          node scripts/validate-adversarial-review-attestation.mjs
+      - name: Validate bounded commit-bound attestation without logging the PR body
+        run: node scripts/validate-adversarial-review-attestation.mjs
