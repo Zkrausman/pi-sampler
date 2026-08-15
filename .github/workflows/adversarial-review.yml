@@ -53,6 +53,6 @@ jobs:
           git cat-file -e "$ADVERSARIAL_REVIEW_HEAD_SHA^{commit}"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22
+          node-version: 24
       - name: Validate bounded commit-bound attestation without logging the PR body
         run: node scripts/validate-adversarial-review-attestation.mjs

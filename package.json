@@ -27,7 +27,7 @@
     "validate:compliance": "node scripts/generate-package-compliance.mjs --check"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
