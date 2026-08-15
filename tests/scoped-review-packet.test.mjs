@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const generator = join(root, "scripts", "generate-review-packet.mjs");
-const { generateReviewPacket, safeChangedPath } = await import(pathToFileURL(generator).href);
+const { generateReviewPacket, safeChangedPath, verifySegmentedImmutableEndpoint } = await import(pathToFileURL(generator).href);
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -81,7 +81,7 @@ test("review packet is deterministic, bounded, stdout-only, and embeds immutable
     const second = invoke(fixture.cwd, ...args);
     assert.equal(second, first);
     const packet = JSON.parse(first);
-    assert.equal(packet.format, "pi-sampler.scoped-review-packet.v1");
+    assert.equal(packet.format, "pi-sampler.scoped-review-packet.v2");
     assert.equal(packet.base, fixture.base);
     assert.equal(packet.head, fixture.head);
     assert.deepEqual(packet.changedFiles, [{ path: "added.txt", status: "A" }, { path: "tracked.txt", status: "M" }]);
@@ -207,11 +207,60 @@ test("review packet supplies committed base/head immutable blobs for truncated a
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
+test("review packet supplies digest-verified bounded line chunks for oversized modified blobs", async () => {
+  const fixture = await repository();
+  try {
+    const source = Array.from({ length: 220 }, (_, index) => `export const line${index} = "${"x".repeat(170)}";`).join("\n") + "\n";
+    await writeFile(join(fixture.cwd, "oversized-source.mjs"), source); git(fixture.cwd, "add", "oversized-source.mjs"); git(fixture.cwd, "commit", "--quiet", "-m", "oversized source base");
+    const base = git(fixture.cwd, "rev-parse", "HEAD");
+    const changed = source.split("\n");
+    for (const index of [9, 19, 29, 39, 49]) changed[index] = changed[index].replace("x", "y");
+    await writeFile(join(fixture.cwd, "oversized-source.mjs"), changed.join("\n"));
+    git(fixture.cwd, "add", "oversized-source.mjs"); git(fixture.cwd, "commit", "--quiet", "-m", "oversized source head");
+    const packet = JSON.parse(invoke(fixture.cwd, "--base", base, "--head", git(fixture.cwd, "rev-parse", "HEAD")));
+    const material = immutable(packet, "oversized-source.mjs");
+    assert.equal(packet.format, "pi-sampler.scoped-review-packet.v2");
+    assert.deepEqual(packet.omittedHunks, ["oversized-source.mjs"]);
+    assert.equal(material.base.content, undefined); assert.equal(material.head.content, undefined);
+    assert.equal(material.hunkRanges.length, 5);
+    for (const [side, endpoint] of [["base", material.base], ["head", material.head]]) {
+      assert.equal(endpoint.objectId, git(fixture.cwd, "rev-parse", `${side === "base" ? base : packet.head}:oversized-source.mjs`));
+      assert.ok(endpoint.byteLength > 24 * 1024);
+      assert.ok(endpoint.chunks.length > 0);
+      assert.ok(endpoint.chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0) < endpoint.byteLength, "never embeds an oversized blob in full");
+      assert.doesNotThrow(() => verifySegmentedImmutableEndpoint(endpoint, material.hunkRanges, side));
+      for (const chunk of endpoint.chunks) assert.equal(Buffer.byteLength(chunk.content), chunk.byteLength);
+    }
+    const tampered = structuredClone(material.head); tampered.chunks[0].content = `${tampered.chunks[0].content} `;
+    assert.throws(() => verifySegmentedImmutableEndpoint(tampered, material.hunkRanges, "head"), /malformed or tampered/);
+    const truncated = structuredClone(material.head); truncated.chunks.pop();
+    assert.throws(() => verifySegmentedImmutableEndpoint(truncated, material.hunkRanges, "head"), /does not cover every changed hunk/);
+    const malicious = structuredClone(material.head); malicious.chunks[0].offset = malicious.byteLength;
+    assert.throws(() => verifySegmentedImmutableEndpoint(malicious, material.hunkRanges, "head"), /malformed or tampered/);
+    await writeFile(join(fixture.cwd, "oversized-source.mjs"), "mutable checkout tampering\n");
+    assert.doesNotMatch(JSON.stringify(material), /mutable checkout tampering/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet rejects oversized segmented evidence and unsafe source lines", async () => {
+  const fixture = await repository();
+  try {
+    const source = Array.from({ length: 220 }, (_, index) => `export const line${index} = "${"x".repeat(170)}";`).join("\n") + "\n";
+    await writeFile(join(fixture.cwd, "bounded-source.mjs"), source); git(fixture.cwd, "add", "bounded-source.mjs"); git(fixture.cwd, "commit", "--quiet", "-m", "bounded source base");
+    const base = git(fixture.cwd, "rev-parse", "HEAD");
+    const changed = source.split("\n");
+    for (const index of [9, 49, 89, 129, 169]) changed[index] = changed[index].replace("x", "y");
+    await writeFile(join(fixture.cwd, "bounded-source.mjs"), changed.join("\n"));
+    git(fixture.cwd, "add", "bounded-source.mjs"); git(fixture.cwd, "commit", "--quiet", "-m", "too much source evidence");
+    assert.throws(() => invoke(fixture.cwd, "--base", base, "--head", git(fixture.cwd, "rev-parse", "HEAD")), /bounded (base|head) immutable chunks; produce a smaller range/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
 test("review packet fails closed when immutable material exceeds fixed packet bounds", async () => {
   const fixture = await repository();
   try {
     const range = await committedRange(fixture.cwd, { base: { "large.txt": "base\n" }, head: { "large.txt": `${"x".repeat(24 * 1024 + 1)}\n` } });
-    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /large\.txt cannot embed immutable material: head committed blob exceeds 24576 bytes; produce a smaller range/);
+    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /large\.txt cannot segment head committed blob: a source line exceeds 8192 bytes/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
@@ -255,7 +304,7 @@ test("review packet never follows a parent-directory symlink because it performs
     await writeFile(join(outside, "marker.json"), "must not change");
     try { await symlink(outside, join(fixture.cwd, ".review"), "dir"); } catch (error) { await rm(outside, { recursive: true, force: true }); t.skip(`symlinks unavailable: ${error.code}`); return; }
     const packet = JSON.parse(invoke(fixture.cwd, "--base", fixture.base, "--head", fixture.head));
-    assert.equal(packet.format, "pi-sampler.scoped-review-packet.v1");
+    assert.equal(packet.format, "pi-sampler.scoped-review-packet.v2");
     assert.equal(await readFile(join(outside, "marker.json"), "utf8"), "must not change");
     await assert.rejects(lstat(join(outside, "packet.json")), { code: "ENOENT" });
     await rm(outside, { recursive: true, force: true });

@@ -9,8 +9,9 @@ const run = promisify(execFile);
 const LIMITS = Object.freeze({
   argument: 4096, ref: 256, files: 200, path: 240, blob: 128 * 1024,
   stat: 32 * 1024, diff: 384 * 1024, hunks: 4, hunk: 8 * 1024,
-  immutableEndpoint: 24 * 1024, immutablePath: 52 * 1024,
-  immutableTotal: 128 * 1024, packet: 1024 * 1024,
+  immutableEndpoint: 24 * 1024, immutableChunk: 8 * 1024,
+  immutableChunkEndpoint: 24 * 1024, immutableHunkRanges: 128,
+  immutablePath: 52 * 1024, immutableTotal: 128 * 1024, packet: 1024 * 1024,
 });
 const SAFE_PATH_SEGMENT = /^[A-Za-z0-9.][A-Za-z0-9._@+,-]*$/;
 
@@ -132,17 +133,109 @@ function patchHunks(diff, filePath) {
   const byteTruncated = boundedHunks.some((hunk) => hunk.truncated);
   return { path: filePath, hunks: boundedHunks.map((hunk) => hunk.value), omittedHunks: hunks.length > LIMITS.hunks || byteTruncated, byteTruncated };
 }
-function immutableEndpoint(blob, filePath, endpoint) {
-  if (!blob) return null;
-  if (Buffer.byteLength(blob.content, "utf8") > LIMITS.immutableEndpoint) fail(`${filePath} cannot embed immutable material: ${endpoint} committed blob exceeds ${LIMITS.immutableEndpoint} bytes; produce a smaller range`);
-  return blob;
+function parseHunkRanges(diff, filePath) {
+  const ranges = [];
+  for (const line of diff.split("\n")) {
+    if (!line.startsWith("@@ ")) continue;
+    const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (!match) fail(`${filePath} has an unsupported textual patch hunk`);
+    const [baseStart, baseLines, headStart, headLines] = [match[1], match[2] ?? "1", match[3], match[4] ?? "1"].map(Number);
+    if (![baseStart, baseLines, headStart, headLines].every(Number.isSafeInteger)) fail(`${filePath} has unsafe hunk ranges`);
+    ranges.push({ baseStart, baseLines, headStart, headLines });
+  }
+  if (!ranges.length) fail(`${filePath} has no textual patch hunks`);
+  if (ranges.length > LIMITS.immutableHunkRanges) fail(`${filePath} has too many hunk ranges for bounded immutable evidence; produce a smaller range`);
+  return ranges;
 }
-function immutableMaterial(file, baseBlob, headBlob) {
-  const material = { path: file.path, status: file.status, base: immutableEndpoint(baseBlob, file.path, "base"), head: immutableEndpoint(headBlob, file.path, "head") };
+function lineChunks(blob, filePath, endpoint) {
+  const buffer = Buffer.from(blob.content, "utf8");
+  const chunks = [];
+  let chunkOffset = 0; let chunkStartLine = 1; let lineOffset = 0; let line = 1;
+  for (let cursor = 0; cursor < buffer.length; cursor += 1) {
+    if (buffer[cursor] !== 10 && cursor + 1 !== buffer.length) continue;
+    const end = cursor + 1;
+    if (end - lineOffset > LIMITS.immutableChunk) fail(`${filePath} cannot segment ${endpoint} committed blob: a source line exceeds ${LIMITS.immutableChunk} bytes`);
+    if (end - chunkOffset > LIMITS.immutableChunk) {
+      chunks.push({ offset: chunkOffset, byteLength: lineOffset - chunkOffset, startLine: chunkStartLine, endLine: line - 1 });
+      chunkOffset = lineOffset; chunkStartLine = line;
+    }
+    lineOffset = end; line += 1;
+  }
+  if (chunkOffset < buffer.length) chunks.push({ offset: chunkOffset, byteLength: buffer.length - chunkOffset, startLine: chunkStartLine, endLine: line - 1 });
+  return chunks;
+}
+function requiredLineRange(start, lines, totalLines, filePath) {
+  if (start < 0 || lines < 0 || start > totalLines + 1 || (!lines && !totalLines)) fail(`${filePath} has hunk ranges outside its committed blob`);
+  const rangeStart = lines ? start : Math.min(Math.max(start, 1), totalLines);
+  const rangeEnd = lines ? start + lines - 1 : rangeStart;
+  if (rangeStart < 1 || rangeEnd > totalLines) fail(`${filePath} has hunk ranges outside its committed blob`);
+  return { startLine: rangeStart, endLine: rangeEnd };
+}
+function chunkedEndpoint(blob, filePath, endpoint, hunkRanges) {
+  const chunks = lineChunks(blob, filePath, endpoint);
+  const selected = new Set();
+  const totalLines = chunks.at(-1)?.endLine ?? 0;
+  for (const hunk of hunkRanges) {
+    const range = requiredLineRange(hunk[`${endpoint}Start`], hunk[`${endpoint}Lines`], totalLines, filePath);
+    chunks.forEach((chunk, index) => { if (chunk.endLine >= range.startLine && chunk.startLine <= range.endLine) selected.add(index); });
+  }
+  const evidenceChunks = [...selected].map((index) => {
+    const chunk = chunks[index];
+    const content = Buffer.from(blob.content, "utf8").subarray(chunk.offset, chunk.offset + chunk.byteLength).toString("utf8");
+    return { ...chunk, sha256: createHash("sha256").update(content, "utf8").digest("hex"), content };
+  });
+  const evidenceBytes = evidenceChunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  if (!evidenceChunks.length || evidenceBytes > LIMITS.immutableChunkEndpoint || evidenceBytes >= blob.byteLength) fail(`${filePath} cannot embed bounded ${endpoint} immutable chunks; produce a smaller range`);
+  return { objectId: blob.objectId, byteLength: blob.byteLength, lineCount: totalLines, chunks: evidenceChunks };
+}
+function immutableEndpoint(blob, filePath, endpoint, status, hunkRanges) {
+  if (!blob) return null;
+  if (blob.byteLength <= LIMITS.immutableEndpoint) return blob;
+  if (status !== "M") fail(`${filePath} cannot embed immutable material: ${endpoint} committed blob exceeds ${LIMITS.immutableEndpoint} bytes; produce a smaller range`);
+  return chunkedEndpoint(blob, filePath, endpoint, hunkRanges);
+}
+function immutableMaterial(file, baseBlob, headBlob, hunkRanges) {
+  const material = { path: file.path, status: file.status, base: immutableEndpoint(baseBlob, file.path, "base", file.status, hunkRanges), head: immutableEndpoint(headBlob, file.path, "head", file.status, hunkRanges) };
+  if (material.base?.chunks || material.head?.chunks) {
+    material.hunkRanges = hunkRanges;
+    if (material.base?.chunks) verifySegmentedImmutableEndpoint(material.base, hunkRanges, "base");
+    if (material.head?.chunks) verifySegmentedImmutableEndpoint(material.head, hunkRanges, "head");
+  }
   const expected = { A: [null, true], D: [true, null], M: [true, true] }[file.status];
   if (!expected || Boolean(material.base) !== Boolean(expected[0]) || Boolean(material.head) !== Boolean(expected[1])) fail(`${file.path} has inconsistent committed endpoints`);
   if (byteLength(material) > LIMITS.immutablePath) fail(`${file.path} immutable material exceeds fixed packet bounds; produce a smaller range`);
   return material;
+}
+function hasOnlyKeys(value, keys) { return value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key)); }
+function validObjectId(value) { return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value); }
+function chunkRangeIsCovered(chunks, range) {
+  let through = range.startLine - 1;
+  for (const chunk of chunks) {
+    if (chunk.endLine < range.startLine) continue;
+    if (chunk.startLine > through + 1) return false;
+    through = Math.max(through, chunk.endLine);
+    if (through >= range.endLine) return true;
+  }
+  return false;
+}
+/** Verify the packet-only integrity and coverage rules for one segmented endpoint. */
+export function verifySegmentedImmutableEndpoint(endpoint, hunkRanges, side) {
+  if (!hasOnlyKeys(endpoint, ["objectId", "byteLength", "lineCount", "chunks"]) || !validObjectId(endpoint.objectId) || !Number.isSafeInteger(endpoint.byteLength) || endpoint.byteLength <= LIMITS.immutableEndpoint || endpoint.byteLength > LIMITS.blob || !Number.isSafeInteger(endpoint.lineCount) || endpoint.lineCount < 1 || !Array.isArray(endpoint.chunks) || !endpoint.chunks.length) fail("segmented immutable endpoint is malformed");
+  if (!Array.isArray(hunkRanges) || !hunkRanges.length || hunkRanges.length > LIMITS.immutableHunkRanges || !["base", "head"].includes(side)) fail("segmented immutable endpoint has unsafe hunk coverage");
+  let previousEnd = 0; let total = 0;
+  for (const chunk of endpoint.chunks) {
+    if (!hasOnlyKeys(chunk, ["offset", "byteLength", "startLine", "endLine", "sha256", "content"]) || !Number.isSafeInteger(chunk.offset) || !Number.isSafeInteger(chunk.byteLength) || !Number.isSafeInteger(chunk.startLine) || !Number.isSafeInteger(chunk.endLine) || chunk.offset < previousEnd || chunk.byteLength < 1 || chunk.byteLength > LIMITS.immutableChunk || chunk.offset + chunk.byteLength > endpoint.byteLength || chunk.startLine < 1 || chunk.endLine < chunk.startLine || chunk.endLine > endpoint.lineCount || typeof chunk.content !== "string" || !/^[0-9a-f]{64}$/.test(chunk.sha256) || Buffer.byteLength(chunk.content, "utf8") !== chunk.byteLength || createHash("sha256").update(chunk.content, "utf8").digest("hex") !== chunk.sha256) fail("segmented immutable chunk is malformed or tampered");
+    const lineCount = (chunk.content.match(/\n/g)?.length ?? 0) + (chunk.content.endsWith("\n") ? 0 : 1);
+    if (lineCount !== chunk.endLine - chunk.startLine + 1) fail("segmented immutable chunk line metadata is malformed");
+    previousEnd = chunk.offset + chunk.byteLength; total += chunk.byteLength;
+  }
+  if (total > LIMITS.immutableChunkEndpoint || total >= endpoint.byteLength) fail("segmented immutable endpoint exceeds bounded evidence rules");
+  for (const hunk of hunkRanges) {
+    if (!hasOnlyKeys(hunk, ["baseStart", "baseLines", "headStart", "headLines"]) || !Object.values(hunk).every((value) => Number.isSafeInteger(value) && value >= 0)) fail("segmented immutable endpoint has unsafe hunk coverage");
+    const range = requiredLineRange(hunk[`${side}Start`], hunk[`${side}Lines`], endpoint.lineCount, "segmented immutable endpoint");
+    if (!chunkRangeIsCovered(endpoint.chunks, range)) fail("segmented immutable endpoint does not cover every changed hunk");
+  }
+  return true;
 }
 export async function generateReviewPacket(options, { onGitCommand } = {}) {
   // Enforce CLI-equivalent bounds for programmatic callers too.
@@ -159,16 +252,21 @@ export async function generateReviewPacket(options, { onGitCommand } = {}) {
   for (const { path: filePath } of files) blobs.set(filePath, { base: await blobAt(gitCommand, base, filePath, "base"), head: await blobAt(gitCommand, head, filePath, "head") });
   const diffStat = await gitCommand(["diff", "--no-ext-diff", "--no-textconv", "--stat", "--no-renames", base, head], { maxBuffer: LIMITS.stat });
   const patches = [];
-  for (const { path: filePath } of files) patches.push(patchHunks(await gitCommand(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, head, "--", filePath]), filePath));
+  const hunkRangesByPath = new Map();
+  for (const { path: filePath } of files) {
+    const diff = await gitCommand(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, head, "--", filePath]);
+    patches.push(patchHunks(diff, filePath));
+    hunkRangesByPath.set(filePath, parseHunkRanges(diff, filePath));
+  }
   const omittedHunks = patches.filter((patch) => patch.omittedHunks).map((patch) => patch.path);
   const byteTruncatedHunks = patches.filter((patch) => patch.byteTruncated).map((patch) => patch.path);
   const immutableMaterialByPath = omittedHunks.map((filePath) => {
     const file = files.find(({ path }) => path === filePath);
     const endpoints = blobs.get(filePath);
-    return immutableMaterial(file, endpoints.base, endpoints.head);
+    return immutableMaterial(file, endpoints.base, endpoints.head, hunkRangesByPath.get(filePath));
   });
   if (immutableMaterialByPath.reduce((total, material) => total + byteLength(material), 0) > LIMITS.immutableTotal) fail("immutable material exceeds fixed packet bounds; produce a smaller range");
-  const packet = { format: "pi-sampler.scoped-review-packet.v1", base, head, changedFiles: files, diffStat: diffStat.trimEnd(), patches, incomplete: omittedHunks.length > 0, omittedHunks, byteTruncatedHunks, immutableMaterial: immutableMaterialByPath, ...(options.validation === undefined ? {} : { validationEvidence: options.validation }) };
+  const packet = { format: "pi-sampler.scoped-review-packet.v2", base, head, changedFiles: files, diffStat: diffStat.trimEnd(), patches, incomplete: omittedHunks.length > 0, omittedHunks, byteTruncatedHunks, immutableMaterial: immutableMaterialByPath, ...(options.validation === undefined ? {} : { validationEvidence: options.validation }) };
   if (byteLength(packet) > LIMITS.packet) fail("packet exceeds fixed packet bounds; produce a smaller range");
   return packet;
 }

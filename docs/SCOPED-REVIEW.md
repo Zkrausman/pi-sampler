@@ -32,16 +32,38 @@ but the read-only command set remains non-hook-invoking. The generated packet co
 resolved commit IDs, changed-file paths/statuses, a diff stat, and bounded
 textual hunks.
 
-When a file has more hunks than the packet can include **or any included hunk
-is byte-truncated**, `incomplete` is `true` and `omittedHunks` lists every
-affected path; `byteTruncatedHunks` identifies the latter subset. For every
-such path, `immutableMaterial` embeds the bounded canonical committed `base`
-and/or `head` blobs appropriate for its status (`A`, `D`, or `M`). Each endpoint
-contains its Git blob object ID, byte length, and UTF-8 content. The generator
-checks that each content payload hashes to the embedded object ID and that the
-object is present at the resolved endpoint commit. It fails rather than omitting
-this material; if immutable material or the complete packet would exceed its
-fixed bounds, recover by producing a smaller range.
+Packets use `pi-sampler.scoped-review-packet.v2`. When a file has more hunks
+than the packet can include **or any included hunk is byte-truncated**,
+`incomplete` is `true` and `omittedHunks` lists every affected path;
+`byteTruncatedHunks` identifies the latter subset. For every such path,
+`immutableMaterial` embeds canonical committed `base` and/or `head` endpoints
+appropriate for its status (`A`, `D`, or `M`). A normal endpoint contains its
+Git blob object ID, byte length, and complete UTF-8 content. The generator
+checks that complete content hashes to the embedded Git object ID and that the
+object is present at the resolved endpoint commit.
+
+For an incomplete **modified** text file whose endpoint exceeds the existing
+24 KiB complete-endpoint limit, v2 may instead embed bounded line chunks. This
+is not a raw-source retrieval mechanism: it never accepts a requested path or
+range, never emits the entire oversized blob, and does not apply to additions
+or deletions. Each chunked endpoint identifies the exact committed blob object
+ID, full blob byte length and line count, and only the line-aligned chunks
+needed to cover every diff hunk. Every chunk carries its UTF-8 byte `offset`,
+`byteLength`, inclusive `startLine`/`endLine`, SHA-256, and content. The
+material also records every base/head hunk range so coverage can be checked
+without reading the checkout. Chunk content is at most 8 KiB; selected content
+is at most 24 KiB per endpoint, is ordered and non-overlapping, and must be a
+strict subset of the oversized blob. The generator rejects a source line that
+cannot fit a chunk, an all-blob selection, too many hunk ranges, or any
+per-path/global/packet bound overflow. Produce a smaller range instead.
+
+A reviewer must treat chunked material as sufficient only after verifying each
+chunk's SHA-256 and byte length, sorted non-overlapping offsets, line metadata,
+all fixed limits, endpoint object ID/length, and complete coverage of every
+recorded hunk range on both sides. The packet's own commit-bound digest remains
+the transport tamper check. A missing, changed, truncated, overlapping,
+out-of-bounds, or uncovered chunk is a failed evidence check: report that the
+scoped review cannot be completed, not a clean review conclusion.
 
 Generated packets are local artifacts under the existing `.pi` ignore policy.
 Reviewers must inspect the embedded `immutableMaterial` for incomplete paths,
