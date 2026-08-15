@@ -44,8 +44,8 @@ version when a reproducible deployment is required.
 For local development, add an extension's `src/index.ts` path to Pi's
 `extensions` setting or run it for one session.
 
-> **Output optimization:** `@zkrausman/pi-output-optimizer` has been withdrawn
-> from GitHub Packages. Use Pith and install its Pi hook with `pith install --pi` instead.
+> **Output optimization:** pi-sampler does not distribute an output-optimizer
+> package. Use Pith and install its Pi hook with `pith install --pi`.
 
 ### Pi Excalidraw project-local extension
 
@@ -67,9 +67,6 @@ opening them. The reader opens and verifies one file descriptor to reduce
 path/symlink TOCTOU exposure; portable Node APIs cannot atomically guarantee a
 resolved pathname remains inside the project if an attacker can replace it
 between path validation and open, so run only in a trusted local project.
-
-> **Output optimization:** `@zkrausman/pi-output-optimizer` has been withdrawn
-> from GitHub Packages. Use Pith and install its Pi hook with `pith install --pi` instead.
 
 Each extension README lists its prerequisites, configuration, and concrete
 usage examples. See [`docs/RELEASING.md`](docs/RELEASING.md) for restricted

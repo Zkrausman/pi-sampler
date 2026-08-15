@@ -64,16 +64,3 @@ test("public documentation states source, privacy, security, and platform bounda
   assert.match(releasing, /CycloneDX 1\.5/);
   assert.match(releasing, /immutable/);
 });
-
-test("release documentation retains the withdrawn output optimizer status", async () => {
-  const [releasing, optimizerManifest] = await Promise.all([
-    readFile(join(root, "docs", "RELEASING.md"), "utf8"),
-    readFile(join(root, "extensions", "output-optimizer", "package.json"), "utf8").then(JSON.parse),
-  ]);
-
-  assert.equal(optimizerManifest.private, true);
-  assert.equal("publishConfig" in optimizerManifest, false);
-  assert.match(releasing, /@zkrausman\/pi-output-optimizer/);
-  assert.match(releasing, /Withdrawn from GitHub Packages -- do not publish/);
-  assert.match(releasing, /pith install --pi/);
-});

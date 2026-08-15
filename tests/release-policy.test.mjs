@@ -6,14 +6,6 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
-test("withdrawn output optimizer cannot be published", async () => {
-  const packagePath = join(root, "extensions", "output-optimizer", "package.json");
-  const manifest = JSON.parse(await readFile(packagePath, "utf8"));
-
-  assert.equal(manifest.private, true);
-  assert.equal("publishConfig" in manifest, false);
-});
-
 test("PR and release workflows run every documented validation gate before publishing", async () => {
   const validatePath = join(root, ".github", "workflows", "validate.yml");
   const validate = (await readFile(validatePath, "utf8")).replace(/\r\n/g, "\n");
