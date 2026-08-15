@@ -10,13 +10,12 @@ const run = promisify(execFile);
 const LIMITS = Object.freeze({
   argument: 4096, ref: 256, files: 200, path: 240, blob: 128 * 1024,
   generatedLockfileBlob: 512 * 1024,
-  stat: 32 * 1024, diff: 384 * 1024, hunks: 64, hunk: 8 * 1024,
+  stat: 32 * 1024, diff: 384 * 1024, hunks: 64, hunk: 64 * 1024,
   patch: 128 * 1024, patches: 768 * 1024, packet: 1024 * 1024,
 });
 const SAFE_PATH_SEGMENT = /^[A-Za-z0-9.][A-Za-z0-9._@+,-]*$/;
 
 function fail(message) { throw new Error(message); }
-function byteLength(value) { return Buffer.byteLength(JSON.stringify(value), "utf8"); }
 function bounded(value, label, maximum) {
   if (typeof value !== "string" || !value || value.length > maximum || value.includes("\0")) fail(`${label} is missing, unsafe, or exceeds its bound`);
   return value;
@@ -66,6 +65,9 @@ async function runGit(args, options = {}, onGitCommand) {
       encoding: "utf8", maxBuffer: LIMITS.diff, ...options,
     })).stdout;
   } catch (error) {
+    if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      fail(`git ${args[0]} output exceeds the fixed ${options.maxBuffer ?? LIMITS.diff}-byte review-packet bound; produce a smaller range`);
+    }
     fail(`git ${args[0]} failed: ${String(error.stderr || error.message).trim() || "command failed"}`);
   }
 }
@@ -165,7 +167,7 @@ export async function generateReviewPacket(options, { onGitCommand } = {}) {
   // omission fails before packet construction; never substitute blob endpoints
   // or packet-authenticated source chunks, which Git object IDs do not bind.
   const packet = { format: "pi-sampler.scoped-review-packet.v2", base, head, changedFiles: files, diffStat: diffStat.trimEnd(), patches, incomplete: false, omittedHunks: [], byteTruncatedHunks: [], immutableMaterial: [], ...(options.validation === undefined ? {} : { validationEvidence: options.validation }) };
-  if (byteLength(packet) > LIMITS.packet) fail("packet exceeds fixed packet bounds; produce a smaller range");
+  if (Buffer.byteLength(serializeReviewPacket(packet), "utf8") > LIMITS.packet) fail("serialized packet exceeds the fixed 1048576-byte review-packet bound; produce a smaller range");
   return packet;
 }
 /** The canonical bytes used for local packet exchange and attestation digests. */
