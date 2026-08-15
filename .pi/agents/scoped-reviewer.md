@@ -23,17 +23,12 @@ You are a read-only scoped reviewer. The caller must supply one generated
 2. For every incomplete path, inspect only its packet-embedded
    `immutableMaterial`, never the mutable working tree. Verify its status and
    that `A` has only a `head` endpoint, `D` only a `base` endpoint, and `M`
-   both. A normal endpoint has a blob object ID, byte length, and complete
-   content. A chunked endpoint is allowed only for an oversized `M` endpoint:
-   it has an exact blob object ID, byte length, line count, and line-aligned
-   `chunks`, plus material-level `hunkRanges`. For every chunk, verify its
-   SHA-256 over UTF-8 `content`, exact byte length/offset, ordered non-overlap,
-   line range, and the fixed per-chunk/per-endpoint bounds. Verify that every
-   base and head hunk range is fully covered by its respective chunks and that
-   the selected chunks are a strict subset of the blob; never ask for or use
-   additional source. The embedded endpoints are the complete required evidence
-   for omitted patch detail. If any required digest, object ID, offset, range,
-   bound, endpoint, or coverage check is absent, malformed, inconsistent, or
+   both. Every endpoint must have a blob object ID, byte length, and complete
+   content; segmented chunks are not valid evidence because a Git blob ID has
+   no native partial-content inclusion proof. Verify complete content against
+   its object ID before reviewing it. The embedded endpoints are the complete
+   required evidence for omitted patch detail. If any required digest, object
+   ID, complete endpoint, or bound is absent, malformed, inconsistent, or
    cannot be verified, report that the scoped review cannot be completed rather
    than reaching a review conclusion.
 3. Inspect only the packet and its direct listed immutable content. Do not read
