@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -58,6 +59,21 @@ async function commitFile(cwd, filePath, content, message) {
   git(cwd, "add", "--", filePath);
   git(cwd, "commit", "--quiet", "-m", message);
   return git(cwd, "rev-parse", "HEAD");
+}
+
+function generatedLockfile({ nodeEngine = ">=22", padding = 0, rootDependencies } = {}) {
+  const packages = {
+    "": {
+      name: "pi-sampler", version: "0.1.0", engines: { node: nodeEngine },
+      ...(rootDependencies === undefined ? {} : { dependencies: rootDependencies }),
+    },
+  };
+  for (let index = 0; index < padding; index += 1) packages[`node_modules/package-${index}`] = {
+    version: "1.0.0",
+    resolved: `https://registry.npmjs.org/package-${index}/-/package-${index}-1.0.0.tgz`,
+    integrity: `sha512-${createHash("sha512").update(`package-${index}`).digest("base64")}`,
+  };
+  return `${JSON.stringify({ name: "pi-sampler", version: "0.1.0", lockfileVersion: 3, requires: true, packages }, null, 2)}\n`;
 }
 
 test("review packet accepts safe dot-prefixed tracked path segments and rejects unsafe paths", async () => {
@@ -247,6 +263,38 @@ test("review packet rejects oversized committed changes", async () => {
     await writeFile(join(fixture.cwd, "oversized.txt"), "x".repeat(128 * 1024 + 1)); git(fixture.cwd, "add", "oversized.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "oversized");
     assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", git(fixture.cwd, "rev-parse", "HEAD")), /review-packet: oversized\.txt exceeds 131072 bytes/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet strictly admits oversized canonical package locks but still requires complete hunks", async () => {
+  const fixture = await repository();
+  try {
+    const lockfile = generatedLockfile({ padding: 500, rootDependencies: { "range-a": "18 || 20 || >=22", "range-b": "1.2.0 - 3" } });
+    assert.ok(Buffer.byteLength(lockfile) > 128 * 1024);
+    assert.ok(Buffer.byteLength(lockfile) < 512 * 1024);
+    const range = await committedRange(fixture.cwd, { base: { "baseline.txt": "base\n" }, head: { "baseline.txt": "base\n", "package-lock.json": lockfile } });
+    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /package-lock\.json patch hunk 1 exceeds the fixed 8192-byte review-packet bound/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet rejects malformed, hidden, and oversized package-lock admission inputs", async () => {
+  const cases = [
+    ["noncanonical", () => `${generatedLockfile({ padding: 500 }).trimEnd()} `, /canonical npm-generated/],
+    ["invalid dependency range", () => generatedLockfile({ padding: 500, rootDependencies: { "range-a": `${"1.2.3 ".repeat(35)}!` } }), /unsupported dependencies spec/],
+    ["hidden dependency value", () => {
+      const lockfile = JSON.parse(generatedLockfile({ padding: 500 }));
+      lockfile.packages["node_modules/package-0"].dependencies = { package: { hidden: "x".repeat(64 * 1024) } };
+      return `${JSON.stringify(lockfile, null, 2)}\n`;
+    }, /unsupported dependencies/],
+    ["over 512 KiB", () => generatedLockfile({ padding: 2_000 }), /exceeds 524288 bytes/],
+  ];
+  for (const [label, content, error] of cases) {
+    const fixture = await repository();
+    try {
+      const lockfile = content();
+      const range = await committedRange(fixture.cwd, { base: { "baseline.txt": "base\n" }, head: { "baseline.txt": "base\n", "package-lock.json": lockfile } });
+      assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), error, label);
+    } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+  }
 });
 
 test("review packet rejects the removed filesystem-output contract", async () => {

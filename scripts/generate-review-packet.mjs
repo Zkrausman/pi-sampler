@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Create a deterministic, commit-only, bounded Git review packet. */
 import { execFile } from "node:child_process";
+import { validateOversizedPackageLockfile } from "./package-lock-admission.mjs";
 import { createHash } from "node:crypto";
 import process from "node:process";
 import { promisify } from "node:util";
@@ -8,6 +9,7 @@ import { promisify } from "node:util";
 const run = promisify(execFile);
 const LIMITS = Object.freeze({
   argument: 4096, ref: 256, files: 200, path: 240, blob: 128 * 1024,
+  generatedLockfileBlob: 512 * 1024,
   stat: 32 * 1024, diff: 384 * 1024, hunks: 64, hunk: 8 * 1024,
   patch: 128 * 1024, patches: 768 * 1024, packet: 1024 * 1024,
 });
@@ -94,6 +96,7 @@ function textBlob(content, label) {
   if (!Buffer.from(text, "utf8").equals(content)) fail(`${label} is not valid UTF-8 text`);
   return text;
 }
+const GENERATED_LOCKFILE_PATH = "package-lock.json";
 async function blobAt(gitCommand, commit, filePath, endpoint) {
   const entry = (await gitCommand(["ls-tree", commit, "--", filePath], { maxBuffer: 4096 })).trim();
   if (!entry) return null; // A file may be created or deleted at one endpoint.
@@ -102,11 +105,14 @@ async function blobAt(gitCommand, commit, filePath, endpoint) {
   const objectId = match[2];
   await gitCommand(["cat-file", "-e", `${objectId}^{blob}`], { maxBuffer: 128 });
   const size = Number.parseInt(await gitCommand(["cat-file", "-s", objectId], { maxBuffer: 64 }), 10);
-  if (!Number.isSafeInteger(size) || size < 0 || size > LIMITS.blob) fail(`${filePath} exceeds ${LIMITS.blob} bytes`);
-  const content = await gitCommand(["cat-file", "blob", objectId], { encoding: "buffer", maxBuffer: LIMITS.blob + 1 });
+  const oversizedGeneratedLockfile = filePath === GENERATED_LOCKFILE_PATH && size > LIMITS.blob;
+  const maximum = oversizedGeneratedLockfile ? LIMITS.generatedLockfileBlob : LIMITS.blob;
+  if (!Number.isSafeInteger(size) || size < 0 || size > maximum) fail(`${filePath} exceeds ${maximum} bytes`);
+  const content = await gitCommand(["cat-file", "blob", objectId], { encoding: "buffer", maxBuffer: maximum + 1 });
   const text = textBlob(content, filePath);
   const calculatedObjectId = createHash(objectId.length === 40 ? "sha1" : "sha256").update(`blob ${content.length}\0`).update(content).digest("hex");
   if (calculatedObjectId !== objectId) fail(`${filePath} ${endpoint} blob content does not match its committed object ID`);
+  if (oversizedGeneratedLockfile) validateOversizedPackageLockfile(text);
   return { objectId, byteLength: size, content: text };
 }
 function patchHunks(diff, filePath) {
