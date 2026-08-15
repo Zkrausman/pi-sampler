@@ -53,6 +53,13 @@ async function committedRange(cwd, files) {
   return { base, head: git(cwd, "rev-parse", "HEAD") };
 }
 
+async function commitFile(cwd, filePath, content, message) {
+  await writeFile(join(cwd, filePath), content);
+  git(cwd, "add", "--", filePath);
+  git(cwd, "commit", "--quiet", "-m", message);
+  return git(cwd, "rev-parse", "HEAD");
+}
+
 test("review packet accepts safe dot-prefixed tracked path segments and rejects unsafe paths", async () => {
   const fixture = await repository();
   try {
@@ -186,13 +193,12 @@ test("review packet fully covers many small hunks in a large source blob without
   const fixture = await repository();
   try {
     const source = Array.from({ length: 400 }, (_, index) => `export const line${index} = "${"x".repeat(170)}";`).join("\n") + "\n";
-    await writeFile(join(fixture.cwd, "large-source.mjs"), source); git(fixture.cwd, "add", "large-source.mjs"); git(fixture.cwd, "commit", "--quiet", "-m", "large source base");
-    const base = git(fixture.cwd, "rev-parse", "HEAD");
+    const base = await commitFile(fixture.cwd, "large-source.mjs", source, "large source base");
     const changed = source.split("\n");
     const changedIndexes = Array.from({ length: 50 }, (_, index) => index * 8 + 7);
     for (const index of changedIndexes) changed[index] = changed[index].replace('"x', '"y');
     const headSource = changed.join("\n");
-    await writeFile(join(fixture.cwd, "large-source.mjs"), headSource); git(fixture.cwd, "add", "large-source.mjs"); git(fixture.cwd, "commit", "--quiet", "-m", "large source head");
+    await commitFile(fixture.cwd, "large-source.mjs", headSource, "large source head");
     const packet = JSON.parse(invoke(fixture.cwd, "--base", base, "--head", git(fixture.cwd, "rev-parse", "HEAD")));
     const patch = packet.patches.find(({ path }) => path === "large-source.mjs");
     assert.ok(Buffer.byteLength(source) > 24 * 1024);
@@ -216,10 +222,9 @@ test("review packet fails closed when hunk count exceeds complete coverage bound
   try {
     const lineCount = 520;
     const lines = Array.from({ length: lineCount }, (_, index) => `line ${index}`).join("\n");
-    await writeFile(join(fixture.cwd, "excess-hunks.txt"), `${lines}\n`); git(fixture.cwd, "add", "excess-hunks.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "excess hunks base");
-    const base = git(fixture.cwd, "rev-parse", "HEAD");
+    const base = await commitFile(fixture.cwd, "excess-hunks.txt", `${lines}\n`, "excess hunks base");
     const changed = Array.from({ length: lineCount }, (_, index) => index % 8 === 7 ? `changed ${index}` : `line ${index}`).join("\n");
-    await writeFile(join(fixture.cwd, "excess-hunks.txt"), `${changed}\n`); git(fixture.cwd, "add", "excess-hunks.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "excess hunks head");
+    await commitFile(fixture.cwd, "excess-hunks.txt", `${changed}\n`, "excess hunks head");
     assert.throws(() => invoke(fixture.cwd, "--base", base, "--head", git(fixture.cwd, "rev-parse", "HEAD")), /excess-hunks\.txt has 65 patch hunks, exceeding the fixed 64-hunk review-packet bound/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
@@ -229,10 +234,9 @@ test("review packet fails closed when complete hunk coverage exceeds a path tota
   try {
     const lineCount = 512;
     const baseLines = Array.from({ length: lineCount }, (_, index) => index % 8 === 7 ? "x".repeat(1_800) : "context");
-    await writeFile(join(fixture.cwd, "excess-patch-total.txt"), `${baseLines.join("\n")}\n`); git(fixture.cwd, "add", "excess-patch-total.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "patch total base");
-    const base = git(fixture.cwd, "rev-parse", "HEAD");
+    const base = await commitFile(fixture.cwd, "excess-patch-total.txt", `${baseLines.join("\n")}\n`, "patch total base");
     const headLines = baseLines.map((line, index) => index % 8 === 7 ? "y".repeat(1_800) : line);
-    await writeFile(join(fixture.cwd, "excess-patch-total.txt"), `${headLines.join("\n")}\n`); git(fixture.cwd, "add", "excess-patch-total.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "patch total head");
+    await commitFile(fixture.cwd, "excess-patch-total.txt", `${headLines.join("\n")}\n`, "patch total head");
     assert.throws(() => invoke(fixture.cwd, "--base", base, "--head", git(fixture.cwd, "rev-parse", "HEAD")), /excess-patch-total\.txt patch hunks exceed the fixed 131072-byte review-packet bound/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
