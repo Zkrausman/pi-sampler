@@ -19,13 +19,6 @@ access even when they can read the source.
 | Ticket lifecycle | `@zkrausman/pi-ticket-lifecycle` | `0.2.0` | Supported -- GitHub Packages (restricted) |
 | Wiki delivery | `@zkrausman/pi-wiki-delivery` | `0.1.1` | Supported -- GitHub Packages (restricted) |
 
-The output optimizer source remains in this repository only for history; it is
-not a supported or publishable package:
-
-| Extension | Package | Source version | Distribution |
-| --- | --- | --- | --- |
-| Output optimizer | `@zkrausman/pi-output-optimizer` | `0.1.0` | Withdrawn from GitHub Packages -- do not publish |
-
 ## Consumer setup
 
 Use this procedure for every supported package. It configures only the
@@ -53,9 +46,6 @@ Use this procedure for every supported package. It configures only the
 An unversioned npm source lets Pi show its package-update notice at session
 start; run `pi update --extensions` after reviewing the release notes. Pin an
 exact version for reproducible automation.
-
-> `@zkrausman/pi-output-optimizer` was withdrawn from GitHub Packages; use
-> `pith install --pi` for Pi output optimization. Do not publish it again.
 
 Exact versions and Git commits are not advanced by `pi update --extensions`.
 Update them deliberately in the consumer configuration.
