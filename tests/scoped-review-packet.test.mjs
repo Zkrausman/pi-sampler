@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const generator = join(root, "scripts", "generate-review-packet.mjs");
-const { generateReviewPacket, safeChangedPath } = await import(pathToFileURL(generator).href);
+const { generateReviewPacket, safeChangedPath, serializeReviewPacket } = await import(pathToFileURL(generator).href);
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -107,7 +107,8 @@ test("review packet is deterministic, bounded, stdout-only, and contains complet
     assert.match(packet.diffStat, /added\.txt/);
     assert.doesNotMatch(first, /untracked-secret|must never appear/);
     assert.ok(packet.patches.every((patch) => packet.changedFiles.some((file) => file.path === patch.path)));
-    assert.ok(packet.patches.every((patch) => patch.hunks.length <= 64 && patch.hunks.every((hunk) => Buffer.byteLength(hunk) <= 8_192)));
+    assert.ok(packet.patches.every((patch) => patch.hunks.length <= 64 && patch.hunks.every((hunk) => Buffer.byteLength(hunk) <= 64 * 1024)));
+    assert.equal(Buffer.byteLength(first, "utf8"), Buffer.byteLength(serializeReviewPacket(packet), "utf8"));
     assert.equal(packet.incomplete, false);
     assert.deepEqual(packet.omittedHunks, []);
     assert.deepEqual(packet.byteTruncatedHunks, []);
@@ -197,11 +198,33 @@ test("review packet ignores inherited Git trace destinations, including a symlin
   }
 });
 
-test("review packet fails closed when a textual hunk exceeds its byte bound", async () => {
+test("review packet fully represents 406-line workspace and viewer-sized hunks within the raised byte bound", async () => {
   const fixture = await repository();
   try {
-    const range = await committedRange(fixture.cwd, { base: { "large-hunk.txt": "before\n" }, head: { "large-hunk.txt": `${"x".repeat(8 * 1024)}\n` } });
-    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /large-hunk\.txt patch hunk 1 exceeds the fixed 8192-byte review-packet bound/);
+    const workspaceSource = Array.from({ length: 406 }, (_, index) => `export const workspaceLine${index} = "${"w".repeat(45)}";`).join("\n") + "\n";
+    const viewerSource = Array.from({ length: 406 }, (_, index) => `const viewerEntry${index} = "${"v".repeat(95)}";`).join("\n") + "\n";
+    const range = await committedRange(fixture.cwd, {
+      base: { "baseline.txt": "base\n" },
+      head: { "baseline.txt": "base\n", "workspace-source.mjs": workspaceSource, "viewer.mjs": viewerSource },
+    });
+    const packet = JSON.parse(invoke(fixture.cwd, "--base", range.base, "--head", range.head));
+    const workspaceHunk = packet.patches.find(({ path }) => path === "workspace-source.mjs").hunks[0];
+    const viewerHunk = packet.patches.find(({ path }) => path === "viewer.mjs").hunks[0];
+    assert.equal(workspaceSource.trimEnd().split("\n").length, 406);
+    for (const hunk of [workspaceHunk, viewerHunk]) assert.ok(Buffer.byteLength(hunk, "utf8") > 8 * 1024 && Buffer.byteLength(hunk, "utf8") <= 64 * 1024);
+    assert.match(workspaceHunk, /\+export const workspaceLine0/); assert.match(workspaceHunk, /\+export const workspaceLine405/);
+    assert.match(viewerHunk, /\+const viewerEntry0/); assert.match(viewerHunk, /\+const viewerEntry405/);
+    assert.equal(packet.incomplete, false); assert.deepEqual(packet.omittedHunks, []); assert.deepEqual(packet.byteTruncatedHunks, []); assert.deepEqual(packet.immutableMaterial, []);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet fails closed by UTF-8 bytes, not JavaScript character count, above the raised hunk bound", async () => {
+  const fixture = await repository();
+  try {
+    const multibyteLine = `${"🧪".repeat(16 * 1024)}\n`;
+    assert.ok(multibyteLine.length < 64 * 1024); assert.ok(Buffer.byteLength(multibyteLine, "utf8") > 64 * 1024);
+    const range = await committedRange(fixture.cwd, { base: { "large-hunk.txt": "before\n" }, head: { "large-hunk.txt": multibyteLine } });
+    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /large-hunk\.txt patch hunk 1 exceeds the fixed 65536-byte review-packet bound/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
@@ -257,6 +280,28 @@ test("review packet fails closed when complete hunk coverage exceeds a path tota
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
+test("review packet fails closed when complete hunk coverage exceeds the aggregate resource bound", async () => {
+  const fixture = await repository();
+  try {
+    const head = { "baseline.txt": "base\n" };
+    for (let index = 0; index < 13; index += 1) head[`aggregate-${index}.txt`] = `${"x".repeat(60 * 1024)}\n`;
+    const range = await committedRange(fixture.cwd, { base: { "baseline.txt": "base\n" }, head });
+    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /patch hunks exceed the fixed 786432-byte total review-packet bound/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("review packet rejects a Git diff read that exceeds its separate resource bound", async () => {
+  const fixture = await repository();
+  try {
+    let padding = 500;
+    let lockfile = generatedLockfile({ padding });
+    while (Buffer.byteLength(lockfile, "utf8") <= 384 * 1024) lockfile = generatedLockfile({ padding: padding += 50 });
+    assert.ok(Buffer.byteLength(lockfile, "utf8") <= 512 * 1024);
+    const range = await committedRange(fixture.cwd, { base: { "baseline.txt": "base\n" }, head: { "baseline.txt": "base\n", "package-lock.json": lockfile } });
+    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /git diff output exceeds the fixed 393216-byte review-packet bound/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
 test("review packet rejects oversized committed changes", async () => {
   const fixture = await repository();
   try {
@@ -272,7 +317,7 @@ test("review packet strictly admits oversized canonical package locks but still 
     assert.ok(Buffer.byteLength(lockfile) > 128 * 1024);
     assert.ok(Buffer.byteLength(lockfile) < 512 * 1024);
     const range = await committedRange(fixture.cwd, { base: { "baseline.txt": "base\n" }, head: { "baseline.txt": "base\n", "package-lock.json": lockfile } });
-    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /package-lock\.json patch hunk 1 exceeds the fixed 8192-byte review-packet bound/);
+    assert.throws(() => invoke(fixture.cwd, "--base", range.base, "--head", range.head), /package-lock\.json patch hunk 1 exceeds the fixed 65536-byte review-packet bound/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
@@ -341,6 +386,7 @@ test("review packet enforces file and validation-payload bounds", async () => {
 test("scoped reviewer template requires complete packet-generated hunk evidence", async () => {
   const template = await readFile(join(root, ".pi", "agents", "scoped-reviewer.md"), "utf8");
   assert.match(template, /^name: scoped-reviewer$/m); assert.match(template, /^tools: read$/m); assert.match(template, /^thinking: medium$/m); assert.match(template, /^defaultContext: fresh$/m);
+  assert.match(template, /64 complete hunks per path and 64 KiB\s+per hunk/i); assert.match(template, /per-path, aggregate, Git-diff, and serialized\s+packet limits/i);
   assert.match(template, /incomplete.*false/i); assert.match(template, /immutableMaterial.*empty/i); assert.match(template, /Do not read\s+working-tree source, direct imports/i);
   for (const boundary of [/untracked/i, /history outside the packet range/i, /environment data/i, /credentials/i, /sessions/i]) assert.match(template, boundary);
   assert.match(template, /segmented[\s\S]*chunks are not valid evidence/i);

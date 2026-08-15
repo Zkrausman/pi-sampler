@@ -38,14 +38,14 @@ Git-generated textual hunks. A packet has `incomplete: false` with empty
 legacy fields remain present so consumers can reject incomplete packets
 unambiguously; they are never evidence substitutes.
 
-Each file may have at most 64 hunks, each hunk may be at most 8 KiB, all hunks
+Each file may have at most 64 hunks, each hunk may be at most 64 KiB, all hunks
 for one path may be at most 128 KiB, and all packet hunks may be at most
-768 KiB. The final serialized packet remains capped at 1 MiB. These fixed
-limits allow normal large source files with many small, fully represented
-changes while preserving bounded review input. Any hunk-count, per-hunk-byte,
-per-path-total, aggregate-total, Git-diff, or final-packet overflow fails
-closed: produce a smaller range. The generator never truncates a hunk or
-falls back to complete blob endpoints.
+768 KiB. Each Git diff read remains capped at 384 KiB, and the exact canonical
+serialized packet remains capped at 1 MiB. These fixed limits admit complete
+medium-sized source and viewer hunks while preserving bounded review input.
+Any hunk-count, per-hunk-byte, per-path-total, aggregate-total, Git-diff, or
+serialized-packet overflow fails closed: produce a smaller range. The generator
+never truncates a hunk or falls back to complete blob endpoints.
 
 The only endpoint-size admission exception is a repository-root
 `package-lock.json` above 128 KiB and at most 512 KiB. It must be canonical

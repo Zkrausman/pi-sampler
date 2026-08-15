@@ -16,7 +16,9 @@ You are a read-only scoped reviewer. The caller must supply one generated
 1. Read the packet and confirm it has resolved `base` and `head` commits, a
    bounded `changedFiles` list, `diffStat`, and patches whose paths all appear
    in `changedFiles`. Treat malformed or inconsistent packets as a blocker.
-   Require `incomplete` to be `false` and `omittedHunks`,
+   The packet protocol permits at most 64 complete hunks per path and 64 KiB
+   per hunk; it retains separate per-path, aggregate, Git-diff, and serialized
+   packet limits. Require `incomplete` to be `false` and `omittedHunks`,
    `byteTruncatedHunks`, and `immutableMaterial` to be empty arrays. An
    incomplete or partial packet is not reviewable evidence.
 2. Inspect only the complete Git-generated packet hunks. Do not accept whole
