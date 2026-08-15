@@ -68,6 +68,12 @@ path/symlink TOCTOU exposure; portable Node APIs cannot atomically guarantee a
 resolved pathname remains inside the project if an attacker can replace it
 between path validation and open, so run only in a trusted local project.
 
+The separate [project-local SQLite workspace boundary](docs/PI-EXCALIDRAW-WORKSPACE.md)
+stores bounded native scenes at `.pi/excalidraw/workspace.sqlite`, with
+conditional revisions, import/export, and an optional IPv4-loopback-only HTTP
+service. It requires Node 24+ and its built-in experimental `node:sqlite` API.
+It intentionally does not register Pi operations or provide browser UX.
+
 Each extension README lists its prerequisites, configuration, and concrete
 usage examples. See [`docs/RELEASING.md`](docs/RELEASING.md) for restricted
 registry setup, semantic versioning, release operations, and package SBOMs.
