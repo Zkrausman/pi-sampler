@@ -18,6 +18,7 @@ import {
   sandboxedReportHtml,
   VIEWER_HEADER_BYTES,
   VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY,
+  VIEWER_MAX_DISCOVERY_STAT_ENTRIES,
   VIEWER_PACKAGE_VERSION,
   VIEWER_MAX_SESSION_FILE_BYTES,
   sessionLoadFailure,
@@ -308,11 +309,11 @@ test("viewer discovery caps candidate files, recursion depth, and catalog result
   const fractionalResults = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 10, maxDepth: 8, maxResults: 1.9 }); assert.equal(fractionalResults.length, 1); assert.equal(fractionalResults.capped, true);
 });
 
-test("viewer recent-entry metadata collection limits concurrent stat work under stress", async () => {
+test("viewer discovery bounds total stat work and preserves deterministic selected ordering under stress", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-viewer-stat-fanout-")); const sessions = join(directory, "sessions"); await mkdir(sessions);
-  const total = VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY * 4 + 3; const base = Date.parse("2025-01-01T00:00:00.000Z");
+  const total = VIEWER_MAX_DISCOVERY_STAT_ENTRIES + VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY + 3; const base = Date.parse("2025-01-01T00:00:00.000Z");
   for (let index = 0; index < total; index += 1) {
-    const file = join(sessions, `${String(index).padStart(3, "0")}.jsonl`);
+    const file = join(sessions, `${String(index).padStart(4, "0")}.jsonl`);
     await writeFile(file, `${JSON.stringify({ type: "session", id: `019fd4f3-b574-7953-a984-ffb49a51${String(index).padStart(4, "0")}`, timestamp: "2025-01-01T00:00:00.000Z", cwd: directory })}\n`);
     await utimes(file, new Date(base + index * 1_000), new Date(base + index * 1_000));
   }
@@ -323,11 +324,11 @@ test("viewer recent-entry metadata collection limits concurrent stat work under 
   };
   syncBuiltinESMExports();
   let found;
-  try { found = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 1, maxResults: 1 }); } finally { fsPromises.stat = originalStat; syncBuiltinESMExports(); }
-  assert.equal(calls, total, "ranking still collects metadata for every entry before applying the candidate cap");
+  try { found = await discoverSessions({ sessionDirectory: sessions, maxCandidates: 3, maxResults: 3 }); } finally { fsPromises.stat = originalStat; syncBuiltinESMExports(); }
+  assert.equal(calls, VIEWER_MAX_DISCOVERY_STAT_ENTRIES, "stat calls must stop at the hard total metadata-inspection limit");
   assert.ok(maximumActive <= VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY, `stat fanout must not exceed ${VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY}, received ${maximumActive}`);
   assert.equal(maximumActive, VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY, "the stress fixture exercises the worker limit");
-  assert.deepEqual(found.map((session) => session.id), [`019fd4f3-b574-7953-a984-ffb49a51${String(total - 1).padStart(4, "0")}`], "the most recently modified session remains prioritized"); assert.equal(found.capped, true);
+  assert.deepEqual(found.map((session) => session.id), [total - 1, total - 2, total - 3].map((index) => `019fd4f3-b574-7953-a984-ffb49a51${String(index).padStart(4, "0")}`), "the bounded current-session selection remains deterministically ordered by recency"); assert.equal(found.capped, true);
 });
 
 test("viewer returns a capped notice with the complete hard-bounded catalog", async () => {

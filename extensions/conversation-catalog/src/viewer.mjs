@@ -20,6 +20,7 @@ export const VIEWER_MAX_SESSION_EVENTS = 2_000;
 export const VIEWER_MAX_SNAPSHOTS = 32;
 export const VIEWER_MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
 export const VIEWER_MAX_DISCOVERY_CANDIDATES = 500;
+export const VIEWER_MAX_DISCOVERY_STAT_ENTRIES = 500;
 export const VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY = 16;
 export const VIEWER_MAX_DISCOVERY_DEPTH = 8;
 export const VIEWER_MAX_CATALOG_RESULTS = 250;
@@ -65,12 +66,18 @@ export function defaultPiSessionDirectory({ home = homedir() } = {}) {
   return join(home, ".pi", "agent", "sessions");
 }
 
-async function recentEntries(directory) {
+async function recentEntries(directory, state) {
   const entries = await readdir(directory, { withFileTypes: true });
-  const ranked = new Array(entries.length); let next = 0;
-  const workers = Array.from({ length: Math.min(entries.length, VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY) }, async () => {
-    while (next < entries.length) {
-      const index = next; next += 1; const entry = entries[index];
+  // File names are the only bounded, deterministic pre-stat signal. Reverse
+  // lexical order matches the recency tie-breaker and favors Pi's time-ordered
+  // session IDs when the total inspection budget cannot cover every entry.
+  const inspectable = entries.sort((left, right) => right.name.localeCompare(left.name)).slice(0, state.remainingStats);
+  if (inspectable.length < entries.length) state.capped = true;
+  state.remainingStats -= inspectable.length;
+  const ranked = new Array(inspectable.length); let next = 0;
+  const workers = Array.from({ length: Math.min(inspectable.length, VIEWER_MAX_DISCOVERY_STAT_CONCURRENCY) }, async () => {
+    while (next < inspectable.length) {
+      const index = next; next += 1; const entry = inspectable[index];
       try { ranked[index] = { entry, mtimeMs: (await stat(join(directory, entry.name))).mtimeMs }; } catch { ranked[index] = { entry, mtimeMs: Number.NEGATIVE_INFINITY }; }
     }
   });
@@ -80,9 +87,9 @@ async function recentEntries(directory) {
   return ranked.sort((left, right) => right.mtimeMs - left.mtimeMs || right.entry.name.localeCompare(left.entry.name)).map(({ entry }) => entry);
 }
 
-async function walkSessionFiles(directory, { maxCandidates, maxDepth }, state = { files: [], capped: false }, depth = 0) {
+async function walkSessionFiles(directory, { maxCandidates, maxDepth }, state = { files: [], capped: false, remainingStats: VIEWER_MAX_DISCOVERY_STAT_ENTRIES }, depth = 0) {
   let entries;
-  try { entries = await recentEntries(directory); } catch (error) { if (error?.code === "ENOENT") return state; throw error; }
+  try { entries = await recentEntries(directory, state); } catch (error) { if (error?.code === "ENOENT") return state; throw error; }
   for (const entry of entries) {
     if (state.files.length >= maxCandidates) { state.capped = true; return state; }
     const candidate = join(directory, entry.name);
