@@ -57,10 +57,15 @@ test("public documentation states source, privacy, security, and platform bounda
   const [readme, privacy, platform, security, contributing, releasing] = documents;
   assert.match(readme, /not affiliated with or endorsed by/);
   assert.match(readme, /public, while the six supported extension packages are[\s\S]*restricted access/);
-  assert.match(privacy, /does not provide a\s+hosted service, account system, analytics endpoint, or telemetry configuration/);
+  assert.match(readme, /There is no repository-wide storage location or reset command/);
+  assert.match(readme, /not a hosted dashboard or background service/);
+  assert.match(readme, /Network behavior is\s+extension-specific/);
+  assert.match(privacy, /does not provide a\s+repository-operated hosted service, account system, analytics endpoint, or\s+telemetry service/);
+  assert.match(privacy, /temporary `127\.0\.0\.1` listener/);
   assert.match(platform, /not affiliated with, sponsored\s+by, or endorsed by/);
   assert.match(security, /private vulnerability reporting/);
   assert.match(contributing, /Developer Certificate of Origin \(DCO\)\s*1\.1/);
   assert.match(releasing, /CycloneDX 1\.5/);
+  assert.match(releasing, /native binary artifacts/);
   assert.match(releasing, /immutable/);
 });

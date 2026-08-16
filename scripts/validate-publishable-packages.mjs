@@ -50,12 +50,26 @@ function expectedPackPaths(manifest) {
   return [...expected].map((entry) => entry.replace(/^\.\//, ""));
 }
 
+const nativeArtifactPattern = /\.(?:node|dll|dylib|so(?:\.\d+)*)$/i;
+const packAffectingLifecycleScripts = ["prepublish", "prepare", "prepublishOnly", "prepack"];
+
+export function validatePackageLifecycle(manifest) {
+  const declaredScripts = packAffectingLifecycleScripts.filter((name) => typeof manifest.scripts?.[name] === "string" && manifest.scripts[name].trim());
+  assert.deepEqual(
+    declaredScripts,
+    [],
+    `${manifest.name}: pack-affecting lifecycle scripts are not permitted because package validation runs npm pack with --ignore-scripts: ${declaredScripts.join(", ")}`,
+  );
+}
+
 export function validatePackedArtifact(manifest, packResult) {
   assert.equal(packResult.name, manifest.name, `${manifest.name}: npm pack returned an unexpected package name`);
   assert.equal(packResult.version, manifest.version, `${manifest.name}: npm pack returned an unexpected version`);
   assert.ok(Array.isArray(packResult.files), `${manifest.name}: npm pack did not report artifact files`);
 
   const artifactPaths = new Set(packResult.files.map((file) => file.path));
+  const nativeArtifacts = [...artifactPaths].filter((path) => nativeArtifactPattern.test(path));
+  assert.deepEqual(nativeArtifacts, [], `${manifest.name}: native artifacts require an explicit compliance-inventory policy before release: ${nativeArtifacts.join(", ")}`);
   for (const expected of expectedPackPaths(manifest)) {
     const present = artifactPaths.has(expected) || [...artifactPaths].some((path) => path.startsWith(`${expected}/`));
     assert.ok(present, `${manifest.name}: packed artifact is missing expected content ${expected}`);
@@ -88,6 +102,7 @@ export async function validatePublishablePackages({ repositoryRoot = root, comma
   assert.ok(packages.length > 0, "no publishable workspace packages found");
 
   for (const packageInfo of packages) {
+    validatePackageLifecycle(packageInfo.manifest);
     const { stdout } = await commandRunner("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: packageInfo.directory });
     let results;
     try {
