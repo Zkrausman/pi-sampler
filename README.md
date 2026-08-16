@@ -37,12 +37,34 @@ install the desired package in the consumer project. For example:
 pi install -l npm:@zkrausman/pi-delivery-controller
 ```
 
-Pi shows a package-update notice for unversioned package sources at session
-start. Run `pi update --extensions` after reviewing release notes. Pin an exact
-version when a reproducible deployment is required.
+When the installed Pi version offers update notices for unversioned package
+sources, review the release notes before running `pi update --extensions`. Pin
+an exact version when a reproducible deployment is required; package updates do
+not advance an exact version or Git revision automatically.
 
 For local development, add an extension's `src/index.ts` path to Pi's
 `extensions` setting or run it for one session.
+
+## Operational boundaries
+
+The installation command adds an extension source to the local Pi installation;
+it does not create an account, grant GitHub Packages access, or configure a
+consumer project's credentials. Follow the [consumer setup](docs/RELEASING.md#consumer-setup)
+first, and keep its token outside project files.
+
+There is no repository-wide storage location or reset command. Each extension
+README documents any local state it uses and its own safe lifecycle behavior.
+Remove an extension with Pi's documented extension-management command; do not
+delete local files or registry values as a generic "reset" because that can
+discard consumer-owned state.
+
+The conversation viewer is an on-demand, loopback-only local browser interface,
+not a hosted dashboard or background service. pi-sampler has no
+repository-operated analytics or telemetry service. Network behavior is
+extension-specific: the project-local Excalidraw tools and conversation viewer
+use only local resources, while the delivery controller may contact a
+consumer-configured provider as documented in its README. Review the extension
+README before enabling it.
 
 > **Output optimization:** pi-sampler does not distribute an output-optimizer
 > package. Use Pith and install its Pi hook with `pith install --pi`.

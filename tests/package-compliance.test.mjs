@@ -23,6 +23,8 @@ test("every publishable package has current versioned notice and deterministic C
     assert.equal(parsed.metadata.component.name, manifest.name);
     assert.equal(parsed.metadata.component.version, manifest.version);
     assert.match(parsed.serialNumber, /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.match(notice, /No third-party package is bundled in this npm artifact/);
+    assert.match(notice, /The declared runtime and peer dependencies below are recorded for traceability/);
   }
 });
 

@@ -12,6 +12,10 @@ async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+function normalizeText(value) {
+  return value.replace(/\r\n/g, "\n");
+}
+
 export async function publishablePackageDirectories(repositoryRoot = root) {
   const rootManifest = await readJson(join(repositoryRoot, "package.json"));
   const workspacePatterns = Array.isArray(rootManifest.workspaces) ? rootManifest.workspaces : rootManifest.workspaces?.packages;
@@ -130,9 +134,9 @@ export async function validatePackageCompliance({ repositoryRoot = root } = {}) 
     assert.ok(manifest.files?.includes(noticeFile), `${manifest.name}: package files must include ${noticeFile}`);
     assert.ok(manifest.files?.includes(sbomFile), `${manifest.name}: package files must include ${sbomFile}`);
     const expected = createComplianceArtifacts(manifest, workspacePackages);
-    const notice = (await readFile(join(directory, noticeFile), "utf8")).replace(/\r\n/g, "\n");
+    const notice = normalizeText(await readFile(join(directory, noticeFile), "utf8"));
     assert.equal(notice, expected.notice, `${manifest.name}: ${noticeFile} is stale; run npm run generate:compliance`);
-    const sbom = (await readFile(join(directory, sbomFile), "utf8")).replace(/\r\n/g, "\n");
+    const sbom = normalizeText(await readFile(join(directory, sbomFile), "utf8"));
     assert.equal(sbom, expected.sbom, `${manifest.name}: ${sbomFile} is stale; run npm run generate:compliance`);
   }
   return packages;

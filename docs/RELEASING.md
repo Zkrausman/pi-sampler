@@ -54,11 +54,22 @@ Update them deliberately in the consumer configuration.
 
 Every supported package artifact includes `LICENSE`, a versioned
 `THIRD-PARTY-NOTICES.md`, and a deterministic CycloneDX 1.5 `sbom.cdx.json`.
-The notices state whether third-party software is bundled and record declared
-runtime and peer dependencies without guessing licenses that are not available
-in this repository. The SBOM is generated only from the package manifest and
-workspace package versions; it is not a claim about dependencies installed by a
-consumer outside the artifact.
+The notice and SBOM inventory every declared runtime, optional, and peer
+relationship, distinguishing workspace packages from external version ranges.
+They identify the license as `NOASSERTION` rather than guessing when this
+repository has no authoritative record. npm package artifacts do not include
+`node_modules`; consequently, the inventory does not claim to enumerate a
+consumer-selected peer dependency tree.
+
+The supported artifacts currently ship no native binary artifacts. Release
+validation inspects the dry-run packed file list and fails if a native library
+(`.node`, `.dll`, `.dylib`, or `.so`, including versioned `.so.1.2` names) is
+added without first extending the compliance inventory policy. Publishable
+packages may not declare `prepublish`, `prepare`, `prepublishOnly`, or `prepack`
+lifecycle scripts: validation deliberately uses `npm pack --ignore-scripts`, so
+this restriction prevents lifecycle-generated files from bypassing its inventory.
+This prevents an unreviewed native artifact from being released under the current
+source-only inventory model.
 
 Regenerate the six package artifacts after changing a supported package version
 or dependency declaration, then validate that committed output is current:
