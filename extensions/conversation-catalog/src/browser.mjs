@@ -28,7 +28,7 @@ export function browserSessionMetadata(session, index) {
 /** Does not expose a name, path, raw session id, or transcript before selection. */
 export function browserPickerLabel(session, index) {
   const metadata = browserSessionMetadata(session, index);
-  return `${metadata.ordinal}. Saved conversation — ${metadata.modified} (${metadata.messageCount} messages)`;
+  return `${metadata.ordinal}. Conversation ${pseudonymizeSession(session)} — ${metadata.modified} (${metadata.messageCount} messages)`;
 }
 
 /** Creates a short-lived local lookup table; its opaque keys are the only public identifiers. */
