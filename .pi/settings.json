@@ -1,7 +1,6 @@
 {
   "packages": [
-    "local-packages\\pi-answer",
-    "npm:@zkrausman/pi-conversation-catalog"
+    "local-packages\\pi-answer"
   ],
   "subagents": {
     "agentOverrides": {

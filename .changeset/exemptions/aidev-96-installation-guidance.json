@@ -1,9 +1,0 @@
-{
-  "packages": [
-    "@zkrausman/pi-delivery-controller",
-    "@zkrausman/pi-ticket-closeout-summary",
-    "@zkrausman/pi-ticket-cost",
-    "@zkrausman/pi-ticket-lifecycle"
-  ],
-  "reason": "This PR only centralizes consumer installation guidance; it does not change published package behavior or contents."
-}

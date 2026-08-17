@@ -4,13 +4,13 @@
   "ticket_id": "WORK-402",
   "work_class": "development-process",
   "repository_research": {
-    "cited_paths": ["extensions/delivery-controller/src/ledger.mjs", "extensions/delivery-controller/src/orchestrator.mjs", "pkg/deliveryevidence/validator.go", "docs/runbooks/project-delivery.md"],
+    "cited_paths": ["docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md", "docs/specs/AI-TOOLING-SEPARATION.md", "pkg/deliveryevidence/validator.go", "docs/runbooks/project-delivery.md"],
     "overlap_search": {
-      "queries": ["delivery controller ledger", "pi review worker", "jules dispatch adapter"],
+      "queries": ["delivery authority threat model", "pi review worker", "episode evidence contract"],
       "existing_issues_checked": ["WORK-104", "WORK-111", "WORK-112", "WORK-113", "WORK-114", "Linear team ZAR search: controller jules pi"],
       "docs_checked": ["docs/specs/EPIC_AI_Development_Governance_OKF_Compliance.md", "docs/runbooks/project-delivery.md", "docs/governance/README.md"]
     },
-    "source_of_truth_refs": ["Linear WORK-402 body (live via linear_get_issue)", "extensions/delivery-controller/src/ledger.mjs state machine"]
+    "source_of_truth_refs": ["Linear WORK-402 body (live via linear_get_issue)", "docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md replacement map"]
   },
   "actor_authority": {
     "actors": [
@@ -39,7 +39,7 @@
   "acceptance_criteria": {
     "behavioral_tests": ["ledger transitions deduplicate under concurrent appends; kill-switch halts without regressing merged", "dispatch→review→merge emits redacted {ref,sha256} evidence only"],
     "negative_cases": ["malformed feedback rejected 4k/warden and escalated human-escalated/malformed_feedback", "provider outage does not regress terminal merged state; stale event discarded"],
-    "verification_commands": ["node --test extensions/delivery-controller/src/*.test.mjs", "go test -race ./pkg/deliveryevidence ./pkg/wikigovernance -count=1", "go run ./cmd/planning-rubric-validator -manifest <path> -repo-root ."],
+    "verification_commands": ["node --test tests/legacy-self-evolution-retirement.test.mjs", "go test -race ./pkg/deliveryevidence ./pkg/wikigovernance -count=1", "go run ./cmd/planning-rubric-validator -manifest <path> -repo-root ."],
     "completion_evidence": "ledger snapshot + evaluation ledger digests + delivery manifest bound to delivery commit + wiki lint clean; no invented APIs",
     "non_go_verification": "docs/runbooks/project-delivery.md controller/implementer/reviewer table present; class-label walkthrough shows component→scope mapping; no assumed Jules/Pi plugin behavior without WORK-111 spike"
   },

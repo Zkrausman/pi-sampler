@@ -19,7 +19,8 @@ function normalizeText(value) {
 export async function publishablePackageDirectories(repositoryRoot = root) {
   const rootManifest = await readJson(join(repositoryRoot, "package.json"));
   const workspacePatterns = Array.isArray(rootManifest.workspaces) ? rootManifest.workspaces : rootManifest.workspaces?.packages;
-  assert.deepEqual(workspacePatterns, ["extensions/*"], "package workspaces must remain extensions/* for compliance generation");
+  if (workspacePatterns === undefined) return [];
+  assert.deepEqual(workspacePatterns, ["extensions/*"], "package workspaces must remain extensions/* when packages are active");
 
   const extensionsDirectory = join(repositoryRoot, "extensions");
   const entries = await readdir(extensionsDirectory, { withFileTypes: true });

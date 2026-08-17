@@ -103,12 +103,15 @@ export async function publishablePiExtensionEntries(repositoryRoot = root) {
       entries.push({ packageName: packageInfo.manifest.name, entryPath: join(packageInfo.directory, entry) });
     }
   }
-  assert.ok(entries.length > 0, "no publishable Pi extension entry points found");
   return entries;
 }
 
 export async function validatePiExtensions(repositoryRoot = root) {
   const entries = await publishablePiExtensionEntries(repositoryRoot);
+  if (entries.length === 0) {
+    console.log("validated zero publishable Pi extension entry points.");
+    return entries;
+  }
   for (const { packageName, entryPath } of entries) {
     await validateEntryPoint(entryPath);
     console.log(`validated Pi extension entry point: ${packageName} (${entryPath})`);

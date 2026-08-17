@@ -14,7 +14,8 @@ async function readJson(path) {
 async function workspaceDirectories(repositoryRoot) {
   const manifest = await readJson(join(repositoryRoot, "package.json"));
   const workspacePatterns = Array.isArray(manifest.workspaces) ? manifest.workspaces : manifest.workspaces?.packages;
-  assert.deepEqual(workspacePatterns, ["extensions/*"], "package workspaces must remain extensions/* for package validation");
+  if (workspacePatterns === undefined) return [];
+  assert.deepEqual(workspacePatterns, ["extensions/*"], "package workspaces must remain extensions/* when packages are active");
 
   const extensionsDirectory = join(repositoryRoot, "extensions");
   const entries = await readdir(extensionsDirectory, { withFileTypes: true });
@@ -99,7 +100,10 @@ export function run(command, args, options) {
 export async function validatePublishablePackages({ repositoryRoot = root, commandRunner = run } = {}) {
   await validatePackageCompliance({ repositoryRoot });
   const packages = await publishablePackages(repositoryRoot);
-  assert.ok(packages.length > 0, "no publishable workspace packages found");
+  if (packages.length === 0) {
+    console.log("validated zero publishable workspace packages.");
+    return packages;
+  }
 
   for (const packageInfo of packages) {
     validatePackageLifecycle(packageInfo.manifest);

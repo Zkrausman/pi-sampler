@@ -12,12 +12,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 test("every publishable Pi extension entry point parses, has a callable type, and smoke-loads", async () => {
   const entries = await publishablePiExtensionEntries(root);
-  assert.deepEqual(entries.map((entry) => entry.packageName).sort(), [
-    "@zkrausman/pi-conversation-catalog",
-    "@zkrausman/pi-delivery-controller",
-    "@zkrausman/pi-ticket-cost",
-    "@zkrausman/pi-wiki-delivery",
-  ]);
+  assert.deepEqual(entries, []);
   await validatePiExtensions(root);
 });
 

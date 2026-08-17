@@ -1,73 +1,28 @@
 # pi-sampler
 
-Reusable Pi extensions and optional AI-development tooling. The repository owns
-reusable mechanisms; a consuming repository owns its work-item format,
-repository source, credentials, commands, and governance policy. Pi is a
-third-party platform; this repository is not affiliated with or endorsed by
-Pi's maintainers.
+A local human/AI productivity repository. Pi is a third-party platform; this
+repository is not affiliated with or endorsed by Pi's maintainers.
 
-The source repository is public, while the six supported extension packages are
-published only to GitHub Packages with restricted access. Public source access
-does not grant package-download access; see [the release guide](docs/RELEASING.md)
-for the exact consumer setup and package inventory.
+## Current product boundary
 
-> **Security:** Pi extensions execute with your user permissions. Install only
-> reviewed revisions, use project-local configuration only in trusted projects,
-> and never commit credentials, sessions, or generated delivery evidence.
+M0 retired the legacy self-evolution extension packages. There are no supported
+or installable Pi extension packages in this repository. The retirement decision,
+the hostile-audit conclusion, and the M1–M5 replacement map are recorded in
+[the retirement record](docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md).
 
-## Extensions
+## Future plugin boundary
 
-| Extension | Purpose | Documentation |
-| --- | --- | --- |
-| [Delivery controller](extensions/delivery-controller/README.md) | Dispatch one explicitly supplied work item to a configured provider. It does not select work, merge code, or update a tracker. | [Install and use](extensions/delivery-controller/README.md) |
-| [Conversation catalog](extensions/conversation-catalog/README.md) | Browses saved Pi conversations locally, manages secure per-session hindsight notes, and creates redaction-reviewed, evidence-cited reports. | [Install and use](extensions/conversation-catalog/README.md) |
-| [Wiki delivery](extensions/wiki-delivery/README.md) | Coordinates a fail-closed LLM Wiki delivery lifecycle and validates its manifest. | [Install and use](extensions/wiki-delivery/README.md) |
-| [Ticket closeout summary](extensions/ticket-closeout-summary/README.md) | Local read-only summaries of finalized Pi ticket lifecycle receipts. | [Install and use](extensions/ticket-closeout-summary/README.md) |
-| [Ticket cost](extensions/ticket-cost/README.md) | Local, session-scoped Pi ticket cost receipts. | [Install and use](extensions/ticket-cost/README.md) |
-| [Ticket lifecycle](extensions/ticket-lifecycle/README.md) | Local, tracker-neutral durable ticket lifecycle and aggregate cost receipts. | [Install and use](extensions/ticket-lifecycle/README.md) |
-| Pi Excalidraw (project-local) | Creates and reads local `.excalidraw` architecture diagrams with deterministic parsing; it makes no cloud/API calls. | [Load locally](#pi-excalidraw-project-local-extension) |
+`pi-sampler` remains the umbrella repository for multiple independent Pi
+extensions. Its current M0 inventory contains zero supported or installable
+**packaged** extensions. `pi-evolution` will be the single coherent
+self-evolution plugin, built only through the approved M1–M5 milestone
+contracts and release policy.
 
-## Install an extension
-
-Released extensions are private, independently versioned Pi packages hosted in
-GitHub Packages. Configure npm with a read-only GitHub Packages token, then
-install the desired package in the consumer project. For example:
-
-```powershell
-pi install -l npm:@zkrausman/pi-delivery-controller
-```
-
-When the installed Pi version offers update notices for unversioned package
-sources, review the release notes before running `pi update --extensions`. Pin
-an exact version when a reproducible deployment is required; package updates do
-not advance an exact version or Git revision automatically.
-
-For local development, add an extension's `src/index.ts` path to Pi's
-`extensions` setting or run it for one session.
-
-## Operational boundaries
-
-The installation command adds an extension source to the local Pi installation;
-it does not create an account, grant GitHub Packages access, or configure a
-consumer project's credentials. Follow the [consumer setup](docs/RELEASING.md#consumer-setup)
-first, and keep its token outside project files.
-
-There is no repository-wide storage location or reset command. Each extension
-README documents any local state it uses and its own safe lifecycle behavior.
-Remove an extension with Pi's documented extension-management command; do not
-delete local files or registry values as a generic "reset" because that can
-discard consumer-owned state.
-
-The conversation viewer is an on-demand, loopback-only local browser interface,
-not a hosted dashboard or background service. pi-sampler has no
-repository-operated analytics or telemetry service. Network behavior is
-extension-specific: the project-local Excalidraw tools and conversation viewer
-use only local resources, while the delivery controller may contact a
-consumer-configured provider as documented in its README. Review the extension
-README before enabling it.
-
-> **Output optimization:** pi-sampler does not distribute an output-optimizer
-> package. Use Pith and install its Pi hook with `pith install --pi`.
+Pi Excalidraw remains a separate, human-in-the-loop productivity plugin. It
+creates and reads local `.excalidraw` architecture diagrams with deterministic
+parsing and no cloud/API calls. It does **not** own lifecycle authority,
+evolution evidence, lessons, or promotion decisions. Future packages may be
+introduced only through their approved milestone contracts and release policy.
 
 ### Pi Excalidraw project-local extension
 
@@ -78,30 +33,38 @@ extension location, create `.pi/extensions/pi-excalidraw/index.ts` containing:
 export { default } from "../../../src/extensions/pi-excalidraw/index.ts";
 ```
 
-Then start Pi in this trusted project (or use `/reload`). The extension registers
+Start Pi in this trusted project (or use `/reload`). The extension registers
 `generate_diagram` and `read_diagram`. Both accept only project-relative
-`.excalidraw` paths, parse/write only the local filesystem, and never use a
-network service or subprocess. `generate_diagram` accepts constrained statements
-such as `nodes: Client, API; Client -> API`; `read_diagram` returns JSON-formatted
-nodes and arrow connections. Inputs are bounded (description, scene, nesting,
-elements, labels, and summary output) and reads reject non-regular files before
-opening them. The reader opens and verifies one file descriptor to reduce
-path/symlink TOCTOU exposure; portable Node APIs cannot atomically guarantee a
-resolved pathname remains inside the project if an attacker can replace it
-between path validation and open, so run only in a trusted local project.
+`.excalidraw` paths, use only the local filesystem, and never use a network
+service or subprocess.
+
+`generate_diagram` accepts constrained architecture statements, for example:
+
+```text
+nodes: Client, API, Database; Client -> API -> Database
+```
+
+`read_diagram` returns JSON-formatted visual nodes and arrow connections. Both
+tools bound descriptions, scene-file size, JSON nesting, elements, labels, and
+summary output. They reject traversal, malformed scene data, symlink escapes,
+and non-regular files rather than reading arbitrary paths.
+
+The reader opens and verifies one file descriptor to reduce path/symlink
+replacement exposure. Portable Node filesystem APIs cannot atomically guarantee
+that a resolved pathname remains inside the project when a hostile concurrent
+actor replaces filesystem objects after validation. Use Pi Excalidraw only in a
+trusted local project; it is not a defense against a hostile filesystem.
 
 The separate [project-local SQLite workspace boundary](docs/PI-EXCALIDRAW-WORKSPACE.md)
 stores bounded native scenes at `.pi/excalidraw/workspace.sqlite`, with
 conditional revisions, import/export, and an optional IPv4-loopback-only HTTP
-service. It requires Node 24+ and its built-in experimental `node:sqlite` API.
-It intentionally does not register Pi operations or provide browser UX.
-
-Each extension README lists its prerequisites, configuration, and concrete
-usage examples. See [`docs/RELEASING.md`](docs/RELEASING.md) for restricted
-registry setup, semantic versioning, release operations, and package SBOMs.
+service. It requires Node 24 or later and its experimental built-in
+`node:sqlite` API; see that document for the full persistence boundary. It
+intentionally does not register Pi operations or provide browser UX.
 
 ## Public-project policies
 
+- [Legacy self-evolution retirement](docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md)
 - [Privacy and local-data boundaries](docs/PRIVACY.md)
 - [Security reporting](SECURITY.md)
 - [Platform, trademark, and non-affiliation notice](docs/PLATFORM-AND-TRADEMARKS.md)
@@ -109,25 +72,29 @@ registry setup, semantic versioning, release operations, and package SBOMs.
 
 ## Project profiles
 
-Use [`profiles/project-profile.schema.json`](profiles/project-profile.schema.json)
-to document consumer-owned values such as work-item identifiers, verification
-commands, source repository, required checks, and evidence/specification paths.
-[`profiles/example-project.json`](profiles/example-project.json) is a generic
-example. Treat every profile as consumer-owned configuration, never as a
-repository default.
+[`profiles/project-profile.schema.json`](profiles/project-profile.schema.json)
+defines the consumer-owned project-profile shape: work-item identifiers, source
+repository, verification commands, required checks, and evidence/specification
+paths. [`profiles/example-project.json`](profiles/example-project.json) and
+[`profiles/gelt-trading.example.json`](profiles/gelt-trading.example.json) are
+examples, not repository defaults or active runtime configuration. Validate a
+consumer profile against that schema with the consumer's JSON Schema validator;
+repository changes to the schema or examples are covered by `npm test`.
 
 ## Optional governance module
 
-[`governance/`](governance/) is a nested Go module containing validators,
-reconciliation helpers, schemas, and templates. Validate it independently:
+[`governance/`](governance/) is a nested Go module containing independent
+validators, reconciliation helpers, schemas, and templates. It does not restore
+or execute a retired extension. Run its current checks from the repository root:
 
 ```powershell
+npm run validate:governance
 cd governance
 go test -race ./...
 go run ./cmd/wiki-governance validate -repo-root .
 ```
 
-The wiki-governance command is also run by
+The wiki-governance command also runs in
 [`.github/workflows/wiki-governance.yml`](.github/workflows/wiki-governance.yml)
 on pull requests and pushes to `main`.
 
@@ -137,9 +104,10 @@ on pull requests and pushes to `main`.
 npm test
 npm run build
 npm run validate:governance
+npm run validate:compliance
 npm run validate:pi-extensions
 npm run validate:packages
 ```
 
-See [`docs/SCOPED-REVIEW.md`](docs/SCOPED-REVIEW.md) for local, commit-only scoped review packets (emitted to stdout for caller-controlled redirection), and
-[`docs/specs/AI-TOOLING-SEPARATION.md`](docs/specs/AI-TOOLING-SEPARATION.md) for the extraction boundary and migration rationale.
+See [`docs/SCOPED-REVIEW.md`](docs/SCOPED-REVIEW.md) for local, commit-only
+scoped review packets.
