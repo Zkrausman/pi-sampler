@@ -15,6 +15,14 @@ const stable = (v) => v === undefined ? "null" : v === null || typeof v !== "obj
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const v1Envelope = (value, previousDigest = null) => { const envelope = { format: 1, type: "episode", record: value, artifacts: [], previousDigest }; envelope.digest = hash(stable({ format: envelope.format, type: envelope.type, record: envelope.record, evolution: envelope.evolution, artifacts: envelope.artifacts, previousDigest: envelope.previousDigest })); return envelope; };
 async function createV1Fixture(root, count = 2) { await mkdir(join(root, "commits"), { recursive: true }); let previous = null; for (let i = 0; i < count; i++) { const envelope = v1Envelope(i ? next(`v1-event-${i}`, i) : record({ event: { id: "v1-event-0", kind: "conversation" } }), previous); previous = envelope.digest; const partition = hash(envelope.record.episode.id), dir = join(root, "commits", partition); await mkdir(dir, { recursive: true }); await writeFile(join(dir, `commit-${String(i).padStart(16, "0")}-${envelope.digest}.json`), stable(envelope)); } await writeFile(join(root, "manifest.json"), stable({ format: "episode-evolution-ledger", version: 1 })); }
+async function createOutOfOrderV1Fixture(root, reverse = false) {
+  const ordered = [[record({ event: { id: "ordered-a-0", kind: "conversation" } }), next("ordered-a-1", 1)], [unrelated("ordered-b"), record({ episode: { id: "episode-ordered-b" }, attempt: { id: "attempt-ordered-b" }, session: { id: "session-ordered-b" }, agentRun: { runId: "run-ordered-b" }, event: { id: "ordered-b-1", kind: "usage" }, sequence: 1, occurredAt: "2026-08-17T00:00:01.000Z" })]];
+  const partitions = ordered.map((records) => { let previous = null; const envelopes = records.map((value) => { const envelope = v1Envelope(value, previous); previous = envelope.digest; return envelope; }); return { partition: hash(records[0].episode.id), envelopes }; }).sort((a, b) => reverse ? b.partition.localeCompare(a.partition) : a.partition.localeCompare(b.partition));
+  await mkdir(join(root, "commits"), { recursive: true }); for (const { partition, envelopes } of partitions) { const dir = join(root, "commits", partition); await mkdir(dir); for (const envelope of (reverse ? [...envelopes].reverse() : envelopes)) await writeFile(join(dir, `commit-${String(envelope.record.sequence).padStart(16, "0")}-${envelope.digest}.json`), stable(envelope)); }
+  await writeFile(join(root, "manifest.json"), stable({ format: "episode-evolution-ledger", version: 1 }));
+}
+async function managedBytes(root) { let total = 0; const walk = async (path) => { for (const name of await readdir(path)) { const target = join(path, name), info = await lstat(target); if (info.isDirectory()) await walk(target); else total += info.size; } }; await walk(root); return total; }
+async function assertEmptyStaging(root) { assert.deepEqual(await readdir(join(root, ".staging")), []); }
 const unrelated = (suffix) => record({ episode: { id: `episode-${suffix}` }, attempt: { id: `attempt-${suffix}` }, session: { id: `session-${suffix}` }, agentRun: { runId: `run-${suffix}` }, event: { id: `event-${suffix}`, kind: "usage" } });
 
 test("append is immutable, idempotent on exact replay, and detects identity/ordering conflicts", async () => withLedger({}, async (ledger) => {
@@ -34,6 +42,29 @@ test("evolution terminal outcomes remain explainable and snapshots are determini
   assert.equal((await ledger.finalSnapshot()).digest, (await ledger.finalSnapshot()).digest);
   assert.equal((await ledger.rebuildProjection()).records, 1);
 }));
+
+test("bounded cross-episode evolution queries retain canonical order after reopen", async () => {
+  const roots = await Promise.all([mkdtemp(join(tmpdir(), "episode-ledger-evolution-order-a-")), mkdtemp(join(tmpdir(), "episode-ledger-evolution-order-b-"))]);
+  const evolutionRecord = (episodeId, suffix) => record({ episode: { id: episodeId }, attempt: { id: `attempt-${suffix}` }, session: { id: `session-${suffix}` }, agentRun: { runId: `run-${suffix}` }, event: { id: `cross-evolution-${suffix}`, kind: "evolution" } });
+  const queryAfterReopen = async (root, order) => { let ledger;
+    try {
+      ledger = await EpisodeEvolutionLedger.open({ root });
+      for (const suffix of order) await ledger.appendEvolution(evolutionRecord(`episode-${suffix}`, suffix), { id: `try-${suffix}`, outcome: "accepted", explanation: suffix });
+      const beforeReopen = await ledger.queryEvolutions({ limit: 1 });
+      assert.deepEqual(beforeReopen.records.map((entry) => entry.record.event.id), ["cross-evolution-alpha"]);
+      assert.equal(beforeReopen.truncated, true);
+      await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root });
+      const afterReopen = await ledger.queryEvolutions({ limit: 1 });
+      assert.deepEqual(afterReopen.records.map((entry) => entry.record.event.id), beforeReopen.records.map((entry) => entry.record.event.id));
+      assert.equal(afterReopen.truncated, true);
+      return afterReopen.records.map((entry) => entry.record.event.id);
+    } finally { await ledger?.close(); }
+  };
+  try {
+    const results = await Promise.all([queryAfterReopen(roots[0], ["beta", "alpha"]), queryAfterReopen(roots[1], ["alpha", "beta"])]);
+    assert.deepEqual(results[0], results[1]);
+  } finally { await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))); }
+});
 
 test("artifact references are content addressed and reject digest, size, and symlink-style replacement", async () => withLedger({}, async (ledger, root) => {
   const ref = await ledger.writeArtifact(new TextEncoder().encode("evidence"), { identity: "artifact-1", evidenceClass: "caller_claim", coverage: "partial", provenance: "test", sensitivity: "internal" });
@@ -142,12 +173,37 @@ test("reopen verifies referenced artifact bytes, quarantines only the corrupted 
 
 test("directory setup faults reconcile admitted indexes before the caller can query", async () => withLedger({ faultInjector: (b) => b === "before_commit_directory" }, async (ledger) => { await assert.rejects(ledger.appendEpisode(record()), InjectedFaultError); ledger.faultInjector = undefined; assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0); assert.equal((await ledger.appendEpisode(record())).status, "committed"); }));
 
+test("out-of-order v1 partitions have deterministic integrity, snapshots, projections, and migrations", async () => {
+  const roots = await Promise.all([mkdtemp(join(tmpdir(), "episode-ledger-ordered-a-")), mkdtemp(join(tmpdir(), "episode-ledger-ordered-b-"))]); const results = [];
+  try { for (const [index, root] of roots.entries()) { await createOutOfOrderV1Fixture(root, index === 0); let ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.verifyIntegrity()).ok, true); const snapshot = await ledger.finalSnapshot(), projection = await ledger.rebuildProjection({ name: "ordered", version: 1 }); assert.equal((await ledger.migrate({ fromVersion: 1, batchSize: 1 })).status, "migrated"); const migratedSnapshot = await ledger.finalSnapshot(), manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")); results.push({ snapshot: snapshot.digest, projection: projection.digest, migratedSnapshot: migratedSnapshot.digest, migration: manifest.migrationTargetAnchor }); await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.verifyIntegrity()).ok, true); assert.equal((await ledger.finalSnapshot()).digest, migratedSnapshot.digest); await ledger.close(); }
+    assert.deepEqual(results[0], results[1]);
+  } finally { await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true }))); }
+});
+
+test("capacity preflight rejects producers without results and permits reopen", async () => {
+  for (const [name, work, output] of [["export", (ledger) => ledger.exportLedger(), "exports"], ["projection", (ledger) => ledger.rebuildProjection(), "projections"], ["backup", (ledger) => ledger.backup(), "backups"]]) { const root = await mkdtemp(join(tmpdir(), `episode-ledger-capacity-${name}-`)); let ledger;
+    try { ledger = await EpisodeEvolutionLedger.open({ root, limits: { maxStorageBytes: 100 } }); await assert.rejects(work(ledger), LedgerLimitError); assert.deepEqual(await readdir(join(root, output)), []); await assertEmptyStaging(root); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0); await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root, limits: { maxStorageBytes: 100 } }); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0); }
+    finally { await ledger?.close(); await rm(root, { recursive: true, force: true }); }
+  }
+  const root = await mkdtemp(join(tmpdir(), "episode-ledger-capacity-migration-")); let ledger;
+  try { await createV1Fixture(root, 1); const limit = await managedBytes(root); ledger = await EpisodeEvolutionLedger.open({ root, limits: { maxStorageBytes: limit } }); await assert.rejects(ledger.migrate({ fromVersion: 1 }), LedgerLimitError); assert.deepEqual(await readdir(join(root, "commits-v2")), []); assert.deepEqual(await readdir(join(root, "migrations")), []); await assertEmptyStaging(root); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 1); await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root, limits: { maxStorageBytes: limit } }); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 1); }
+  finally { await ledger?.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("concurrent partition writers retain both events and migrations reject unknown versions", async () => withLedger({}, async (ledger) => {
   const other = record({ episode: { id: "episode-2" }, attempt: { id: "attempt-2" }, session: { id: "session-2" }, agentRun: { runId: "run-2" }, event: { id: "event-2", kind: "usage" } });
   await Promise.all([ledger.appendEpisode(record()), ledger.appendEpisode(other)]); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 1); assert.equal((await ledger.queryEpisode("episode-2")).records.length, 1);
   const conflict = record({ episode: { id: "episode-3" }, attempt: { id: "attempt-3" }, session: { id: "session-3" }, agentRun: { runId: "run-3" } }); await assert.rejects(Promise.all([ledger.appendEpisode(conflict), ledger.appendEpisode(record({ episode: { id: "episode-4" }, attempt: { id: "attempt-4" }, session: { id: "session-4" }, agentRun: { runId: "run-4" } }))]), LedgerConflictError); assert.equal((await ledger.queryEpisode("episode-4")).records.length, 0);
   await assert.rejects(ledger.migrate({ fromVersion: 0 }), (e) => e.code === "migration_unsupported"); assert.equal((await ledger.migrate({ fromVersion: 2 })).status, "already_current");
 }));
+
+test("repeated atomic-create failures clean staging in-process and reopen safely", async (t) => {
+  for (const boundary of ["before_commit_stage", "after_commit_write", "after_commit_sync", "before_commit_publish", "after_commit_publish", "after_commit_dirsync"]) await t.test(boundary, async () => {
+    const root = await mkdtemp(join(tmpdir(), "episode-ledger-repeat-fault-")); let ledger;
+    try { ledger = await EpisodeEvolutionLedger.open({ root, faultInjector: (value) => value === boundary }); for (const suffix of ["repeat-a", "repeat-b"]) { await assert.rejects(ledger.appendEpisode(unrelated(suffix)), InjectedFaultError); await assertEmptyStaging(root); } const post = ["after_commit_publish", "after_commit_dirsync"].includes(boundary); ledger.faultInjector = undefined; assert.equal((await ledger.queryEpisode("episode-repeat-a")).records.length, post ? 1 : 0); await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.queryEpisode("episode-repeat-a")).records.length, post ? 1 : 0); assert.equal((await ledger.queryEpisode("episode-repeat-b")).records.length, post ? 1 : 0); assert.equal((await ledger.verifyIntegrity()).ok, true); await assertEmptyStaging(root); }
+    finally { await ledger?.close(); await rm(root, { recursive: true, force: true }); }
+  });
+});
 
 test("table-driven persistence boundaries recover pre- and post-publication outcomes", async (t) => {
   const phases = [["before", "stage"], ["after", "write"], ["after", "sync"], ["before", "publish"], ["after", "publish"], ["after", "dirsync"]];
@@ -156,18 +212,18 @@ test("table-driven persistence boundaries recover pre- and post-publication outc
     const root = await mkdtemp(join(tmpdir(), "episode-ledger-boundary-")); const boundary = `${when}_${purpose}_${phase}`; const post = boundary.startsWith(`after_${purpose}_publish`) || boundary.startsWith(`after_${purpose}_dirsync`); let ledger;
     try {
       if (purpose === "manifest") {
-        await assert.rejects(EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }), InjectedFaultError);
+        await assert.rejects(EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }), InjectedFaultError); await assertEmptyStaging(root);
         ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0);
       } else if (purpose === "quarantine") {
         ledger = await EpisodeEvolutionLedger.open({ root }); await ledger.appendEpisode(record()); await ledger.close(); ledger = undefined;
         const partition = hash("episode-1"), [file] = await readdir(join(root, "commits", partition)); await writeFile(join(root, "commits", partition, file), "{broken");
-        await assert.rejects(EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }), (e) => e instanceof InjectedFaultError || e.code === "reconciliation_failed"); ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0);
+        await assert.rejects(EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }), (e) => e instanceof InjectedFaultError || e.code === "reconciliation_failed"); await assertEmptyStaging(root); ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0);
       } else if (purpose.startsWith("migration_")) {
-        await createV1Fixture(root); ledger = await EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }); await assert.rejects(ledger.migrate({ fromVersion: 1, batchSize: 1 }), InjectedFaultError); await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root }); const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")); assert.equal(manifest.version, purpose === "migration_manifest" && post ? 2 : 1); if (manifest.version === 1) assert.equal((await ledger.migrate({ fromVersion: 1, batchSize: 1 })).status, "migrated"); else assert.equal((await ledger.migrate({ fromVersion: 2 })).status, "already_current"); assert.equal((await ledger.verifyIntegrity()).ok, true);
+        await createV1Fixture(root); ledger = await EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }); await assert.rejects(ledger.migrate({ fromVersion: 1, batchSize: 1 }), InjectedFaultError); await assertEmptyStaging(root); await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root }); const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")); assert.equal(manifest.version, purpose === "migration_manifest" && post ? 2 : 1); if (manifest.version === 1) assert.equal((await ledger.migrate({ fromVersion: 1, batchSize: 1 })).status, "migrated"); else assert.equal((await ledger.migrate({ fromVersion: 2 })).status, "already_current"); assert.equal((await ledger.verifyIntegrity()).ok, true);
       } else {
         ledger = await EpisodeEvolutionLedger.open({ root }); if (purpose !== "artifact") await ledger.appendEpisode(record()); ledger.faultInjector = (b) => b === boundary;
         const work = purpose === "commit" ? () => ledger.appendEpisode(unrelated("boundary")) : purpose === "artifact" ? () => ledger.writeArtifact(new TextEncoder().encode("boundary-artifact"), { identity: "boundary", evidenceClass: "caller_claim", coverage: "partial", provenance: "test", sensitivity: "internal" }) : purpose === "projection" ? () => ledger.rebuildProjection({ name: "boundary", version: 1, batchSize: 1 }) : purpose === "export" ? () => ledger.exportLedger() : () => ledger.backup();
-        await assert.rejects(work(), InjectedFaultError); ledger.faultInjector = undefined;
+        await assert.rejects(work(), InjectedFaultError); await assertEmptyStaging(root); ledger.faultInjector = undefined;
         if (purpose === "commit") assert.equal((await ledger.queryEpisode("episode-boundary")).records.length, post ? 1 : 0);
         if (purpose === "commit") await ledger.appendEpisode(unrelated("boundary"));
         if (purpose === "artifact") await ledger.writeArtifact(new TextEncoder().encode("boundary-artifact"), { identity: "boundary", evidenceClass: "caller_claim", coverage: "partial", provenance: "test", sensitivity: "internal" });
