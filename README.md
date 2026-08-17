@@ -9,6 +9,9 @@ M0 retired the legacy self-evolution extension packages. There are no supported
 or installable Pi extension packages in this repository. The retirement decision,
 the hostile-audit conclusion, and the M1–M5 replacement map are recorded in
 [the retirement record](docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md).
+Ticket Episode v1 now supplies the versioned identity, evidence-class, and
+threat-model contract for successor work; see
+[the canonical specification](docs/specs/TICKET-EPISODE-V1.md).
 
 ## Future plugin boundary
 
