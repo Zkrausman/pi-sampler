@@ -34,6 +34,26 @@ test("append is immutable, idempotent on exact replay, and detects identity/orde
   await assert.rejects(ledger.appendEpisode(next("event-4", 1, { ticket: { id: "OTHER" } })), LedgerConflictError);
 }));
 
+test("a paused pre-publication append is invisible to queries and exports", async () => {
+  const root = await mkdtemp(join(tmpdir(), "episode-ledger-paused-")); let reached, release;
+  const reachedPromise = new Promise((resolveReached) => { reached = resolveReached; });
+  const releasePromise = new Promise((resolveRelease) => { release = resolveRelease; });
+  const ledger = await EpisodeEvolutionLedger.open({ root, faultInjector: async (boundary) => {
+    if (boundary !== "before_commit_publish") return false;
+    reached(); await releasePromise; return true;
+  } });
+  try {
+    const append = ledger.appendEpisode(record()); await reachedPromise;
+    assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0);
+    const exported = await ledger.exportLedger();
+    assert.equal(JSON.parse(exported.contents).records.length, 0);
+    release(); await assert.rejects(append, InjectedFaultError);
+    assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0);
+    await ledger.close(); const reopened = await EpisodeEvolutionLedger.open({ root });
+    assert.equal((await reopened.queryEpisode("episode-1")).records.length, 0); await reopened.close();
+  } finally { await ledger.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("evolution terminal outcomes remain explainable and snapshots are deterministic", async () => withLedger({}, async (ledger) => {
   const evolution = record({ event: { id: "evolution-1", kind: "evolution" } });
   await ledger.appendEvolution(evolution, { id: "try-1", outcome: "rolled_back", explanation: "tests failed" });
