@@ -1,86 +1,86 @@
 # Bounded Episode and Evolution Ledger v1
 
-AIDEV-124 provides the durable source ledger for canonical Ticket Episode v1
-records. It is deliberately a new, standalone implementation: it neither reads
-nor restores retired extensions, receipt ledgers, lifecycle state, adapters, or
-historical authority assumptions.
+AIDEV-124 is a local durable source ledger for canonical Ticket Episode v1
+records. Ticket Episode v1 remains the record contract; ledger storage format v2
+adds recovery mechanics and does not import, interpret, or restore retired
+extensions, receipt ledgers, lifecycle state, adapters, or authority assumptions.
 
-## API and layout
+## Layout and admission
 
-`ledgers/episode-evolution-ledger.mjs` exports `EpisodeEvolutionLedger`.
-`appendEpisode(record)` admits a canonical Ticket Episode v1 event.
-`appendEvolution(record, { id, outcome, explanation })` additionally requires
-`event.kind: "evolution"` and one explicit terminal outcome: `accepted`,
-`rejected`, `failed`, or `rolled_back`. Thus unsuccessful attempts are immutable
-and queryable through `queryEvolutions`; they are not deleted or collapsed.
+The root has an immutable-by-default `manifest.json`, hashed episode partitions
+in `commits/`, content-addressed `artifacts/`, durable `quarantine/`, immutable
+`projections/` and `exports/`, physical `backups/`, and restart checkpoints in
+`migrations/`. Caller identifiers are SHA-256 partition keys, never paths.
+Commit envelopes contain the canonical record, deterministic digest, and a
+per-episode previous-digest chain. Evolution envelopes require `event.kind`
+`evolution` and exactly one explainable terminal outcome: `accepted`,
+`rejected`, `failed`, or `rolled_back`.
 
-A root contains an immutable `manifest.json` (`format: episode-evolution-ledger`,
-version 1), content-addressed `artifacts/`, hashed episode partitions under
-`commits/`, diagnostics and moved bad material under `quarantine/`, immutable
-`projections/`, and bounded `exports/`. Caller-controlled identifiers never form
-filesystem paths. Unknown, future, or malformed format versions fail closed.
+Admission is a bounded global FIFO. It rescans durable commits before every
+write and completes all validation (v1 schema, uniqueness, owner binding,
+sequence, chronology, chain, artifact references, limits) before it changes an
+in-memory index or publishes a file. A failed admission therefore cannot claim
+an identifier. Publication is private-stage write, file fsync, hard-link,
+directory fsync. A failure before publication is invisible. For every uncertain
+result (including a post-publish fault or `EEXIST`), the writer reconciles disk
+before another admission; if reconciliation cannot prove a usable state it
+fails closed and requires reopening.
 
-## Durability, recovery, and consistency
+## Locking, recovery, and isolation
 
-One event is one immutable commit file. The implementation writes a private
-staging file, fsyncs it, links it atomically into the episode commit directory,
-and fsyncs that directory. Publication is the commit boundary: a fault before it
-is invisible and staging is removed on reopen; a fault after it is committed and
-recovered. A commit includes a deterministic checksum and a per-episode previous
-checksum chain. Loading verifies canonical v1 validation, partition/file binding,
-checksums, chain, ownership, event uniqueness, sequence, and chronology.
+`.writer.lock` contains a PID and random ownership token, is fsynced with its
+parent directory, and only its token owner may release it. A live PID excludes
+another writer; a dead PID left by process crash is removed atomically enough to
+retry acquisition. Failed opens release a lock they acquired. `close()` rejects
+new queue entries, drains submitted work, and releases its own lock.
 
-Malformed, truncated, tampered, out-of-order, conflicting, or unsafe material is
-isolated into durable quarantine diagnostics. A damaged partition never prevents
-other partitions loading. Intrinsic checksums/chains detect changed records and
-missing interior links; no local filesystem alone can prove an attacker did not
-delete the newest entire tail, so retain immutable exported snapshot identities
-for that threat.
+Opening and integrity checking inspect physical storage, not just an in-memory
+index. They reject symlinks and unexpected entry types; check partition/name
+binding, checksums, event/global ownership, sequence/time/previous chains and
+artifact regular-file/size/digest boundaries. Bad files, unsafe entries, and
+unreadable partitions are moved or diagnosed in fsynced quarantine without
+preventing independent partitions from loading. Quarantine inventory makes a
+snapshot and integrity result partial/failed rather than silently omitting
+material. As with any local filesystem ledger, deletion of an entire latest
+chain tail cannot be distinguished from a prior state without retaining an
+external immutable backup anchor.
 
-A process-wide `writer.lock` rejects simultaneous processes. Within one process,
-a bounded FIFO admission queue serializes global identity checks and publication;
-this avoids cross-partition duplicate-ID races while retaining bounded backpressure.
-`close()` first rejects queued work, drains the active operation, then releases the
-process lock. A process must call `close()` before another process opens the same
-root. Readers exposed by this API see only post-publication commits.
+## Bounds and streamed work
 
-## Bounds and failures
+All configured positive integer limits fail with `LedgerLimitError` before
+publication: encoded record, artifact, storage, index, pending writes, query
+records/bytes, projection and migration batches, and export/backup bytes.
+Directory walks use `opendir` with a bounded entry count. Query copies only
+returned records. Projection work hits a real batch boundary; snapshot/export
+build incrementally and stop at their byte limit rather than first serializing
+an unlimited result. The index itself is bounded by `maxIndexEntries`.
 
-All limits are configurable at open and fail with typed `LedgerLimitError`
-(`code: limit_exceeded`) before publication: encoded record (256 KiB), artifact
-(16 MiB), records per append (32), query records (1,000), query bytes (4 MiB),
-total storage (512 MiB), in-memory index (100,000), pending writes (128),
-projection rebuild batch (256), migration batch (256), and snapshot/export or
-backup data (64 MiB). Cache capacity is also reserved as an explicit 4,096-entry
-limit; v1 intentionally uses no unbounded cache.
+## Backup, restore, and migration
 
-## Artifacts, snapshots, projections, and migration
+`exportLedger()` is a bounded logical deterministic snapshot. `backup()` is
+separate: it creates a bounded physical archive under `backups/<anchor>/` with
+an archive manifest, original ledger manifest, commit files, artifact bytes,
+and quarantine diagnostics/material. Every archived file has a size and SHA-256
+anchor. `EpisodeEvolutionLedger.restore({ backupPath, root })` verifies those
+anchors, requires an empty target, recreates the physical root, then opens it;
+restored terminal outcomes and artifact references remain queryable and
+verifiable.
 
-`writeArtifact(bytes, metadata)` uses SHA-256 content addressing and requires
-identity, evidence class, coverage, provenance, and sensitivity metadata. Both
-append and integrity verification re-read and verify the artifact digest, size,
-and regular-file (non-symlink) boundary. Ledger events carry only those references.
+Version-1 storage roots remain readable. A v1 root stores format-1 envelopes
+under `commits/`; `migrate({ fromVersion: 1 })` materializes format-2 envelopes
+under `commits-v2/`, each binding its `sourceDigest` and a rewritten v2 chain.
+The durable checkpoint records the source anchor, cursor, and per-batch
+source/target anchors. Source files remain intact until the complete target has
+been read, artifact-verified, chain-verified, and source-bound; only then does
+the manifest atomically select `commits-v2/`. Restart resumes the cursor.
+Replacement publication uncertainty (checkpoint or manifest) reloads the
+manifest and reconciles the selected tree before another admission. A failure
+before manifest publication leaves the v1 root readable; unknown/future formats
+fail closed. This migration is only for this new ledger's v1 storage format,
+not retired M0 data.
 
-`finalSnapshot()` deterministically sorts source commits and includes quarantine
-names, making `partial` true whenever any quarantine exists; a snapshot cannot
-silently conceal bad, omitted, rejected, failed, or rolled-back material.
-`rebuildProjection()` writes a versioned immutable deterministic projection from
-source records. It does not mutate source data. `migrate()` is intentionally
-fail-closed for anything other than v1-to-v1: no retired data is automatically
-coerced, and unsupported data remains in its last readable form. Staged files
-are safely removed after interrupted work, so restart is safe.
+## Scope
 
-`verifyIntegrity()` returns actionable per-event findings and quarantine state.
-`backup()` and `exportLedger()` are bounded immutable snapshots, including all
-terminal evolution outcomes and quarantine inventory. Restore means opening a
-copy of a verified v1 root with a single writer; it does not repair deletion of
-an unexported tail, recover unknown future formats, or confer authority on old
-records.
-
-## Ownership boundary
-
-This module persists classified episode/evolution material only. It creates no
-lifecycle authority (AIDEV-130), conversations/annotations/cost contracts,
-connected-authority adapters or receipts, promotion, delivery, UI, or automatic
-migration from M0 packages. Ticket Episode v1 remains the canonical identity,
-ordering, evidence, state, and trust validator.
+The module persists classified episode/evolution material only. It creates no
+lifecycle authority, conversation/cost schema, connected authority adapter,
+promotion/delivery flow, cloud API, telemetry, or legacy bridge.

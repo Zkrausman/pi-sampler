@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +11,11 @@ import { EpisodeEvolutionLedger, InjectedFaultError, LedgerConflictError, Ledger
 async function withLedger(options, body) { const root = await mkdtemp(join(tmpdir(), "episode-ledger-")); let ledger; try { ledger = await EpisodeEvolutionLedger.open({ root, ...options }); await body(ledger, root); } finally { await ledger?.close(); await rm(root, { recursive: true, force: true }); } }
 function record(overrides = {}) { const base = { schema: { id: TICKET_EPISODE_V1_SCHEMA_ID, version: TICKET_EPISODE_V1_SCHEMA_VERSION }, project: { id: "pi-sampler" }, repository: { id: "github.com/Zkrausman/pi-sampler", revision: "a".repeat(40) }, ticket: { system: "linear", id: "AIDEV-124" }, episode: { id: "episode-1" }, attempt: { id: "attempt-1" }, session: { id: "session-1" }, agentRun: { agentId: "agent-1", runId: "run-1" }, event: { id: "event-1", kind: "conversation" }, producer: { id: "extension-1", kind: "pi_extension" }, occurredAt: "2026-08-17T00:00:00.000Z", sequence: 0, evidence: { class: "caller_claim", authority: { level: "untrusted" } }, state: "partial", coverage: { status: "partial", expectedEventCount: 2, observedEventCount: 1, missingEventIds: ["missing-1"] } }; return { ...base, ...overrides, schema: { ...base.schema, ...overrides.schema }, project: { ...base.project, ...overrides.project }, repository: { ...base.repository, ...overrides.repository }, ticket: { ...base.ticket, ...overrides.ticket }, episode: { ...base.episode, ...overrides.episode }, attempt: { ...base.attempt, ...overrides.attempt }, session: { ...base.session, ...overrides.session }, agentRun: { ...base.agentRun, ...overrides.agentRun }, event: { ...base.event, ...overrides.event }, producer: { ...base.producer, ...overrides.producer }, evidence: { ...base.evidence, ...overrides.evidence, authority: { ...base.evidence.authority, ...overrides.evidence?.authority } }, coverage: { ...base.coverage, ...overrides.coverage } }; }
 const next = (id, sequence, overrides = {}) => record({ event: { id, kind: "usage" }, sequence, occurredAt: `2026-08-17T00:00:0${sequence}.000Z`, ...overrides });
+const stable = (v) => v === undefined ? "null" : v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(stable).join(",")}]` : `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`;
+const hash = (value) => createHash("sha256").update(value).digest("hex");
+const v1Envelope = (value, previousDigest = null) => { const envelope = { format: 1, type: "episode", record: value, artifacts: [], previousDigest }; envelope.digest = hash(stable({ format: envelope.format, type: envelope.type, record: envelope.record, evolution: envelope.evolution, artifacts: envelope.artifacts, previousDigest: envelope.previousDigest })); return envelope; };
+async function createV1Fixture(root, count = 2) { await mkdir(join(root, "commits"), { recursive: true }); let previous = null; for (let i = 0; i < count; i++) { const envelope = v1Envelope(i ? next(`v1-event-${i}`, i) : record({ event: { id: "v1-event-0", kind: "conversation" } }), previous); previous = envelope.digest; const partition = hash(envelope.record.episode.id), dir = join(root, "commits", partition); await mkdir(dir, { recursive: true }); await writeFile(join(dir, `commit-${String(i).padStart(16, "0")}-${envelope.digest}.json`), stable(envelope)); } await writeFile(join(root, "manifest.json"), stable({ format: "episode-evolution-ledger", version: 1 })); }
+const unrelated = (suffix) => record({ episode: { id: `episode-${suffix}` }, attempt: { id: `attempt-${suffix}` }, session: { id: `session-${suffix}` }, agentRun: { runId: `run-${suffix}` }, event: { id: `event-${suffix}`, kind: "usage" } });
 
 test("append is immutable, idempotent on exact replay, and detects identity/ordering conflicts", async () => withLedger({}, async (ledger) => {
   assert.equal((await ledger.appendEpisode(record())).status, "committed");
@@ -56,9 +63,119 @@ test("configured resource bounds and hostile identifiers fail safely", async () 
   await withLedger({}, async (ledger) => await assert.rejects(ledger.appendEpisode(record({ episode: { id: "../../escape" } })), (e) => e instanceof LedgerError && e.code === "ticket_episode_invalid"));
 });
 
+test("post-publication reconciliation gives the next same-process append the durable head", async () => {
+  const root = await mkdtemp(join(tmpdir(), "episode-ledger-reconcile-"));
+  let ledger = await EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === "after_commit_dirsync" });
+  await assert.rejects(ledger.appendEpisode(record()), InjectedFaultError);
+  ledger.faultInjector = undefined;
+  assert.equal((await ledger.appendEpisode(next("event-2", 1))).status, "committed");
+  assert.equal((await ledger.queryEpisode("episode-1")).records.length, 2);
+  await ledger.close(); await rm(root, { recursive: true, force: true });
+});
+
+test("stale subprocess lock is recovered while a live writer remains excluded", async () => {
+  const root = await mkdtemp(join(tmpdir(), "episode-ledger-lock-"));
+  const moduleUrl = new URL("../ledgers/episode-evolution-ledger.mjs", import.meta.url).href;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `import { EpisodeEvolutionLedger } from ${JSON.stringify(moduleUrl)}; await EpisodeEvolutionLedger.open({root:${JSON.stringify(root)}}); console.log('locked'); setInterval(()=>{},1000)`], { stdio: ["ignore", "pipe", "pipe"] });
+  await new Promise((resolve, reject) => { child.stdout.once("data", resolve); child.once("error", reject); });
+  await assert.rejects(EpisodeEvolutionLedger.open({ root }), (e) => e.code === "writer_locked");
+  child.kill("SIGKILL"); await new Promise((resolve) => child.once("exit", resolve));
+  const ledger = await EpisodeEvolutionLedger.open({ root }); await ledger.close(); await rm(root, { recursive: true, force: true });
+});
+
+test("failed open releases a lock it acquired", async () => {
+  const root = await mkdtemp(join(tmpdir(), "episode-ledger-open-failure-")); let ledger = await EpisodeEvolutionLedger.open({ root }); await ledger.appendEpisode(record()); await ledger.close();
+  await assert.rejects(EpisodeEvolutionLedger.open({ root, limits: { maxStorageBytes: 1 } }), (e) => e.code === "reconciliation_failed");
+  ledger = await EpisodeEvolutionLedger.open({ root }); await ledger.close(); await rm(root, { recursive: true, force: true });
+});
+
+test("physical backup restores records, artifacts, terminal outcomes, and integrity", async () => withLedger({}, async (ledger, root) => {
+  const artifact = await ledger.writeArtifact(new TextEncoder().encode("restore-me"), { identity: "x", evidenceClass: "caller_claim", coverage: "partial", provenance: "test", sensitivity: "internal" });
+  await ledger.appendEpisode(record(), { artifacts: [artifact] });
+  await ledger.appendEvolution(next("evolution-backup", 1, { event: { id: "evolution-backup", kind: "evolution" } }), { id: "try", outcome: "failed", explanation: "kept" });
+  const backup = await ledger.backup(); const target = join(root, "restored");
+  const restored = await EpisodeEvolutionLedger.restore({ backupPath: backup.path, root: target });
+  assert.equal((await restored.queryEpisode("episode-1")).records.length, 2); assert.equal((await restored.verifyIntegrity()).ok, true);
+  await restored.close();
+}));
+
+test("restore rejects anchored manifest subsets and missing, extra, or replaced archive files before copying", async () => withLedger({}, async (ledger, root) => {
+  const artifact = await ledger.writeArtifact(new TextEncoder().encode("anchored-artifact"), { identity: "anchor", evidenceClass: "caller_claim", coverage: "partial", provenance: "test", sensitivity: "internal" });
+  await ledger.appendEpisode(record(), { artifacts: [artifact] });
+  const backup = await ledger.backup(), manifestPath = join(backup.path, "backup-manifest.json"), original = JSON.parse(await readFile(manifestPath, "utf8"));
+  const artifactFile = original.files.find((file) => file.path === `artifacts/${artifact.digest}`), artifactPath = join(backup.path, ...artifactFile.path.split("/")), artifactBody = await readFile(artifactPath);
+  const assertUncopied = async (name, check) => { const target = join(root, name); await assert.rejects(check(target), (error) => ["backup_invalid", "backup_integrity_failed"].includes(error.code)); await assert.rejects(lstat(target), (error) => error.code === "ENOENT"); };
+  const subset = { ...original, files: original.files.filter((file) => file.path !== artifactFile.path) }; subset.anchor = hash(stable(subset.files));
+  await writeFile(manifestPath, stable(subset)); await assertUncopied("restore-subset", (target) => EpisodeEvolutionLedger.restore({ backupPath: backup.path, root: target }));
+  await writeFile(manifestPath, stable(original)); await mkdir(join(backup.path, "quarantine"), { recursive: true }); await writeFile(join(backup.path, "quarantine", "unexpected.json"), "unexpected");
+  await assertUncopied("restore-extra", (target) => EpisodeEvolutionLedger.restore({ backupPath: backup.path, root: target }));
+  await rm(join(backup.path, "quarantine", "unexpected.json")); await rm(artifactPath);
+  await assertUncopied("restore-missing", (target) => EpisodeEvolutionLedger.restore({ backupPath: backup.path, root: target }));
+  await writeFile(artifactPath, artifactBody); await writeFile(artifactPath, "replaced");
+  await assertUncopied("restore-replaced", (target) => EpisodeEvolutionLedger.restore({ backupPath: backup.path, root: target }));
+}));
+
+test("backup and restore preserve recursively archived quarantine material directories", async () => {
+  const root = await mkdtemp(join(tmpdir(), "episode-ledger-quarantine-backup-")); let ledger, restored;
+  try {
+    ledger = await EpisodeEvolutionLedger.open({ root }); await ledger.appendEpisode(record());
+    await mkdir(join(root, "commits", "unsafe-directory", "nested"), { recursive: true }); await writeFile(join(root, "commits", "unsafe-directory", "nested", "retained.txt"), "quarantined material");
+    await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root });
+    const material = (await readdir(join(root, "quarantine"))).find((name) => name.endsWith(".material")); assert.ok(material);
+    const backup = await ledger.backup(), target = join(root, "restored"); await ledger.close(); ledger = undefined;
+    restored = await EpisodeEvolutionLedger.restore({ backupPath: backup.path, root: target });
+    const restoredMaterial = (await readdir(join(target, "quarantine"))).find((name) => name.endsWith(".material")); assert.ok(restoredMaterial);
+    assert.equal(await readFile(join(target, "quarantine", restoredMaterial, "nested", "retained.txt"), "utf8"), "quarantined material");
+  } finally { await restored?.close(); await ledger?.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("genuine v1 fixtures migrate into a materialized, checkpointed v2 target while preserving source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "episode-ledger-migrate-")); await createV1Fixture(root); const sourceBefore = await readFile(join(root, "commits", hash("episode-1"), (await readdir(join(root, "commits", hash("episode-1"))))[0]), "utf8");
+  let ledger = await EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === "after_migration_batch" }); await assert.rejects(ledger.migrate({ fromVersion: 1, batchSize: 1 }), InjectedFaultError); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 2); await ledger.close();
+  ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.migrate({ fromVersion: 1, batchSize: 1 })).status, "migrated"); assert.equal(JSON.parse(await readFile(join(root, "manifest.json"), "utf8")).commitDirectory, "commits-v2"); const targetDir = join(root, "commits-v2", hash("episode-1")); const target = JSON.parse(await readFile(join(targetDir, (await readdir(targetDir))[0]), "utf8")); assert.equal(target.format, 2); assert.match(target.sourceDigest, /^[a-f0-9]{64}$/); assert.equal(await readFile(join(root, "commits", hash("episode-1"), (await readdir(join(root, "commits", hash("episode-1"))))[0]), "utf8"), sourceBefore); assert.equal((await ledger.verifyIntegrity()).ok, true); await ledger.close(); await rm(root, { recursive: true, force: true });
+});
+
+test("reopen verifies referenced artifact bytes, quarantines only the corrupted episode, and accepts unrelated append", async () => withLedger({}, async (ledger, root) => {
+  const ref = await ledger.writeArtifact(new TextEncoder().encode("reopen-evidence"), { identity: "artifact", evidenceClass: "caller_claim", coverage: "partial", provenance: "test", sensitivity: "internal" }); await ledger.appendEpisode(record(), { artifacts: [ref] }); await ledger.appendEpisode(unrelated("survives")); await ledger.close(); await writeFile(join(root, "artifacts", ref.digest), "tampered");
+  ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0); assert.equal((await ledger.queryEpisode("episode-survives")).records.length, 1); assert.equal((await ledger.appendEpisode(unrelated("after-corruption"))).status, "committed");
+}));
+
+test("directory setup faults reconcile admitted indexes before the caller can query", async () => withLedger({ faultInjector: (b) => b === "before_commit_directory" }, async (ledger) => { await assert.rejects(ledger.appendEpisode(record()), InjectedFaultError); ledger.faultInjector = undefined; assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0); assert.equal((await ledger.appendEpisode(record())).status, "committed"); }));
+
 test("concurrent partition writers retain both events and migrations reject unknown versions", async () => withLedger({}, async (ledger) => {
   const other = record({ episode: { id: "episode-2" }, attempt: { id: "attempt-2" }, session: { id: "session-2" }, agentRun: { runId: "run-2" }, event: { id: "event-2", kind: "usage" } });
   await Promise.all([ledger.appendEpisode(record()), ledger.appendEpisode(other)]); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 1); assert.equal((await ledger.queryEpisode("episode-2")).records.length, 1);
   const conflict = record({ episode: { id: "episode-3" }, attempt: { id: "attempt-3" }, session: { id: "session-3" }, agentRun: { runId: "run-3" } }); await assert.rejects(Promise.all([ledger.appendEpisode(conflict), ledger.appendEpisode(record({ episode: { id: "episode-4" }, attempt: { id: "attempt-4" }, session: { id: "session-4" }, agentRun: { runId: "run-4" } }))]), LedgerConflictError); assert.equal((await ledger.queryEpisode("episode-4")).records.length, 0);
-  await assert.rejects(ledger.migrate({ fromVersion: 0 }), (e) => e.code === "migration_unsupported"); assert.equal((await ledger.migrate({ fromVersion: 1 })).status, "already_current");
+  await assert.rejects(ledger.migrate({ fromVersion: 0 }), (e) => e.code === "migration_unsupported"); assert.equal((await ledger.migrate({ fromVersion: 2 })).status, "already_current");
 }));
+
+test("table-driven persistence boundaries recover pre- and post-publication outcomes", async (t) => {
+  const phases = [["before", "stage"], ["after", "write"], ["after", "sync"], ["before", "publish"], ["after", "publish"], ["after", "dirsync"]];
+  const cases = ["manifest", "commit", "artifact", "quarantine", "projection", "export", "backup", "migration_target", "migration_checkpoint", "migration_manifest"];
+  for (const purpose of cases) for (const [when, phase] of phases) await t.test(`${purpose}: ${when}_${phase}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "episode-ledger-boundary-")); const boundary = `${when}_${purpose}_${phase}`; const post = boundary.startsWith(`after_${purpose}_publish`) || boundary.startsWith(`after_${purpose}_dirsync`); let ledger;
+    try {
+      if (purpose === "manifest") {
+        await assert.rejects(EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }), InjectedFaultError);
+        ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0);
+      } else if (purpose === "quarantine") {
+        ledger = await EpisodeEvolutionLedger.open({ root }); await ledger.appendEpisode(record()); await ledger.close(); ledger = undefined;
+        const partition = hash("episode-1"), [file] = await readdir(join(root, "commits", partition)); await writeFile(join(root, "commits", partition, file), "{broken");
+        await assert.rejects(EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }), (e) => e instanceof InjectedFaultError || e.code === "reconciliation_failed"); ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.queryEpisode("episode-1")).records.length, 0);
+      } else if (purpose.startsWith("migration_")) {
+        await createV1Fixture(root); ledger = await EpisodeEvolutionLedger.open({ root, faultInjector: (b) => b === boundary }); await assert.rejects(ledger.migrate({ fromVersion: 1, batchSize: 1 }), InjectedFaultError); await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root }); const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")); assert.equal(manifest.version, purpose === "migration_manifest" && post ? 2 : 1); if (manifest.version === 1) assert.equal((await ledger.migrate({ fromVersion: 1, batchSize: 1 })).status, "migrated"); else assert.equal((await ledger.migrate({ fromVersion: 2 })).status, "already_current"); assert.equal((await ledger.verifyIntegrity()).ok, true);
+      } else {
+        ledger = await EpisodeEvolutionLedger.open({ root }); if (purpose !== "artifact") await ledger.appendEpisode(record()); ledger.faultInjector = (b) => b === boundary;
+        const work = purpose === "commit" ? () => ledger.appendEpisode(unrelated("boundary")) : purpose === "artifact" ? () => ledger.writeArtifact(new TextEncoder().encode("boundary-artifact"), { identity: "boundary", evidenceClass: "caller_claim", coverage: "partial", provenance: "test", sensitivity: "internal" }) : purpose === "projection" ? () => ledger.rebuildProjection({ name: "boundary", version: 1, batchSize: 1 }) : purpose === "export" ? () => ledger.exportLedger() : () => ledger.backup();
+        await assert.rejects(work(), InjectedFaultError); ledger.faultInjector = undefined;
+        if (purpose === "commit") assert.equal((await ledger.queryEpisode("episode-boundary")).records.length, post ? 1 : 0);
+        if (purpose === "commit") await ledger.appendEpisode(unrelated("boundary"));
+        if (purpose === "artifact") await ledger.writeArtifact(new TextEncoder().encode("boundary-artifact"), { identity: "boundary", evidenceClass: "caller_claim", coverage: "partial", provenance: "test", sensitivity: "internal" });
+        if (purpose === "projection") await ledger.rebuildProjection({ name: "boundary", version: 1, batchSize: 1 });
+        if (purpose === "export") await ledger.exportLedger();
+        if (purpose === "backup") await ledger.backup();
+        await ledger.close(); ledger = await EpisodeEvolutionLedger.open({ root }); assert.equal((await ledger.verifyIntegrity()).ok, true);
+      }
+    } finally { await ledger?.close(); await rm(root, { recursive: true, force: true }); }
+  });
+});
