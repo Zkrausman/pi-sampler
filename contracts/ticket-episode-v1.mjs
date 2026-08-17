@@ -96,7 +96,7 @@ export const TicketEpisodeV1Schema = Type.Object({
     observedEventCount: Type.Integer({ minimum: 0 }),
     missingEventIds: Type.Array(identifier("Explicitly missing event identity"), { uniqueItems: true }),
   }, { additionalProperties: false }),
-  supersedesEventId: Type.Optional(identifier("Superseded event identity")),
+  supersededByEventId: Type.Optional(identifier("Replacement event identity")),
   conflictsWithEventIds: Type.Optional(Type.Array(identifier("Conflicting event identity"), { minItems: 1, uniqueItems: true })),
 }, {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -198,11 +198,23 @@ export function validateTicketEpisodeV1(record, options = {}) {
   if (state === "partial" && coverage.status !== "partial") {
     errors.push(issue("partial_state_coverage_missing", "a partial record must declare partial coverage", "/state"));
   }
-  if (state === "superseded" && !record.supersedesEventId) {
-    errors.push(issue("supersession_target_missing", "a superseded record must name the event that supersedes it", "/supersedesEventId"));
+  if (state === "superseded") {
+    if (!record.supersededByEventId) {
+      errors.push(issue("superseded_by_target_missing", "a superseded record must name the replacement event that superseded it", "/supersededByEventId"));
+    } else if (record.supersededByEventId === record.event.id) {
+      errors.push(issue("superseded_by_self", "supersededByEventId must not equal the record event id", "/supersededByEventId"));
+    }
+  } else if (record.supersededByEventId !== undefined) {
+    errors.push(issue("superseded_by_state_invalid", "supersededByEventId is allowed only for a superseded record", "/supersededByEventId"));
   }
-  if (state === "conflicting" && !record.conflictsWithEventIds?.length) {
-    errors.push(issue("conflict_target_missing", "a conflicting record must name at least one conflicting event", "/conflictsWithEventIds"));
+  if (state === "conflicting") {
+    if (!record.conflictsWithEventIds?.length) {
+      errors.push(issue("conflict_target_missing", "a conflicting record must name at least one conflicting event", "/conflictsWithEventIds"));
+    } else if (record.conflictsWithEventIds.includes(record.event.id)) {
+      errors.push(issue("conflict_self_reference", "conflictsWithEventIds must not contain the record event id", "/conflictsWithEventIds"));
+    }
+  } else if (record.conflictsWithEventIds !== undefined) {
+    errors.push(issue("conflict_targets_state_invalid", "conflictsWithEventIds is allowed only for a conflicting record", "/conflictsWithEventIds"));
   }
 
   return { ok: errors.length === 0, errors };

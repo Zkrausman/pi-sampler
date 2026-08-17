@@ -79,9 +79,16 @@ A record state is exactly one of `complete`, `partial`, `quarantined`,
   the partial state; it must not silently upgrade it.
 - `quarantined` means the record is retained for correlation but cannot support
   an authority-bearing decision until a later contract resolves it.
-- `superseded` must name the replacement event ID.
-- `conflicting` must name at least one conflicting event ID. It does not choose
-  a winner.
+- `superseded` must name the replacement event in `supersededByEventId`. The
+  relationship points from the current, superseded record to its replacement;
+  it cannot name the current record and cannot appear on any other state.
+- `conflicting` must name at least one unique conflicting event ID in
+  `conflictsWithEventIds`. The array cannot contain the current event ID and
+  cannot appear on any other state. It does not choose a winner.
+
+Relationship targets are opaque event identities. The validator does not require
+them to be present in a supplied timeline because partial timelines may
+legitimately omit the replacement or conflicting record.
 
 The contract does not define a lifecycle state machine, a conflict-resolution
 process, or a receipt ledger. Those are intentionally later-owner concerns.

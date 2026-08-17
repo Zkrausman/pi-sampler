@@ -131,7 +131,7 @@ test("Ticket Episode v1 rejects reversed chronology and cross-ticket identity re
   assert.ok(codes(ownership).includes("cross_ticket_duplicate_id"));
 });
 
-test("Ticket Episode v1 rejects silent partial coverage and missing state links", () => {
+test("Ticket Episode v1 rejects silent partial coverage", () => {
   const partial = validateTicketEpisodeV1(record({
     state: "complete",
     coverage: { status: "partial", expectedEventCount: 2, observedEventCount: 1, missingEventIds: ["event-unavailable"] },
@@ -145,11 +145,44 @@ test("Ticket Episode v1 rejects silent partial coverage and missing state links"
   }));
   assert.equal(undeclared.ok, false);
   assert.ok(codes(undeclared).includes("coverage_partial_undeclared"));
+});
 
-  const superseded = validateTicketEpisodeV1(record({ state: "superseded" }));
-  assert.ok(codes(superseded).includes("supersession_target_missing"));
-  const conflicting = validateTicketEpisodeV1(record({ state: "conflicting" }));
-  assert.ok(codes(conflicting).includes("conflict_target_missing"));
+test("Ticket Episode v1 enforces directed supersession links without requiring a complete timeline", () => {
+  const superseded = record({
+    state: "superseded",
+    supersededByEventId: "event-replacement-not-in-timeline",
+  });
+  assert.equal(validateTicketEpisodeV1(superseded).ok, true);
+  assert.equal(validateTicketEpisodeTimelineV1([superseded]).ok, true);
+
+  const missing = validateTicketEpisodeV1(record({ state: "superseded" }));
+  assert.ok(codes(missing).includes("superseded_by_target_missing"));
+  for (const state of ["complete", "partial", "quarantined", "conflicting"]) {
+    const unrelated = validateTicketEpisodeV1(record({ state, supersededByEventId: "event-replacement" }));
+    assert.ok(codes(unrelated).includes("superseded_by_state_invalid"), `${state} must reject supersededByEventId`);
+  }
+  const self = validateTicketEpisodeV1(record({ state: "superseded", supersededByEventId: "event-1" }));
+  assert.ok(codes(self).includes("superseded_by_self"));
+});
+
+test("Ticket Episode v1 enforces conflict links without requiring a complete timeline", () => {
+  const conflicting = record({
+    state: "conflicting",
+    conflictsWithEventIds: ["event-conflict-not-in-timeline"],
+  });
+  assert.equal(validateTicketEpisodeV1(conflicting).ok, true);
+  assert.equal(validateTicketEpisodeTimelineV1([conflicting]).ok, true);
+
+  const missing = validateTicketEpisodeV1(record({ state: "conflicting" }));
+  assert.ok(codes(missing).includes("conflict_target_missing"));
+  for (const state of ["complete", "partial", "quarantined", "superseded"]) {
+    const unrelated = validateTicketEpisodeV1(record({ state, conflictsWithEventIds: ["event-conflict"] }));
+    assert.ok(codes(unrelated).includes("conflict_targets_state_invalid"), `${state} must reject conflictsWithEventIds`);
+  }
+  const self = validateTicketEpisodeV1(record({ state: "conflicting", conflictsWithEventIds: ["event-1"] }));
+  assert.ok(codes(self).includes("conflict_self_reference"));
+  const duplicate = validateTicketEpisodeV1(record({ state: "conflicting", conflictsWithEventIds: ["event-conflict", "event-conflict"] }));
+  assert.ok(codes(duplicate).includes("schema_invalid"));
 });
 
 test("the generated JSON Schema is exactly derived from the canonical executable schema", async () => {
