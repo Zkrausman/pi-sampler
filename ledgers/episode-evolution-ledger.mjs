@@ -165,6 +165,23 @@ export class EpisodeEvolutionLedger {
   }); }
   async writeArtifact(bytes, metadata) { return this.#enqueue("admission", async () => { await this.#reconcile(); if (!(bytes instanceof Uint8Array) || !metadata || ["identity", "evidenceClass", "coverage", "provenance", "sensitivity"].some((k) => typeof metadata[k] !== "string")) throw new LedgerError("artifact_invalid", "artifact bytes and metadata required"); if (bytes.byteLength > this.limits.maxArtifactBytes) throw new LedgerLimitError("maxArtifactBytes", bytes.byteLength, this.limits.maxArtifactBytes); const r = { digest: hash(bytes), size: bytes.byteLength, ...metadata }, p = this.#path("artifacts", r.digest); if (await exists(p)) { await this.#verifyRefs([r]); return r; } if (this.storageBytes + bytes.byteLength > this.limits.maxStorageBytes) throw new LedgerLimitError("maxStorageBytes", this.storageBytes + bytes.byteLength, this.limits.maxStorageBytes); try { await this.#atomicCreate(p, bytes, "artifact"); await this.#recount(); return r; } catch (e) { await this.#recoverAfterMutation(); throw e; } }); }
   async queryEpisode(id, o = {}) { return this.#query(this.episodes.get(id)?.records ?? [], o); }
+  /** Bounded index lookup used by successor contracts for deterministic idempotency. */
+  async findEvent(id) {
+    if (typeof id !== "string") throw new LedgerError("event_id_invalid", "event id must be a string");
+    const digest = this.eventIds.get(id); if (!digest) return undefined;
+    for (const episode of this.episodes.values()) { const entry = episode.records.find((candidate) => candidate.digest === digest); if (entry) return structuredClone(entry); }
+    throw new LedgerError("reconciliation_failed", "event index does not resolve to a durable record");
+  }
+  async listRecords({ limit = this.limits.maxIndexEntries } = {}) {
+    if (!Number.isSafeInteger(limit) || limit < 0) throw new LedgerError("query_invalid", "invalid record query limit");
+    if (limit > this.limits.maxIndexEntries) throw new LedgerLimitError("maxIndexEntries", limit, this.limits.maxIndexEntries);
+    const records = this.#orderedRecords();
+    return { records: records.slice(0, limit).map((entry) => structuredClone(entry)), truncated: records.length > limit };
+  }
+  async readArtifact(reference) {
+    await this.#verifyRefs([reference]);
+    return new Uint8Array(await readFile(this.#path("artifacts", reference.digest)));
+  }
   async queryEvolutions({ outcome, ...o } = {}) {
     const checked = this.#query([], o), out = []; let bytes = 0;
     for (const e of this.#orderedRecords()) if (e.type === "evolution" && (!outcome || e.evolution.outcome === outcome)) { const n = enc.encode(stable(e)).byteLength; if (out.length === (o.limit ?? this.limits.maxQueryRecords) || bytes + n > (o.maxBytes ?? this.limits.maxQueryBytes)) return { records: out, truncated: true, bytes }; out.push(structuredClone(e)); bytes += n; }
