@@ -112,15 +112,26 @@ export class EpisodeEvolutionLedger {
   }
   async #releaseLock() { try { const x = JSON.parse(await readFile(this.lockPath, "utf8")); if (x.token === this.lockToken) { await unlink(this.lockPath); await fsyncDir(this.root); } } catch (e) { if (e.code !== "ENOENT") return; } }
   async #atomicCreate(target, contents, purpose, reservation) {
-    const stage = this.#path(".staging", `${safe(target)}-${randomUUID()}.tmp`); let published = false, reserved = reservation ?? 0;
-    try { if (reservation === undefined) reserved = await this.#reservePublications([{ target, contents }]); await this.#hit(`before_${purpose}_stage`); await writeFile(stage, contents, { flag: "wx", mode: 0o600 }); await this.#hit(`after_${purpose}_write`); await fsyncFile(stage); await this.#hit(`after_${purpose}_sync`); await this.#hit(`before_${purpose}_publish`); await link(stage, target); published = true; await this.#hit(`after_${purpose}_publish`); await fsyncDir(resolve(target, "..")); await this.#hit(`after_${purpose}_dirsync`); return { bytes: this.#contentBytes(contents) }; }
-    catch (e) { e.publicationUncertain = published || e.code === "EEXIST"; throw e; }
+    const stage = this.#path(".staging", `${safe(target)}-${randomUUID()}.tmp`); let published = false, durable = false, reserved = reservation ?? 0;
+    try { if (reservation === undefined) reserved = await this.#reservePublications([{ target, contents }]); await this.#hit(`before_${purpose}_stage`); await writeFile(stage, contents, { flag: "wx", mode: 0o600 }); await this.#hit(`after_${purpose}_write`); await fsyncFile(stage); await this.#hit(`after_${purpose}_sync`); await this.#hit(`before_${purpose}_publish`); await link(stage, target); published = true; await this.#hit(`after_${purpose}_publish`); await fsyncDir(resolve(target, "..")); durable = true; await this.#hit(`after_${purpose}_dirsync`); return { bytes: this.#contentBytes(contents) }; }
+    catch (e) { e.publicationUncertain = published || e.code === "EEXIST"; e.publicationDurable = durable; throw e; }
     finally { await unlink(stage).catch(() => {}); if (reservation === undefined) this.#releaseReservation(reserved); }
   }
-  async #atomicReplace(target, contents, purpose, reservation) { const stage = this.#path(".staging", `${safe(target)}-${randomUUID()}.tmp`); let published = false, reserved = reservation ?? 0;
-    try { if (reservation === undefined) reserved = await this.#reservePublications([{ target, contents }]); await this.#hit(`before_${purpose}_stage`); await writeFile(stage, contents, { flag: "wx", mode: 0o600 }); await this.#hit(`after_${purpose}_write`); await fsyncFile(stage); await this.#hit(`after_${purpose}_sync`); await this.#hit(`before_${purpose}_publish`); await rename(stage, target); published = true; await this.#hit(`after_${purpose}_publish`); await fsyncDir(resolve(target, "..")); await this.#hit(`after_${purpose}_dirsync`); }
-    catch (e) { e.publicationUncertain = published; throw e; } finally { await unlink(stage).catch(() => {}); if (reservation === undefined) this.#releaseReservation(reserved); } }
-  async #recoverStaging() { for await (const e of this.#entries(this.#path(".staging"), this.limits.maxPendingWrites * 4)) await rm(this.#path(".staging", e.name), { force: true, recursive: true }); }
+  async #atomicReplace(target, contents, purpose, reservation) { const stage = this.#path(".staging", `${safe(target)}-${randomUUID()}.tmp`); let published = false, durable = false, reserved = reservation ?? 0;
+    try { if (reservation === undefined) reserved = await this.#reservePublications([{ target, contents }]); await this.#hit(`before_${purpose}_stage`); await writeFile(stage, contents, { flag: "wx", mode: 0o600 }); await this.#hit(`after_${purpose}_write`); await fsyncFile(stage); await this.#hit(`after_${purpose}_sync`); await this.#hit(`before_${purpose}_publish`); await rename(stage, target); published = true; await this.#hit(`after_${purpose}_publish`); await fsyncDir(resolve(target, "..")); durable = true; await this.#hit(`after_${purpose}_dirsync`); }
+    catch (e) { e.publicationUncertain = published; e.publicationDurable = durable; throw e; } finally { await unlink(stage).catch(() => {}); if (reservation === undefined) this.#releaseReservation(reserved); } }
+  #receiptBatchDescriptor(value) {
+    if (!value || value.format !== 1 || (value.committed !== undefined && typeof value.committed !== "boolean") || !Array.isArray(value.artifactDigests) || !value.artifactDigests.every((digest) => /^[a-f0-9]{64}$/.test(digest)) || !value.commit || !["commits", "commits-v2"].includes(value.commit.directory) || !/^[a-f0-9]{64}$/.test(value.commit.episode) || !/^commit-[0-9]{16}-[a-f0-9]{64}\.json$/.test(value.commit.name)) throw new LedgerError("receipt_batch_invalid", "receipt batch recovery marker is invalid");
+    return value;
+  }
+  async #recoverReceiptBatch(marker, forceAbort = false) {
+    const descriptor = this.#receiptBatchDescriptor(JSON.parse(await readFile(marker, "utf8"))), commit = this.#path(descriptor.commit.directory, descriptor.commit.episode, descriptor.commit.name);
+    // A linked commit alone is not acceptance: it can exist after a failed
+    // directory fsync. Only the post-fsync marker acknowledgement preserves it.
+    if (forceAbort || descriptor.committed !== true) { await unlink(commit).catch((error) => { if (error.code !== "ENOENT") throw error; }); for (const digest of descriptor.artifactDigests) await unlink(this.#path("artifacts", digest)).catch((error) => { if (error.code !== "ENOENT") throw error; }); if (await exists(resolve(commit, ".."))) await fsyncDir(resolve(commit, "..")); await fsyncDir(this.#path("artifacts")); }
+    await unlink(marker); await fsyncDir(this.#path(".staging"));
+  }
+  async #recoverStaging() { for await (const e of this.#entries(this.#path(".staging"), this.limits.maxPendingWrites * 4)) { const target = this.#path(".staging", e.name); if (e.isFile() && /^receipt-batch-[0-9a-f-]{36}\.json$/.test(e.name)) await this.#recoverReceiptBatch(target); else await rm(target, { force: true, recursive: true }); } }
   async #quarantine(reason, context, material) { const id = `${Date.now()}-${randomUUID()}`, target = this.#path("quarantine", `${id}.json`); await this.#atomicCreate(target, stable({ format: 1, reason, context, quarantinedAt: new Date().toISOString() }), "quarantine"); if (material && await exists(material)) { await rename(material, this.#path("quarantine", `${id}.material`)).catch(() => {}); await fsyncDir(this.#path("quarantine")); } }
   #validateRef(r) { if (!r || !/^[a-f0-9]{64}$/.test(r.digest) || !Number.isSafeInteger(r.size) || r.size < 0 || ["identity", "evidenceClass", "coverage", "sensitivity", "provenance"].some((k) => typeof r[k] !== "string")) throw new LedgerError("artifact_reference_invalid", "invalid artifact reference"); }
   #validate(e, expectedFormat = this.formatVersion) { if (!e || !["episode", "evolution"].includes(e.type) || ![1, 2].includes(e.format) || e.format !== expectedFormat || typeof e.digest !== "string" || e.digest !== envelopeDigest(e) || (e.format === 1 ? e.sourceDigest !== undefined : e.sourceDigest !== undefined && (typeof e.sourceDigest !== "string" || !/^[a-f0-9]{64}$/.test(e.sourceDigest)))) throw new LedgerError("digest_mismatch", "commit checksum mismatch"); const v = validateTicketEpisodeV1(e.record, this.validationOptions); if (!v.ok) throw new LedgerError("ticket_episode_invalid", "canonical Ticket Episode v1 validation failed", { errors: v.errors }); if (!Array.isArray(e.artifacts)) throw new LedgerError("artifact_references_invalid", "artifact references must be array"); for (const r of e.artifacts) this.#validateRef(r); if (e.type === "evolution" ? e.record.event.kind !== "evolution" || !e.evolution || typeof e.evolution.id !== "string" || typeof e.evolution.explanation !== "string" || !OUTCOMES.has(e.evolution.outcome) : e.evolution !== undefined) throw new LedgerError("evolution_invalid", "invalid evolution envelope"); }
@@ -164,6 +175,45 @@ export class EpisodeEvolutionLedger {
     catch (e) { await this.#recoverAfterMutation(); throw e; }
   }); }
   async writeArtifact(bytes, metadata) { return this.#enqueue("admission", async () => { await this.#reconcile(); if (!(bytes instanceof Uint8Array) || !metadata || ["identity", "evidenceClass", "coverage", "provenance", "sensitivity"].some((k) => typeof metadata[k] !== "string")) throw new LedgerError("artifact_invalid", "artifact bytes and metadata required"); if (bytes.byteLength > this.limits.maxArtifactBytes) throw new LedgerLimitError("maxArtifactBytes", bytes.byteLength, this.limits.maxArtifactBytes); const r = { digest: hash(bytes), size: bytes.byteLength, ...metadata }, p = this.#path("artifacts", r.digest); if (await exists(p)) { await this.#verifyRefs([r]); return r; } if (this.storageBytes + bytes.byteLength > this.limits.maxStorageBytes) throw new LedgerLimitError("maxStorageBytes", this.storageBytes + bytes.byteLength, this.limits.maxStorageBytes); try { await this.#atomicCreate(p, bytes, "artifact"); await this.#recount(); return r; } catch (e) { await this.#recoverAfterMutation(); throw e; } }); }
+  /**
+   * Narrow all-or-nothing artifact plus episode admission for successor receipt
+   * contracts. Every byte/reference/record and aggregate storage reservation is
+   * checked before publication. If no commit is durable, newly published batch
+   * artifacts are removed and capacity is reconciled before the error escapes.
+   */
+  async appendEpisodeWithArtifactBatch(record, { artifacts = [] } = {}) { if (!record?.episode?.id || !Array.isArray(artifacts)) throw new LedgerError("batch_invalid", "record and artifact batch are required"); return this.#enqueue("admission", async () => {
+    await this.#reconcile(); const refs = [], writes = new Map();
+    for (const [index, item] of artifacts.entries()) {
+      if (!item || !(item.bytes instanceof Uint8Array) || !item.metadata || ["identity", "evidenceClass", "coverage", "provenance", "sensitivity"].some((key) => typeof item.metadata[key] !== "string")) throw new LedgerError("batch_artifact_invalid", "batch artifact bytes and metadata are required", { index });
+      if (item.bytes.byteLength > this.limits.maxArtifactBytes) throw new LedgerLimitError("maxArtifactBytes", item.bytes.byteLength, this.limits.maxArtifactBytes);
+      const ref = { digest: hash(item.bytes), size: item.bytes.byteLength, ...item.metadata }; refs.push(ref);
+      const prior = writes.get(ref.digest); if (prior && (!prior.bytes.equals?.(item.bytes) && (prior.bytes.byteLength !== item.bytes.byteLength || !Buffer.from(prior.bytes).equals(Buffer.from(item.bytes))))) throw new LedgerError("batch_artifact_conflict", "batch reuses a digest for different bytes", { digest: ref.digest });
+      if (!prior) writes.set(ref.digest, { bytes: item.bytes, ref, index });
+    }
+    for (const { ref } of writes.values()) { const target = this.#path("artifacts", ref.digest); if (await exists(target)) await this.#verifyRefs([ref]); }
+    const e = { format: this.formatVersion, type: "episode", record, artifacts: refs, previousDigest: this.episodes.get(record.episode.id)?.head?.digest ?? null }; e.digest = envelopeDigest(e); const body = stable(e), bytes = enc.encode(body).byteLength;
+    if (bytes > this.limits.maxEncodedRecordBytes) throw new LedgerLimitError("maxEncodedRecordBytes", bytes, this.limits.maxEncodedRecordBytes);
+    const admitted = this.#checkAdmission(e); if (admitted.idempotent) return { status: "idempotent", digest: e.digest, artifacts: refs };
+    const directory = this.#path(this.commitDirectory, safe(record.episode.id)), target = join(directory, `commit-${String(record.sequence).padStart(16, "0")}-${e.digest}.json`), newWrites = [];
+    for (const write of writes.values()) { const artifactTarget = this.#path("artifacts", write.ref.digest); if (!await exists(artifactTarget)) newWrites.push({ ...write, target: artifactTarget }); }
+    const reservation = await this.#reservePublications([...newWrites.map((write) => ({ target: write.target, contents: write.bytes })), { target, contents: body }]); const marker = this.#path(".staging", `receipt-batch-${randomUUID()}.json`), markerDescriptor = { format: 1, committed: false, artifactDigests: newWrites.map((write) => write.ref.digest), commit: { directory: this.commitDirectory, episode: safe(record.episode.id), name: basename(target) } }, markerBody = stable(markerDescriptor); let committed = false;
+    try {
+      // This durable marker is published before the first artifact. On crash,
+      // #recoverStaging removes its listed artifacts unless its post-fsync
+      // commit acknowledgement is durable.
+      await this.#atomicCreate(marker, markerBody, "receipt_batch", reservation);
+      for (const write of newWrites) await this.#atomicCreate(write.target, write.bytes, `receipt_artifact_${write.index}`, reservation);
+      await this.#hit("before_receipt_commit_directory"); await mkdir(directory, { recursive: true }); await this.#dir(directory); await this.#hit("after_receipt_commit_directory");
+      await this.#atomicCreate(target, body, "receipt_commit", reservation); await this.#atomicReplace(marker, stable({ ...markerDescriptor, committed: true }), "receipt_batch_commit", reservation); committed = true; this.#admit(e); await unlink(marker); await fsyncDir(this.#path(".staging")); await this.#recount(); return { status: "committed", digest: e.digest, artifacts: refs };
+    } catch (error) {
+      // Only a post-directory-fsync commit fault is an uncertain-but-durable
+      // acceptance. A linked target before that is rolled back with its marker.
+      if (!committed && error.publicationDurable === true && await exists(target)) { await this.#reconcile(); await unlink(marker).catch((cause) => { if (cause.code !== "ENOENT") throw cause; }); return { status: "committed", digest: e.digest, artifacts: refs, recovered: true }; }
+      if (await exists(marker)) await this.#recoverReceiptBatch(marker, !committed && error.publicationDurable !== true);
+      else { for (const write of newWrites) await unlink(write.target).catch((cause) => { if (cause.code !== "ENOENT") throw cause; }); await fsyncDir(this.#path("artifacts")); }
+      await this.#recoverAfterMutation(); throw error;
+    } finally { this.#releaseReservation(reservation); }
+  }); }
   async queryEpisode(id, o = {}) { return this.#query(this.episodes.get(id)?.records ?? [], o); }
   /** Bounded index lookup used by successor contracts for deterministic idempotency. */
   async findEvent(id) {

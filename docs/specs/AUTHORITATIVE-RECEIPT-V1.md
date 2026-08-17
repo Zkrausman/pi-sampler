@@ -72,7 +72,11 @@ accepted `observed_evidence` event.
 The receipt contains stable opaque IDs for `producer`, `authority`, `receipt`,
 `operation`, `project`, `ticket`, `episode`, and each `artifact`. A receipt is
 always tied to `repository.id` plus an immutable `repository.revision`; branch
-names, paths, and mutable checkout state are excluded.
+names, paths, and mutable checkout state are excluded. Where Ticket Episode v1
+has a shorter identity boundary, the facade derives a fixed-length,
+domain-separated SHA-256 identity for receipt, operation, and authority fields.
+It never prefixes an external ID into a Ticket Episode ID, so every
+contract-valid minimum or 128-character input remains representable.
 
 Each large evidence body is an out-of-line `observed.artifacts` entry plus a
 supplied `Uint8Array` at the admission boundary. Inline evidence bodies do not
@@ -101,8 +105,10 @@ it.
 UTC RFC 3339 strings with milliseconds. A configured freshness policy has a
 maximum observation age, future clock-skew bound, and (by default) mandatory
 expiration. Stale, expired, future-dated, and noncanonical evidence is not
-accepted. Lookup reports an old stored record as `stale`; it never reports an
-unreverified stored record as current evidence.
+accepted. Lookup rereads the original persisted receipt artifact and evaluates
+all three original timestamps against the configured policy; an expired receipt
+returns `stale` with `evidence_expired`. It never fabricates timestamps or
+reports unreverified stored material as current evidence.
 
 `idempotency.key` is globally bound by a deterministic Ticket Episode event ID,
 while its canonical receipt digest binds at least project, ticket, episode,
@@ -116,18 +122,31 @@ persisted receipt artifact and reruns the configured verifier against its
 original observation time; any missing/tampered artifact, binding mismatch, or
 verifier failure fails closed without exposing the ledger facade.
 
-Verifier failure occurs before artifact/record publication. A later artifact or
-commit publication failure exposes no accepted receipt event; retry is
-deterministic. Content-addressed orphan bytes are not authoritative state and
-are not reachable from an accepted receipt query. Conflicts leave the earlier
-accepted event unchanged.
+Verifier failure occurs before artifact/record publication. Before any durable
+write, the facade validates every supplied body and one-to-one reference,
+derives and validates the Ticket Episode record, and asks the AIDEV-124 ledger
+to reserve aggregate capacity for every new evidence artifact, the receipt
+artifact, and the commit. The narrow batch admission publishes a durable staging marker
+before its first artifact. It removes every newly published artifact when a
+pre-commit boundary fails, releases its reservation, and reconciles storage
+before returning failure; restart reads any surviving marker and removes its
+listed artifacts unless its commit is durable. Thus rejected work (including a
+process crash after artifact publication) exposes no accepted receipt event, no
+orphan artifact capacity, and deterministic retry. A linked commit is not
+accepted until its directory fsync and durable batch-marker acknowledgement;
+restart removes any linked-but-unacknowledged commit with its artifacts. A
+fault after that acknowledgement is reconciled as the already durable accepted
+commit. Conflicts leave the earlier accepted event unchanged.
 
 ## Limits, conformance, and exclusions
 
 Default bounds are 64 KiB canonical receipt bytes, 32 artifact references, 32
 claim entries, and a five-second maximum verifier deadline. Artifact byte and
 storage bounds are enforced by the reused AIDEV-124 ledger. Oversized receipts
-or artifacts fail before receipt acceptance.
+or artifacts fail before receipt acceptance. Trust-root configuration is also
+fail-closed in both the facade and exported verifier: empty, malformed, and
+duplicate authority IDs (including duplicate values supplied through a `Map`)
+are rejected rather than selecting an order-dependent root.
 
 `tests/helpers/authoritative-receipt-conformance.mjs` provides fake connected
 authorities and a table-driven harness. The adversarial matrix covers valid

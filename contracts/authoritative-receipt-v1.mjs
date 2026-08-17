@@ -160,10 +160,14 @@ export function validateReceiptFreshness(receipt, { now = Date.now(), freshness 
 
 function rootMap(trustRoots) {
   const roots = trustRoots instanceof Map ? [...trustRoots.values()] : trustRoots;
-  if (!Array.isArray(roots)) return new Map();
+  if (!Array.isArray(roots) || roots.length === 0) return { error: "trust_roots_invalid" };
   const result = new Map();
-  for (const root of roots) if (root && typeof root === "object" && typeof root.authorityId === "string" && !result.has(root.authorityId)) result.set(root.authorityId, root);
-  return result;
+  for (const root of roots) {
+    if (!root || typeof root !== "object" || Array.isArray(root) || typeof root.authorityId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/.test(root.authorityId)) return { error: "trust_roots_invalid" };
+    if (result.has(root.authorityId)) return { error: "trust_roots_duplicate" };
+    result.set(root.authorityId, root);
+  }
+  return { roots: result };
 }
 async function verifierResult(root, request, timeoutMs) {
   let timer;
@@ -188,7 +192,9 @@ export async function verifyAuthoritativeReceiptV1(receipt, { trustRoots, freshn
   if (!structural.ok) return structural;
   const fresh = validateReceiptFreshness(receipt, { freshness, now });
   if (!fresh.ok) return { ok: false, errors: fresh.errors };
-  const root = rootMap(trustRoots).get(receipt.authority.id);
+  const configuredRoots = rootMap(trustRoots);
+  if (configuredRoots.error) return { ok: false, errors: [issue(configuredRoots.error, "configured authority roots are malformed, empty, or duplicate", "/authority")] };
+  const root = configuredRoots.roots.get(receipt.authority.id);
   if (!root) return { ok: false, errors: [issue("authority_unconfigured", "authority has no configured connected-authority trust root", "/authority/id")] };
   if (typeof root.verifier !== "function") return { ok: false, errors: [issue("verifier_required", "configured authority requires a verifier function", "/authority/id")] };
   if (!Array.isArray(root.producerIds) || !root.producerIds.includes(receipt.producer.id)) return { ok: false, errors: [issue("producer_authority_mismatch", "producer is not connected to this configured authority", "/producer/id")] };
