@@ -17,6 +17,7 @@ const encoder = new TextEncoder();
 // may already consume it. Domain-separated SHA-256 names retain deterministic
 // ownership binding without prefix-overflow or raw external identifiers.
 const ticketIdentity = (domain, value) => `${domain}-${sha256Hex(`${domain}\\u0000${value}`)}`;
+const scopedTicketIdentity = (domain, receipt, externalId) => ticketIdentity(domain, canonicalJson({ project: receipt.project.id, ticket: receipt.ticket, episode: receipt.episode.id, producer: receipt.producer.id, authority: receipt.authority.id, externalId }));
 const artifactMetadata = (artifact) => ({
   identity: canonicalJson(artifact.identity),
   evidenceClass: artifact.evidenceClass,
@@ -83,9 +84,9 @@ export class AuthoritativeReceiptLedger {
       repository: receipt.repository,
       ticket: receipt.ticket,
       episode: receipt.episode,
-      attempt: { id: ticketIdentity("attempt", receipt.operation.id) },
-      session: { id: ticketIdentity("session", receipt.receipt.id) },
-      agentRun: { agentId: ticketIdentity("authority", receipt.authority.id), runId: ticketIdentity("operation", receipt.operation.id) },
+      attempt: { id: scopedTicketIdentity("attempt", receipt, receipt.operation.id) },
+      session: { id: scopedTicketIdentity("session", receipt, receipt.receipt.id) },
+      agentRun: { agentId: ticketIdentity("authority", receipt.authority.id), runId: scopedTicketIdentity("operation", receipt, receipt.operation.id) },
       event: { id: idempotencyEventId(receipt.idempotency.key), kind: "artifact" },
       // Only the configured authority is represented as the Ticket Episode
       // observed-evidence producer. The external adapter/caller identity is
@@ -108,7 +109,9 @@ export class AuthoritativeReceiptLedger {
       && entry.record.ticket.system === receipt.ticket.system
       && entry.record.ticket.id === receipt.ticket.id
       && entry.record.episode.id === receipt.episode.id
-      && entry.record.agentRun.runId === ticketIdentity("operation", receipt.operation.id)
+      && entry.record.attempt.id === scopedTicketIdentity("attempt", receipt, receipt.operation.id)
+      && entry.record.session.id === scopedTicketIdentity("session", receipt, receipt.receipt.id)
+      && entry.record.agentRun.runId === scopedTicketIdentity("operation", receipt, receipt.operation.id)
       && entry.record.producer.id === ticketIdentity("authority", receipt.authority.id)) return entry;
     throw new AuthoritativeReceiptLedgerError("idempotency_conflict", "idempotency key is already bound to different canonical receipt content or ownership scope", { idempotencyKey: receipt.idempotency.key });
   }
@@ -134,7 +137,8 @@ export class AuthoritativeReceiptLedger {
     return record.event.id === idempotencyEventId(receipt.idempotency.key)
       && record.project.id === receipt.project.id && record.repository.id === receipt.repository.id && record.repository.revision === receipt.repository.revision
       && record.ticket.system === receipt.ticket.system && record.ticket.id === receipt.ticket.id && record.episode.id === receipt.episode.id
-      && record.agentRun.runId === ticketIdentity("operation", receipt.operation.id) && record.producer.id === ticketIdentity("authority", receipt.authority.id) && record.occurredAt === receipt.observed.observedAt
+      && record.attempt.id === scopedTicketIdentity("attempt", receipt, receipt.operation.id) && record.session.id === scopedTicketIdentity("session", receipt, receipt.receipt.id)
+      && record.agentRun.runId === scopedTicketIdentity("operation", receipt, receipt.operation.id) && record.producer.id === ticketIdentity("authority", receipt.authority.id) && record.occurredAt === receipt.observed.observedAt
       && record.evidence.authority.authorityId === ticketIdentity("authority", receipt.authority.id) && record.evidence.authority.attestationId === ticketIdentity("attestation", receipt.receipt.id);
   }
   #prepareArtifactBatch(receipt, artifactBodies, receiptBytes) {

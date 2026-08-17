@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -32,9 +32,8 @@ function addArtifact(fixture, id = "artifact-2", body = new TextEncoder().encode
   return rebind(fixture);
 }
 
-// CRLF check: generated JSON uses JSON.stringify + a terminal LF. Node's
-// readFile does not translate CRLF, so the exporter check is byte-exact on both
-// Windows and POSIX clean checkouts.
+// Exporters normalize CRLF before comparison and .gitattributes enforces LF
+// for tracked generated schemas, so clean Windows and POSIX checkouts agree.
 test("generated authoritative receipt JSON Schema matches its executable source", () => {
   const result = spawnSync(process.execPath, ["scripts/export-authoritative-receipt-v1-schema.mjs", "--check"], { cwd: join(import.meta.dirname, ".."), encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
@@ -113,6 +112,39 @@ test("all contract-valid boundary identities derive valid bounded Ticket Episode
   await withLedger({ trustRoots: [fakeTrustRoot({ authorityId: min })] }, async (ledger) => assert.equal((await ledger.accept(minimum.receipt, { artifactBodies: minimum.artifactBodies })).status, "committed"));
 });
 
+test("separate tickets may reuse locally scoped receipt and operation IDs", async () => withLedger({}, async (ledger, root) => {
+  const first = receiptFixture(), second = receiptFixture();
+  second.receipt.ticket = { system: "linear", id: "AIDEV-126" }; second.receipt.episode = { id: "episode-2" }; second.receipt.idempotency = { key: "operation-key-2" }; rebind(second);
+  assert.equal((await ledger.accept(first.receipt, { artifactBodies: first.artifactBodies })).status, "committed");
+  assert.equal((await ledger.accept(second.receipt, { artifactBodies: second.artifactBodies })).status, "committed");
+  assert.equal((await ledger.lookup({ episodeId: first.receipt.episode.id, idempotencyKey: first.receipt.idempotency.key })).status, "stored_not_reverified");
+  assert.equal((await ledger.lookup({ episodeId: second.receipt.episode.id, idempotencyKey: second.receipt.idempotency.key })).status, "stored_not_reverified");
+  const persisted = async (episodeId) => { const directory = join(root, "commits", hash(episodeId)), [name] = await readdir(directory); return JSON.parse(await readFile(join(directory, name), "utf8")).record; };
+  const [firstRecord, secondRecord] = await Promise.all([persisted(first.receipt.episode.id), persisted(second.receipt.episode.id)]);
+  for (const [firstId, secondId] of [[firstRecord.attempt.id, secondRecord.attempt.id], [firstRecord.session.id, secondRecord.session.id], [firstRecord.agentRun.runId, secondRecord.agentRun.runId]]) { assert.notEqual(firstId, secondId); assert.ok(firstId.length <= 128 && secondId.length <= 128); }
+  await ledger.close(); const reopened = await AuthoritativeReceiptLedger.open({ root, trustRoots: [fakeTrustRoot()], now: conformanceNow });
+  try { assert.equal((await reopened.accept(second.receipt, { artifactBodies: second.artifactBodies })).status, "idempotent"); }
+  finally { await reopened.close(); }
+}));
+
+test("forged receipt-batch marker is quarantined without deleting accepted shared evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "authority-receipt-forged-marker-")); let ledger;
+  try {
+    ledger = await AuthoritativeReceiptLedger.open({ root, trustRoots: [fakeTrustRoot()], now: conformanceNow });
+    const first = receiptFixture(), second = receiptFixture(); second.receipt.ticket = { system: "linear", id: "AIDEV-126" }; second.receipt.episode = { id: "episode-2" }; second.receipt.idempotency = { key: "operation-key-2" }; rebind(second);
+    await ledger.accept(first.receipt, { artifactBodies: first.artifactBodies }); await ledger.accept(second.receipt, { artifactBodies: second.artifactBodies }); await ledger.close(); ledger = undefined;
+    const episode = hash(first.receipt.episode.id), [name] = await readdir(join(root, "commits", episode)); const entry = JSON.parse(await readFile(join(root, "commits", episode, name), "utf8"));
+    const forged = { format: 2, committed: false, batch: entry.receiptBatch, commit: { directory: "commits", episode, name, digest: entry.digest }, authentication: "0".repeat(64) };
+    await writeFile(join(root, ".staging", `receipt-batch-${randomUUID()}.json`), JSON.stringify(forged));
+    await writeFile(join(root, ".staging", `receipt-batch-${randomUUID()}.json`), "not JSON");
+    ledger = await AuthoritativeReceiptLedger.open({ root, trustRoots: [fakeTrustRoot()], now: conformanceNow });
+    assert.equal((await ledger.lookup({ episodeId: first.receipt.episode.id, idempotencyKey: first.receipt.idempotency.key })).status, "stored_not_reverified");
+    assert.equal((await ledger.lookup({ episodeId: second.receipt.episode.id, idempotencyKey: second.receipt.idempotency.key })).status, "stored_not_reverified");
+    assert.ok((await artifactNames(root)).includes(first.receipt.observed.artifacts[0].digest));
+    assert.ok((await readdir(join(root, "quarantine"))).filter((name) => name.endsWith(".json")).length >= 2);
+  } finally { await ledger?.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("receipt ledger is idempotent, conflict-safe, restart-stable, and preserves real receipt freshness", async () => withLedger({}, async (ledger, root) => {
   const fixture = receiptFixture();
   assert.equal((await ledger.accept(fixture.receipt, { artifactBodies: fixture.artifactBodies })).status, "committed");
@@ -147,7 +179,7 @@ test("all prepublication artifact and commit failures are residue-free and retry
     try {
       ledger = await AuthoritativeReceiptLedger.open({ root, trustRoots: [fakeTrustRoot()], now: conformanceNow, faultInjector: (name) => name === boundary });
       const fixture = addArtifact(receiptFixture());
-      const commitPublished = boundary === "after_receipt_commit_dirsync";
+      const commitPublished = false;
       if (commitPublished) assert.equal((await ledger.accept(fixture.receipt, { artifactBodies: fixture.artifactBodies })).status, "committed");
       else await assert.rejects(ledger.accept(fixture.receipt, { artifactBodies: fixture.artifactBodies }));
       const lookup = await ledger.lookup({ episodeId: "episode-1", idempotencyKey: "operation-key-1" });
@@ -173,6 +205,18 @@ test("crash after artifact publication recovers the durable batch marker without
       assert.equal((await ledger.lookup({ episodeId: "episode-1", idempotencyKey: "operation-key-1" })).status, "missing");
       const fixture = receiptFixture(); assert.equal((await ledger.accept(fixture.receipt, { artifactBodies: fixture.artifactBodies })).status, "committed");
     } finally { await ledger.close(); }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("crash after durable batch acknowledgement preserves the accepted commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "authority-receipt-ack-crash-"));
+  try {
+    const facadeUrl = new URL("../ledgers/authoritative-receipt-ledger.mjs", import.meta.url).href, helperUrl = new URL("./helpers/authoritative-receipt-conformance.mjs", import.meta.url).href;
+    const program = `import { AuthoritativeReceiptLedger } from ${JSON.stringify(facadeUrl)}; import { receiptFixture, fakeTrustRoot, conformanceNow } from ${JSON.stringify(helperUrl)}; const f=receiptFixture(); const l=await AuthoritativeReceiptLedger.open({root:${JSON.stringify(root)},trustRoots:[fakeTrustRoot()],now:conformanceNow,faultInjector:b=>{if(b==='after_receipt_batch_ack_dirsync')process.exit(73);return false}});await l.accept(f.receipt,{artifactBodies:f.artifactBodies})`;
+    assert.equal(spawnSync(process.execPath, ["--input-type=module", "-e", program], { encoding: "utf8" }).status, 73);
+    const ledger = await AuthoritativeReceiptLedger.open({ root, trustRoots: [fakeTrustRoot()], now: conformanceNow });
+    try { assert.equal((await ledger.lookup({ episodeId: "episode-1", idempotencyKey: "operation-key-1" })).status, "stored_not_reverified"); }
+    finally { await ledger.close(); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

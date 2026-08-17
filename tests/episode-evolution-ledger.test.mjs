@@ -22,7 +22,7 @@ async function createOutOfOrderV1Fixture(root, reverse = false) {
   await writeFile(join(root, "manifest.json"), stable({ format: "episode-evolution-ledger", version: 1 }));
 }
 async function managedBytes(root) { let total = 0; const walk = async (path) => { for (const name of await readdir(path)) { const target = join(path, name), info = await lstat(target); if (info.isDirectory()) await walk(target); else total += info.size; } }; await walk(root); return total; }
-async function assertEmptyStaging(root) { assert.deepEqual(await readdir(join(root, ".staging")), []); }
+async function assertEmptyStaging(root) { assert.deepEqual((await readdir(join(root, ".staging"))).filter((name) => name !== ".receipt-batch-key"), []); }
 const unrelated = (suffix) => record({ episode: { id: `episode-${suffix}` }, attempt: { id: `attempt-${suffix}` }, session: { id: `session-${suffix}` }, agentRun: { runId: `run-${suffix}` }, event: { id: `event-${suffix}`, kind: "usage" } });
 
 test("append is immutable, idempotent on exact replay, and detects identity/ordering conflicts", async () => withLedger({}, async (ledger) => {

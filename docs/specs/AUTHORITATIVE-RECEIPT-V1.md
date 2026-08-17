@@ -73,10 +73,15 @@ The receipt contains stable opaque IDs for `producer`, `authority`, `receipt`,
 `operation`, `project`, `ticket`, `episode`, and each `artifact`. A receipt is
 always tied to `repository.id` plus an immutable `repository.revision`; branch
 names, paths, and mutable checkout state are excluded. Where Ticket Episode v1
-has a shorter identity boundary, the facade derives a fixed-length,
-domain-separated SHA-256 identity for receipt, operation, and authority fields.
-It never prefixes an external ID into a Ticket Episode ID, so every
-contract-valid minimum or 128-character input remains representable.
+has a shorter identity boundary, the facade derives fixed-length,
+domain-separated SHA-256 identities. Each derived Ticket Episode `attempt`,
+`session`, and `agentRun.runId` hashes the complete canonical ownership tuple:
+project ID, ticket system and ID, episode ID, external producer ID, authority
+ID, its external receipt or operation ID, and the identity domain. Attempt and
+run use the operation ID; session uses the receipt ID. This prevents locally
+scoped external IDs from colliding across tickets while retaining deterministic
+replay within one scope. It never prefixes an external ID into a Ticket Episode
+ID, so every contract-valid minimum or 128-character input remains representable.
 
 Each large evidence body is an out-of-line `observed.artifacts` entry plus a
 supplied `Uint8Array` at the admission boundary. Inline evidence bodies do not
@@ -126,17 +131,21 @@ Verifier failure occurs before artifact/record publication. Before any durable
 write, the facade validates every supplied body and one-to-one reference,
 derives and validates the Ticket Episode record, and asks the AIDEV-124 ledger
 to reserve aggregate capacity for every new evidence artifact, the receipt
-artifact, and the commit. The narrow batch admission publishes a durable staging marker
-before its first artifact. It removes every newly published artifact when a
-pre-commit boundary fails, releases its reservation, and reconciles storage
-before returning failure; restart reads any surviving marker and removes its
-listed artifacts unless its commit is durable. Thus rejected work (including a
-process crash after artifact publication) exposes no accepted receipt event, no
-orphan artifact capacity, and deterministic retry. A linked commit is not
-accepted until its directory fsync and durable batch-marker acknowledgement;
-restart removes any linked-but-unacknowledged commit with its artifacts. A
-fault after that acknowledgement is reconciled as the already durable accepted
-commit. Conflicts leave the earlier accepted event unchanged.
+artifact, commit, and durable acknowledgement. The narrow batch admission
+publishes an authenticated staging marker before its first artifact. Its HMAC
+and the immutable commit envelope bind one batch ID to the exact commit and its
+complete artifact references; a retained post-fsync acknowledgement is the
+only durable acceptance proof. Recovery validates all of those bindings before
+performing any cleanup. A valid but unacknowledged batch removes only its
+specific commit and newly-published artifacts after proving no other commit
+references them. An acknowledged batch is retained even if a stale pending
+marker is replayed. Malformed, legacy, forged, or mismatched markers are
+quarantined rather than used as deletion authority. Thus rejected work
+(including a process crash after artifact publication) exposes no accepted
+receipt event, no orphan artifact capacity, and deterministic retry, while a
+forged marker cannot delete accepted state. A fault after the acknowledgement
+is reconciled as the already durable accepted commit. Conflicts leave the
+earlier accepted event unchanged.
 
 ## Limits, conformance, and exclusions
 
