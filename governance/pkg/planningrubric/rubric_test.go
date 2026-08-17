@@ -285,8 +285,8 @@ func validJulesPiControllerRubric() Rubric {
 	r.TicketID = "WORK-502"
 	r.Kind = "epic"
 	r.WorkClass = "development-process"
-	r.RepositoryResearch.CitedPaths = []string{"extensions/delivery-controller/src/ledger.mjs", "extensions/delivery-controller/src/orchestrator.mjs"}
-	r.RepositoryResearch.OverlapSearch.Queries = []string{"delivery controller", "pi review worker", "jules adapter"}
+	r.RepositoryResearch.CitedPaths = []string{"docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md", "docs/specs/AI-TOOLING-SEPARATION.md"}
+	r.RepositoryResearch.OverlapSearch.Queries = []string{"delivery authority threat model", "pi review worker", "episode evidence contract"}
 	r.RepositoryResearch.OverlapSearch.ExistingIssuesChecked = []string{"WORK-112", "WORK-113", "WORK-114"}
 	r.RepositoryResearch.OverlapSearch.DocsChecked = []string{"docs/runbooks/project-delivery.md"}
 	r.DiscoverySpike = DiscoverySpike{
@@ -321,7 +321,7 @@ func validJulesPiControllerRubric() Rubric {
 	r.AcceptanceCriteria = AcceptanceCriteria{
 		BehavioralTests:      []string{"ledger state transitions replay idempotently under concurrent appends"},
 		NegativeCases:        []string{"provider outage does not regress merged→failed"},
-		VerificationCommands: []string{"node --test extensions/delivery-controller/src/*.test.mjs", "go test -race ./pkg/deliveryevidence -count=1"},
+		VerificationCommands: []string{"node --test tests/legacy-self-evolution-retirement.test.mjs", "go test -race ./pkg/deliveryevidence -count=1"},
 		CompletionEvidence:   "ledger snapshot + delivery manifest + wiki lint clean; reconciler moves Done only after verified merge",
 		NonGoVerification:    "docs/runbooks/project-delivery.md updated with controller/implementer/reviewer table; no invented APIs",
 	}

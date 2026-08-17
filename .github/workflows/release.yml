@@ -1,35 +1,15 @@
-name: Release Pi packages
+name: Validate release readiness
 
 on:
   workflow_dispatch:
-    inputs:
-      confirm_release:
-        description: Confirm that this is an intentional production package release
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  release:
-    environment: production
+  release-readiness:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify release ref and confirmation
-        env:
-          CONFIRM_RELEASE: ${{ inputs.confirm_release }}
-        run: |
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Releases must be dispatched from main; received $GITHUB_REF."
-            exit 1
-          fi
-          if [[ "$CONFIRM_RELEASE" != "true" ]]; then
-            echo "Release confirmation is required."
-            exit 1
-          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -38,22 +18,20 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
-          registry-url: https://npm.pkg.github.com
-          scope: "@zkrausman"
           cache: npm
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - run: npm run validate:compliance
       - run: npm run validate:governance
-      - run: npm run validate:pi-extensions
-      - run: npm run validate:packages
-      - run: npm run release
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Upload immutable published-package SBOMs
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
-        with:
-          name: package-sboms-${{ github.sha }}
-          path: extensions/*/sbom.cdx.json
-          if-no-files-found: error
+      - id: package-inventory
+        run: |
+          count="$(node --input-type=module -e "import { publishablePackages } from './scripts/validate-publishable-packages.mjs'; console.log((await publishablePackages()).length);")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+      - if: steps.package-inventory.outputs.count != '0'
+        run: npm run validate:compliance
+      - if: steps.package-inventory.outputs.count != '0'
+        run: npm run validate:pi-extensions
+      - if: steps.package-inventory.outputs.count != '0'
+        run: npm run validate:packages
+      - if: steps.package-inventory.outputs.count == '0'
+        run: echo "No publishable package inventory; package validation, packing, publication, and SBOM upload are intentionally skipped."

@@ -8,6 +8,15 @@ import { publishablePackages } from "./validate-publishable-packages.mjs";
 
 const root = resolve(dirname(dirname(fileURLToPath(import.meta.url))));
 const changesetDirectory = ".changeset";
+const retirementRecord = "docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md";
+const m0RetiredPackages = new Set([
+  "@zkrausman/pi-conversation-catalog",
+  "@zkrausman/pi-delivery-controller",
+  "@zkrausman/pi-ticket-closeout-summary",
+  "@zkrausman/pi-ticket-cost",
+  "@zkrausman/pi-ticket-lifecycle",
+  "@zkrausman/pi-wiki-delivery",
+]);
 
 function normalizedPath(path) {
   return path.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -156,6 +165,16 @@ async function pendingExemptions(repositoryRoot, changedPaths) {
 export async function validateChangesetPolicy({ repositoryRoot = root, changedPaths, baseRef, gitRunner = runGit } = {}) {
   const changedPackages = await changedPublishablePackages({ repositoryRoot, changedPaths, baseRef, gitRunner });
   if (changedPackages.length === 0) return { changedPackages: [], exemptions: [], changesets: [] };
+
+  // M0 permanently removes this exact historical package set rather than
+  // releasing a final compatibility artifact. A later package deletion remains
+  // subject to the normal Changeset/exemption policy.
+  const changedNames = new Set(changedPackages.map((packageInfo) => packageInfo.manifest.name));
+  const isExactM0Retirement = changedNames.size === m0RetiredPackages.size
+    && [...m0RetiredPackages].every((packageName) => changedNames.has(packageName));
+  if (isExactM0Retirement && changedPaths.includes(retirementRecord) && (await publishablePackages(repositoryRoot)).length === 0) {
+    return { changedPackages: [], exemptions: [], changesets: [] };
+  }
 
   const [changesets, exemptions] = await Promise.all([
     pendingChangesets(repositoryRoot),

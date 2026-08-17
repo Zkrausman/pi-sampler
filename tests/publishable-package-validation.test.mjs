@@ -27,14 +27,7 @@ const completeArtifact = {
 
 test("publishable package discovery excludes withdrawn private workspaces", async () => {
   const packages = await publishablePackages(root);
-  assert.deepEqual(packages.map((packageInfo) => packageInfo.manifest.name).sort(), [
-    "@zkrausman/pi-conversation-catalog",
-    "@zkrausman/pi-delivery-controller",
-    "@zkrausman/pi-ticket-closeout-summary",
-    "@zkrausman/pi-ticket-cost",
-    "@zkrausman/pi-ticket-lifecycle",
-    "@zkrausman/pi-wiki-delivery",
-  ]);
+  assert.deepEqual(packages, []);
 });
 
 test("packed artifacts must include every declared package and entry-point file", () => {

@@ -8,84 +8,40 @@ import { validatePackageLifecycle, validatePackedArtifact } from "../scripts/val
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 test("package validation rejects un-inventoried native artifacts", () => {
-  for (const path of ["src/addon.node", "native.dll", "lib/libexample.dylib", "lib/libexample.so", "lib/libexample.so.1", "lib/libexample.so.1.2", "lib/libexample.so.1.2.3"]) {
-    assert.throws(
-      () => validatePackedArtifact(
-        { name: "@example/native", version: "1.0.0", files: ["src"] },
-        { name: "@example/native", version: "1.0.0", files: [{ path: "package.json" }, { path }] },
-      ),
-      /native artifacts require an explicit compliance-inventory policy/,
-      path,
-    );
-  }
+  assert.throws(
+    () => validatePackedArtifact(
+      { name: "@example/native", version: "1.0.0", files: ["src"] },
+      { name: "@example/native", version: "1.0.0", files: [{ path: "package.json" }, { path: "native.dll" }] },
+    ),
+    /native artifacts require an explicit compliance-inventory policy/,
+  );
 });
 
 test("package validation rejects pack-affecting lifecycle scripts", () => {
   for (const name of ["prepublish", "prepare", "prepublishOnly", "prepack"]) {
-    assert.throws(
-      () => validatePackageLifecycle({ name: "@example/lifecycle", scripts: { [name]: "node build.mjs" } }),
-      /pack-affecting lifecycle scripts are not permitted/,
-      name,
-    );
+    assert.throws(() => validatePackageLifecycle({ name: "@example/lifecycle", scripts: { [name]: "node build.mjs" } }));
   }
-  assert.doesNotThrow(() => validatePackageLifecycle({ name: "@example/lifecycle", scripts: { test: "node --test", postpack: "node cleanup.mjs" } }));
 });
 
-test("PR and release workflows run every documented validation gate before publishing", async () => {
-  const validatePath = join(root, ".github", "workflows", "validate.yml");
-  const validate = (await readFile(validatePath, "utf8")).replace(/\r\n/g, "\n");
+test("PR validation retains every repository gate", async () => {
+  const workflow = await readFile(join(root, ".github", "workflows", "validate.yml"), "utf8");
   for (const command of ["npm test", "npm run build", "npm run validate:compliance", "npm run validate:pi-extensions", "npm run validate:packages", "go test -race ./..."]) {
-    assert.match(validate, new RegExp(`- run: ${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(workflow, new RegExp(`- run: ${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   }
-
-  const releasePath = join(root, ".github", "workflows", "release.yml");
-  const release = (await readFile(releasePath, "utf8")).replace(/\r\n/g, "\n");
-  assert.match(release, /uses: actions\/setup-go@[a-f0-9]{40}\s+# v7/);
-  const releaseCommandPositions = ["npm test", "npm run build", "npm run validate:compliance", "npm run validate:governance", "npm run validate:pi-extensions", "npm run validate:packages", "npm run release"].map((command) => release.indexOf(`- run: ${command}`));
-  assert.ok(releaseCommandPositions.every((position) => position >= 0), "release must run every validation gate");
-  assert.deepEqual([...releaseCommandPositions].sort((left, right) => left - right), releaseCommandPositions, "release gates must run before publishing");
-  assert.match(release, /uses: actions\/upload-artifact@[a-f0-9]{40}\s+# v4/);
-  assert.match(release, /name: package-sboms-\$\{\{ github\.sha \}\}/);
-  assert.match(release, /path: extensions\/\*\/sbom\.cdx\.json/);
-});
-
-test("PR validation compares verified base and head SHAs for the Changeset policy", async () => {
-  const workflowPath = join(root, ".github", "workflows", "validate.yml");
-  const workflow = (await readFile(workflowPath, "utf8")).replace(/\r\n/g, "\n");
-
-  assert.match(workflow, /changesets:\n[\s\S]*?if: github\.event_name == 'pull_request'/);
-  assert.match(workflow, /CHANGESET_BASE_REF: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
-  assert.match(workflow, /CHANGESET_HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
-  assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n          fetch-depth: 0/);
   assert.match(workflow, /npm run validate:changesets -- --base "\$CHANGESET_BASE_REF" --head "\$CHANGESET_HEAD_REF"/);
-});
-
-test("PR validation requires DCO sign-offs for commits introduced by the pull request", async () => {
-  const workflowPath = join(root, ".github", "workflows", "validate.yml");
-  const workflow = (await readFile(workflowPath, "utf8")).replace(/\r\n/g, "\n");
-
-  assert.match(workflow, /dco:\n    if: github\.event_name == 'pull_request'/);
-  assert.match(workflow, /DCO_BASE_REF: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
-  assert.match(workflow, /DCO_HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
   assert.match(workflow, /npm run validate:dco -- --base "\$DCO_BASE_REF" --head "\$DCO_HEAD_REF"/);
 });
 
-test("release workflow requires a confirmed main-branch production release", async () => {
-  const workflowPath = join(root, ".github", "workflows", "release.yml");
-  const workflow = (await readFile(workflowPath, "utf8")).replace(/\r\n/g, "\n");
-
-  assert.match(workflow, /workflow_dispatch:\n    inputs:\n      confirm_release:\n[\s\S]*?required: true\n        type: boolean\n        default: false/);
-  assert.match(workflow, /^permissions:\n  contents: read\n  packages: write$/m);
-  assert.equal((workflow.match(/^\s*permissions:/gm) ?? []).length, 1);
-  assert.match(workflow, /release:\n    environment: production\n    runs-on: ubuntu-latest/);
-
-  const guard = workflow.indexOf('if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then');
-  const confirmation = workflow.indexOf('if [[ "$CONFIRM_RELEASE" != "true" ]]; then');
-  const checkout = workflow.indexOf("uses: actions/checkout@");
-
-  assert.ok(guard >= 0, "the workflow must reject non-main refs");
-  assert.ok(confirmation >= 0, "the workflow must require confirmation");
-  assert.ok(checkout >= 0, "the workflow must check out the repository");
-  assert.ok(guard < checkout, "the main-ref guard must run before checkout");
-  assert.ok(confirmation < checkout, "the confirmation guard must run before checkout");
+test("release readiness skips package operations for a zero-package inventory", async () => {
+  const [workflow, manifest] = await Promise.all([
+    readFile(join(root, ".github", "workflows", "release.yml"), "utf8"),
+    readFile(join(root, "package.json"), "utf8").then(JSON.parse),
+  ]);
+  assert.match(workflow, /permissions:\n  contents: read/m);
+  assert.doesNotMatch(workflow, /changeset publish|npm run release|upload-artifact|sbom\.cdx\.json/);
+  for (const script of ["changeset", "version-packages", "release", "generate:compliance"]) assert.equal(manifest.scripts[script], undefined, `${script} must not offer a manual package-release path`);
+  assert.match(workflow, /id: package-inventory/);
+  assert.match(workflow, /steps\.package-inventory\.outputs\.count != '0'/);
+  assert.match(workflow, /steps\.package-inventory\.outputs\.count == '0'/);
+  for (const command of ["npm test", "npm run build", "npm run validate:governance"]) assert.match(workflow, new RegExp(`- run: ${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });

@@ -1,38 +1,29 @@
 ---
 type: specification
-title: Generic Pi tooling extraction
-status: in-progress
+title: Self-evolution architecture boundary
+status: m0-retired
 ---
 
-# Generic Pi tooling extraction
+# Self-evolution architecture boundary
 
-## Goal
+## M0 decision
 
-Provide reusable Pi extensions and delivery mechanisms without embedding any
-consumer repository's domain, ticket system, source location, validation
-commands, environment variable names, or evidence layout.
+The previous self-evolution extension implementations are retired from the
+active repository. Their source is preserved only by Git history. See
+[LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md](../LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md)
+for the audited package inventory and replacement map.
 
-## Architecture
+## Forward boundary
 
-- `extensions/` contains Pi-facing integrations.
-- `extensions/delivery-controller/` contains portable dispatch, ledger,
-  redaction, and review mechanisms.
-- `governance/` holds deterministic, offline governance validators.
-- `profiles/` holds schemas and examples. A profile is required for all
-  repository-specific behavior.
+No legacy dispatch, ledger, lifecycle, closeout, cost, catalog, or Wiki code is
+an authority for the next architecture. M1 begins with Ticket Episode v1,
+evidence classes, and the threat model. M2 returns lossless episode memory,
+portable human annotations, and exact model/token/cost accounting. M3–M5 may
+introduce new Delivery, Wiki, lifecycle, and closeout authority only after their
+written contracts establish a safe boundary.
 
 ## Non-goals
 
-- Automatic project discovery, ticket selection, merge authorization, or status
-  changes.
-- Shipping consumer secrets, transcripts, source packets, or local Pi state.
-
-## Completion criteria
-
-1. Legacy consumer-specific Pi extension sources no longer live with a
-   consumer's product code.
-2. Generic source contains no consuming repository default, ticket prefix,
-   environment-variable prefix, domain-specific verification, or binary name.
-3. A profile supplies verification commands, paths, identifiers, and required
-   checks.
-4. Tests cover generic defaults and a generic example profile.
+- Repairing, reinstalling, publishing, or compatibility-wrapping retired code.
+- Treating historical receipts, ledgers, or package artifacts as new authority.
+- Changing Pi Excalidraw, which remains an independent productivity tool.

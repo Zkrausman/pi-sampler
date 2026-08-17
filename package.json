@@ -2,28 +2,20 @@
   "name": "pi-sampler",
   "private": true,
   "version": "0.1.0",
-  "description": "Source monorepo for reusable Pi extension packages.",
+  "description": "Local human/AI productivity tooling and clean-architecture scaffolding.",
   "license": "Apache-2.0",
   "type": "module",
-  "workspaces": [
-    "extensions/*"
-  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --test tests/*.test.mjs extensions/wiki-delivery/src/*.test.mjs",
-    "test:legacy": "node --test extensions/delivery-controller/src/*.test.mjs extensions/wiki-delivery/src/*.test.mjs",
+    "test": "node --test tests/*.test.mjs",
     "validate:governance": "node scripts/run-governance-tests.mjs",
     "validate:packages": "node scripts/validate-publishable-packages.mjs",
     "validate:pi-extensions": "node scripts/validate-pi-extensions.mjs",
     "validate:changesets": "node scripts/validate-changesets.mjs",
     "validate:dco": "node scripts/validate-dco.mjs",
     "validate:adversarial-review": "node scripts/validate-adversarial-review-attestation.mjs",
-    "changeset": "changeset",
-    "version-packages": "changeset version && npm run generate:compliance",
-    "release": "changeset publish",
-    "generate:compliance": "node scripts/generate-package-compliance.mjs",
     "validate:compliance": "node scripts/generate-package-compliance.mjs --check"
   },
   "engines": {
@@ -35,11 +27,13 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@changesets/cli": "^3.0.0",
     "@changesets/parse": "^1.0.0",
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@types/node": "^24.13.3",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.5",
+    "typebox": "^1.3.14",
     "typescript": "^5.9.3",
     "vite": "^8.2.1"
   },

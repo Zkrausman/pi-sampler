@@ -7,9 +7,9 @@ Thanks for improving pi-sampler. By submitting a pull request, you agree that yo
 - Keep changes focused and explain the user-facing behavior they change.
 - Never commit credentials, session archives, generated delivery evidence, or consumer-owned configuration.
 - Add or update tests for behavior changes.
-- Update package documentation when installation, configuration, or commands change.
-- Add a Changeset for every tracked source, package, or documentation change to a publishable extension. Repository-only maintenance is automatically exempt; PR titles and labels are not release-policy inputs.
-- If a publishable-package change intentionally needs no release, add a changed file at `.changeset/exemptions/<descriptive-name>.json` with exactly a non-empty `reason` and the affected `packages`, for example:
+- Update documentation when installation, configuration, or commands change.
+- M0 has no publishable extension packages. Do not introduce a package, Changeset, compatibility layer, or package release without an approved later-milestone contract and release policy.
+- If a future publishable-package change intentionally needs no release, add a changed file at `.changeset/exemptions/<descriptive-name>.json` with exactly a non-empty `reason` and the affected `packages`, for example:
 
   ```json
   {
@@ -76,10 +76,10 @@ npm run validate:adversarial-review # requires the PR base/head/branch/body envi
 cd governance; go test -race ./...
 ```
 
-Each extension is independently versioned. See [the release guide](docs/RELEASING.md) before changing package versions or publishing.
+See [the release status](docs/RELEASING.md) before proposing a future package or publication.
 
 ## Pull requests
 
-Pull requests should describe the problem, approach, validation performed, and any compatibility or release impact. Keep generated or local-only files out of the change. Generated package compliance artifacts (`THIRD-PARTY-NOTICES.md` and `sbom.cdx.json`) are the exception: regenerate and commit them whenever a supported package version or dependency declaration changes.
+Pull requests should describe the problem, approach, validation performed, and any compatibility or release impact. Keep generated or local-only files out of the change. Generated package compliance artifacts (`THIRD-PARTY-NOTICES.md` and `sbom.cdx.json`) are permitted only for a future approved package; M0 has none.
 
 Report security issues through the process in [SECURITY.md](SECURITY.md), not through public issues or pull requests.

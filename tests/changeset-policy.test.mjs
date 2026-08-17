@@ -82,3 +82,53 @@ test("repository-only maintenance is automatically exempt", async () => {
     assert.deepEqual(result, { changedPackages: [], exemptions: [], changesets: [] });
   });
 });
+
+const m0Packages = [
+  ["conversation-catalog", "@zkrausman/pi-conversation-catalog"],
+  ["delivery-controller", "@zkrausman/pi-delivery-controller"],
+  ["ticket-closeout-summary", "@zkrausman/pi-ticket-closeout-summary"],
+  ["ticket-cost", "@zkrausman/pi-ticket-cost"],
+  ["ticket-lifecycle", "@zkrausman/pi-ticket-lifecycle"],
+  ["wiki-delivery", "@zkrausman/pi-wiki-delivery"],
+];
+
+async function withRetiredInventory(callback) {
+  await withFixture(async (repositoryRoot) => {
+    await rm(join(repositoryRoot, "extensions", "example"), { recursive: true, force: true });
+    await writeFile(join(repositoryRoot, "package.json"), JSON.stringify({ name: "retired" }));
+    await mkdir(join(repositoryRoot, "docs"));
+    await writeFile(join(repositoryRoot, "docs", "LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md"), "# retirement\n");
+    const manifests = new Map(m0Packages.map(([directory, name]) => [directory, JSON.stringify({ name, version: "1.0.0", private: false, files: ["src"] })]));
+    const gitRunner = async (args) => {
+      if (args[0] === "rev-parse") return { stdout: "a".repeat(40), stderr: "" };
+      if (args[0] === "show") {
+        const directory = /extensions\/([^/]+)\/package\.json$/.exec(args[1])?.[1];
+        return { stdout: manifests.get(directory), stderr: "" };
+      }
+      throw new Error(`unexpected git invocation: ${args.join(" ")}`);
+    };
+    await callback({ repositoryRoot, gitRunner });
+  });
+}
+
+test("the documented M0 retirement permits only the exact six-package deletion", async () => {
+  await withRetiredInventory(async ({ repositoryRoot, gitRunner }) => {
+    const changedPaths = [...m0Packages.map(([directory]) => `extensions/${directory}/src/index.mjs`), "docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md"];
+    const result = await validateChangesetPolicy({ repositoryRoot, changedPaths, baseRef: "base", gitRunner });
+    assert.deepEqual(result, { changedPackages: [], exemptions: [], changesets: [] });
+  });
+});
+
+test("the M0 record cannot exempt an unrelated package deletion", async () => {
+  await withRetiredInventory(async ({ repositoryRoot, gitRunner }) => {
+    await assert.rejects(
+      validateChangesetPolicy({
+        repositoryRoot,
+        changedPaths: ["extensions/conversation-catalog/src/index.mjs", "docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md"],
+        baseRef: "base",
+        gitRunner,
+      }),
+      /Missing a pending Changeset or changed exemption/,
+    );
+  });
+});
