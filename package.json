@@ -16,7 +16,9 @@
     "validate:changesets": "node scripts/validate-changesets.mjs",
     "validate:dco": "node scripts/validate-dco.mjs",
     "validate:adversarial-review": "node scripts/validate-adversarial-review-attestation.mjs",
-    "validate:compliance": "node scripts/generate-package-compliance.mjs --check"
+    "validate:compliance": "node scripts/generate-package-compliance.mjs --check",
+    "generate:ticket-episode-schema": "node scripts/export-ticket-episode-v1-schema.mjs",
+    "validate:ticket-episode-schema": "node scripts/export-ticket-episode-v1-schema.mjs --check"
   },
   "engines": {
     "node": ">=24"

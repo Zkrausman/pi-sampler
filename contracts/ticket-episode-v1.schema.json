@@ -1,0 +1,437 @@
+{
+  "type": "object",
+  "required": [
+    "schema",
+    "project",
+    "repository",
+    "ticket",
+    "episode",
+    "attempt",
+    "session",
+    "agentRun",
+    "event",
+    "producer",
+    "occurredAt",
+    "sequence",
+    "evidence",
+    "state",
+    "coverage"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "const": "https://pi-sampler.dev/contracts/ticket-episode/v1"
+        },
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        }
+      },
+      "additionalProperties": false
+    },
+    "project": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Project identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "repository": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Repository identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "revision": {
+          "type": "string",
+          "title": "Immutable Git revision",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ticket": {
+      "type": "object",
+      "required": [
+        "system",
+        "id"
+      ],
+      "properties": {
+        "system": {
+          "type": "string",
+          "title": "Work-item system",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "id": {
+          "type": "string",
+          "title": "Ticket or work-item identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "episode": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Episode identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "attempt": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Attempt identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "session": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Session identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentRun": {
+      "type": "object",
+      "required": [
+        "agentId",
+        "runId"
+      ],
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "title": "Agent identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "runId": {
+          "type": "string",
+          "title": "Run identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Event identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "conversation"
+            },
+            {
+              "type": "string",
+              "const": "annotation"
+            },
+            {
+              "type": "string",
+              "const": "usage"
+            },
+            {
+              "type": "string",
+              "const": "artifact"
+            },
+            {
+              "type": "string",
+              "const": "outcome"
+            },
+            {
+              "type": "string",
+              "const": "retrospective"
+            },
+            {
+              "type": "string",
+              "const": "lesson"
+            },
+            {
+              "type": "string",
+              "const": "evolution"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "producer": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Producer identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "human"
+            },
+            {
+              "type": "string",
+              "const": "pi_extension"
+            },
+            {
+              "type": "string",
+              "const": "adapter"
+            },
+            {
+              "type": "string",
+              "const": "model"
+            },
+            {
+              "type": "string",
+              "const": "connected_authority"
+            },
+            {
+              "type": "string",
+              "const": "system"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "occurredAt": {
+      "type": "string",
+      "title": "UTC RFC 3339 timestamp",
+      "format": "date-time"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "title": "Monotonic sequence within an episode"
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "class",
+        "authority"
+      ],
+      "properties": {
+        "class": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "observed_evidence"
+            },
+            {
+              "type": "string",
+              "const": "human_annotation"
+            },
+            {
+              "type": "string",
+              "const": "caller_claim"
+            },
+            {
+              "type": "string",
+              "const": "model_inference"
+            }
+          ]
+        },
+        "authority": {
+          "type": "object",
+          "required": [
+            "level"
+          ],
+          "properties": {
+            "level": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "untrusted"
+                },
+                {
+                  "type": "string",
+                  "const": "attested"
+                }
+              ]
+            },
+            "authorityId": {
+              "type": "string",
+              "title": "Attesting authority identity",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+            },
+            "attestationId": {
+              "type": "string",
+              "title": "Attestation identity",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "state": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "complete"
+        },
+        {
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "type": "string",
+          "const": "quarantined"
+        },
+        {
+          "type": "string",
+          "const": "superseded"
+        },
+        {
+          "type": "string",
+          "const": "conflicting"
+        }
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "status",
+        "expectedEventCount",
+        "observedEventCount",
+        "missingEventIds"
+      ],
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "complete"
+            },
+            {
+              "type": "string",
+              "const": "partial"
+            }
+          ]
+        },
+        "expectedEventCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "observedEventCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missingEventIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "title": "Explicitly missing event identity",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "supersedesEventId": {
+      "type": "string",
+      "title": "Superseded event identity",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+    },
+    "conflictsWithEventIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "title": "Conflicting event identity",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-sampler.dev/contracts/ticket-episode/v1",
+  "title": "Ticket Episode v1 event",
+  "additionalProperties": false
+}
