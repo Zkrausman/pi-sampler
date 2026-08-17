@@ -8,7 +8,7 @@ const output = resolve(root, "contracts", "ticket-episode-v1.schema.json");
 const content = `${JSON.stringify(TicketEpisodeV1Schema, null, 2)}\n`;
 
 if (process.argv.includes("--check")) {
-  const existing = await readFile(output, "utf8").catch(() => "");
+  const existing = (await readFile(output, "utf8").catch(() => "")).replace(/\r\n/g, "\n");
   if (existing !== content) {
     throw new Error("Ticket Episode v1 JSON Schema is stale; run npm run generate:ticket-episode-schema");
   }

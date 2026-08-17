@@ -1,0 +1,2 @@
+# Generated contract schemas are canonical LF JSON on every checkout.
+contracts/*-v1.schema.json text eol=lf

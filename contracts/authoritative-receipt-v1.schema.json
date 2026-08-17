@@ -1,0 +1,658 @@
+{
+  "type": "object",
+  "required": [
+    "schema",
+    "receipt",
+    "project",
+    "repository",
+    "ticket",
+    "episode",
+    "operation",
+    "producer",
+    "authority",
+    "idempotency",
+    "observed",
+    "claims"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "const": "https://pi-sampler.dev/contracts/authoritative-receipt/v1"
+        },
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        }
+      },
+      "additionalProperties": false
+    },
+    "receipt": {
+      "type": "object",
+      "required": [
+        "id",
+        "issuedAt",
+        "expiresAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Receipt identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "issuedAt": {
+          "type": "string",
+          "title": "Canonical UTC RFC 3339 timestamp",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "title": "Canonical UTC RFC 3339 timestamp",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "project": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Project identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "repository": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Repository identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "revision": {
+          "type": "string",
+          "title": "Immutable Git revision",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ticket": {
+      "type": "object",
+      "required": [
+        "system",
+        "id"
+      ],
+      "properties": {
+        "system": {
+          "type": "string",
+          "title": "Work-item system",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "id": {
+          "type": "string",
+          "title": "Ticket identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "episode": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Episode identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "operation": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Operation identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "kind": {
+          "type": "string",
+          "title": "Operation kind",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "producer": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "External producer identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "adapter"
+        }
+      },
+      "additionalProperties": false
+    },
+    "authority": {
+      "type": "object",
+      "required": [
+        "id",
+        "attestation"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Configured authority identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "attestation": {
+          "type": "object",
+          "required": [
+            "id",
+            "bindingDigest"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "title": "Attestation identity",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+            },
+            "bindingDigest": {
+              "type": "string",
+              "title": "Lowercase SHA-256 digest",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "idempotency": {
+      "type": "object",
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "title": "Ownership idempotency key",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "observed": {
+      "type": "object",
+      "required": [
+        "observedAt",
+        "payload",
+        "coverage",
+        "artifacts",
+        "sensitivity"
+      ],
+      "properties": {
+        "observedAt": {
+          "type": "string",
+          "title": "Canonical UTC RFC 3339 timestamp",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "artifactId",
+            "digest",
+            "size"
+          ],
+          "properties": {
+            "artifactId": {
+              "type": "string",
+              "title": "Payload artifact identity",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+            },
+            "digest": {
+              "type": "string",
+              "title": "Lowercase SHA-256 digest",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "coverage": {
+          "type": "object",
+          "required": [
+            "status",
+            "expectedCount",
+            "observedCount",
+            "missingIds"
+          ],
+          "properties": {
+            "status": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "complete"
+                },
+                {
+                  "type": "string",
+                  "const": "partial"
+                }
+              ]
+            },
+            "expectedCount": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observedCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missingIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "title": "Missing observation identity",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+              },
+              "uniqueItems": true,
+              "maxItems": 128
+            }
+          },
+          "additionalProperties": false
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "digest",
+              "size",
+              "identity",
+              "evidenceClass",
+              "coverage",
+              "provenance",
+              "sensitivity"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "title": "Artifact identity",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+              },
+              "digest": {
+                "type": "string",
+                "title": "Lowercase SHA-256 digest",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "identity": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "kind"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "title": "Artifact source identity",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "title": "Artifact identity kind",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "evidenceClass": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "observed_evidence"
+                  },
+                  {
+                    "type": "string",
+                    "const": "human_annotation"
+                  },
+                  {
+                    "type": "string",
+                    "const": "caller_claim"
+                  },
+                  {
+                    "type": "string",
+                    "const": "model_inference"
+                  }
+                ]
+              },
+              "coverage": {
+                "type": "object",
+                "required": [
+                  "status",
+                  "expectedCount",
+                  "observedCount",
+                  "missingIds"
+                ],
+                "properties": {
+                  "status": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "complete"
+                      },
+                      {
+                        "type": "string",
+                        "const": "partial"
+                      }
+                    ]
+                  },
+                  "expectedCount": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "observedCount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "missingIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "title": "Missing artifact coverage identity",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+                    },
+                    "uniqueItems": true,
+                    "maxItems": 128
+                  }
+                },
+                "additionalProperties": false
+              },
+              "provenance": {
+                "type": "object",
+                "required": [
+                  "producerId",
+                  "authorityId",
+                  "receiptId",
+                  "operationId"
+                ],
+                "properties": {
+                  "producerId": {
+                    "type": "string",
+                    "title": "Artifact producer identity",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+                  },
+                  "authorityId": {
+                    "type": "string",
+                    "title": "Artifact authority identity",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+                  },
+                  "receiptId": {
+                    "type": "string",
+                    "title": "Artifact receipt identity",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+                  },
+                  "operationId": {
+                    "type": "string",
+                    "title": "Artifact operation identity",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "sensitivity": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "public"
+                  },
+                  {
+                    "type": "string",
+                    "const": "internal"
+                  },
+                  {
+                    "type": "string",
+                    "const": "confidential"
+                  },
+                  {
+                    "type": "string",
+                    "const": "restricted"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "sensitivity": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "public"
+            },
+            {
+              "type": "string",
+              "const": "internal"
+            },
+            {
+              "type": "string",
+              "const": "confidential"
+            },
+            {
+              "type": "string",
+              "const": "restricted"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "claims": {
+      "type": "object",
+      "required": [
+        "class",
+        "producer",
+        "entries"
+      ],
+      "properties": {
+        "class": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "caller_claim"
+            },
+            {
+              "type": "string",
+              "const": "model_inference"
+            }
+          ]
+        },
+        "producer": {
+          "type": "object",
+          "required": [
+            "id",
+            "kind"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "title": "Claim producer identity",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "adapter"
+                },
+                {
+                  "type": "string",
+                  "const": "caller"
+                },
+                {
+                  "type": "string",
+                  "const": "system"
+                },
+                {
+                  "type": "string",
+                  "const": "model"
+                },
+                {
+                  "type": "string",
+                  "const": "generic_tool"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "valueDigest",
+              "valueSize",
+              "sensitivity"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "title": "Claim name",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+              },
+              "valueDigest": {
+                "type": "string",
+                "title": "Lowercase SHA-256 digest",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "valueSize": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sensitivity": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "public"
+                  },
+                  {
+                    "type": "string",
+                    "const": "internal"
+                  },
+                  {
+                    "type": "string",
+                    "const": "confidential"
+                  },
+                  {
+                    "type": "string",
+                    "const": "restricted"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "maxItems": 32
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-sampler.dev/contracts/authoritative-receipt/v1",
+  "title": "Authoritative adapter receipt v1",
+  "additionalProperties": false
+}
