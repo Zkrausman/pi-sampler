@@ -50,3 +50,25 @@ test("M0 retirement removes every legacy package from active discovery and prese
   assert.equal(await exists(join(root, "src", "extensions", "pi-excalidraw", "index.ts")), true, "Pi Excalidraw must remain present");
   assert.equal(typeof manifest.scripts.build, "string", "the independent application build must remain available");
 });
+
+test("retirement record assigns every retired capability to an exact successor ticket chain", async () => {
+  const retirement = await readFile(join(root, "docs", "LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md"), "utf8");
+  const expectedChains = [
+    ["Conversation Catalog", "AIDEV-126", "AIDEV-127", "M2"],
+    ["Ticket Cost", "AIDEV-128", "AIDEV-129", "M2"],
+    ["Ticket Lifecycle", "AIDEV-123", "AIDEV-124", "AIDEV-130", "M1", "M3"],
+    ["Ticket Closeout Summary", "AIDEV-130", "AIDEV-136", "M3", "M5"],
+    ["Delivery Controller", "AIDEV-125", "AIDEV-131", "AIDEV-137", "M1", "M3", "M5"],
+    ["Wiki Delivery", "AIDEV-131", "AIDEV-137", "M3", "M5"],
+  ];
+  for (const chain of expectedChains) {
+    const [packageName, ...tokens] = chain;
+    const row = retirement.split(/\r?\n/).find((line) => line.startsWith(`| ${packageName} |`));
+    assert.ok(row, `retirement map must contain a ${packageName} row`);
+    for (const token of tokens) assert.match(row, new RegExp(token), `${packageName} must name ${token}`);
+  }
+  assert.match(retirement, /Foundational contracts establish identities, trust boundaries, and allowed claims/);
+  assert.match(retirement, /authoritative evidence\/schema work establishes what can be accepted as a receipt/);
+  assert.match(retirement, /later adapter or UX work may consume those established contracts/);
+  assert.match(retirement, /M4 owns no Delivery or Wiki replacement work/);
+});

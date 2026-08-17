@@ -21,3 +21,23 @@ test("release documentation states that M0 has no supported packages", async () 
   assert.match(readme, /no supported\s+or installable Pi extension packages/);
   assert.match(readme, /Pi Excalidraw remains an independent/);
 });
+
+test("public documentation retains local-data, security, platform, provenance, and surviving-system boundaries", async () => {
+  const [readme, privacy, platform, security, contributing] = await Promise.all([
+    readFile(join(root, "README.md"), "utf8"),
+    readFile(join(root, "docs", "PRIVACY.md"), "utf8"),
+    readFile(join(root, "docs", "PLATFORM-AND-TRADEMARKS.md"), "utf8"),
+    readFile(join(root, "SECURITY.md"), "utf8"),
+    readFile(join(root, "CONTRIBUTING.md"), "utf8"),
+  ]);
+  assert.match(readme, /not affiliated with or endorsed by/);
+  assert.match(readme, /Project profiles/);
+  assert.match(readme, /Optional governance module/);
+  assert.match(readme, /npm run validate:governance/);
+  assert.match(readme, /go test -race \.\/\.\./);
+  assert.match(privacy, /does not\s+provide a repository-operated hosted service, account system, analytics endpoint,\s+or telemetry service/);
+  assert.match(privacy, /do\s+not call a network service or start a subprocess/);
+  assert.match(platform, /not affiliated\s+with, sponsored by, or endorsed by/);
+  assert.match(security, /private vulnerability reporting/);
+  assert.match(contributing, /Developer Certificate of Origin \(DCO\)\s*1\.1/);
+});

@@ -41,6 +41,34 @@ service. It intentionally does not register Pi operations or provide browser UX.
 - [Platform, trademark, and non-affiliation notice](docs/PLATFORM-AND-TRADEMARKS.md)
 - [Contribution provenance and DCO](CONTRIBUTING.md#contribution-provenance-and-dco)
 
+## Project profiles
+
+[`profiles/project-profile.schema.json`](profiles/project-profile.schema.json)
+defines the consumer-owned project-profile shape: work-item identifiers, source
+repository, verification commands, required checks, and evidence/specification
+paths. [`profiles/example-project.json`](profiles/example-project.json) and
+[`profiles/gelt-trading.example.json`](profiles/gelt-trading.example.json) are
+examples, not repository defaults or active runtime configuration. Validate a
+consumer profile against that schema with the consumer's JSON Schema validator;
+repository changes to the schema or examples are covered by `npm test`.
+
+## Optional governance module
+
+[`governance/`](governance/) is a nested Go module containing independent
+validators, reconciliation helpers, schemas, and templates. It does not restore
+or execute a retired extension. Run its current checks from the repository root:
+
+```powershell
+npm run validate:governance
+cd governance
+go test -race ./...
+go run ./cmd/wiki-governance validate -repo-root .
+```
+
+The wiki-governance command also runs in
+[`.github/workflows/wiki-governance.yml`](.github/workflows/wiki-governance.yml)
+on pull requests and pushes to `main`.
+
 ## Development
 
 ```powershell
