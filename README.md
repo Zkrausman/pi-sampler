@@ -10,9 +10,19 @@ or installable Pi extension packages in this repository. The retirement decision
 the hostile-audit conclusion, and the M1–M5 replacement map are recorded in
 [the retirement record](docs/LEGACY-SELF-EVOLUTION-EXTENSIONS-RETIRED.md).
 
-Pi Excalidraw remains an independent project-local human/AI productivity tool.
-It creates and reads local `.excalidraw` architecture diagrams with deterministic
-parsing and no cloud/API calls.
+## Future plugin boundary
+
+`pi-sampler` remains the umbrella repository for multiple independent Pi
+extensions. Its current M0 inventory contains zero supported or installable
+**packaged** extensions. `pi-evolution` will be the single coherent
+self-evolution plugin, built only through the approved M1–M5 milestone
+contracts and release policy.
+
+Pi Excalidraw remains a separate, human-in-the-loop productivity plugin. It
+creates and reads local `.excalidraw` architecture diagrams with deterministic
+parsing and no cloud/API calls. It does **not** own lifecycle authority,
+evolution evidence, lessons, or promotion decisions. Future packages may be
+introduced only through their approved milestone contracts and release policy.
 
 ### Pi Excalidraw project-local extension
 
@@ -28,10 +38,29 @@ Start Pi in this trusted project (or use `/reload`). The extension registers
 `.excalidraw` paths, use only the local filesystem, and never use a network
 service or subprocess.
 
+`generate_diagram` accepts constrained architecture statements, for example:
+
+```text
+nodes: Client, API, Database; Client -> API -> Database
+```
+
+`read_diagram` returns JSON-formatted visual nodes and arrow connections. Both
+tools bound descriptions, scene-file size, JSON nesting, elements, labels, and
+summary output. They reject traversal, malformed scene data, symlink escapes,
+and non-regular files rather than reading arbitrary paths.
+
+The reader opens and verifies one file descriptor to reduce path/symlink
+replacement exposure. Portable Node filesystem APIs cannot atomically guarantee
+that a resolved pathname remains inside the project when a hostile concurrent
+actor replaces filesystem objects after validation. Use Pi Excalidraw only in a
+trusted local project; it is not a defense against a hostile filesystem.
+
 The separate [project-local SQLite workspace boundary](docs/PI-EXCALIDRAW-WORKSPACE.md)
 stores bounded native scenes at `.pi/excalidraw/workspace.sqlite`, with
 conditional revisions, import/export, and an optional IPv4-loopback-only HTTP
-service. It intentionally does not register Pi operations or provide browser UX.
+service. It requires Node 24 or later and its experimental built-in
+`node:sqlite` API; see that document for the full persistence boundary. It
+intentionally does not register Pi operations or provide browser UX.
 
 ## Public-project policies
 

@@ -19,7 +19,7 @@ test("release documentation states that M0 has no supported packages", async () 
   assert.match(releasing, /no consumer\s+installation procedure/);
   assert.doesNotMatch(releasing, retiredNames);
   assert.match(readme, /no supported\s+or installable Pi extension packages/);
-  assert.match(readme, /Pi Excalidraw remains an independent/);
+  assert.match(readme, /Pi Excalidraw remains a separate, human-in-the-loop productivity plugin/);
 });
 
 test("public documentation retains local-data, security, platform, provenance, and surviving-system boundaries", async () => {
@@ -31,6 +31,16 @@ test("public documentation retains local-data, security, platform, provenance, a
     readFile(join(root, "CONTRIBUTING.md"), "utf8"),
   ]);
   assert.match(readme, /not affiliated with or endorsed by/);
+  assert.match(readme, /umbrella repository for multiple independent Pi\s+extensions/);
+  assert.match(readme, /zero supported or installable\s+\*\*packaged\*\* extensions/);
+  assert.match(readme, /pi-evolution.*single coherent\s+self-evolution plugin/s);
+  assert.match(readme, /Pi Excalidraw remains a separate, human-in-the-loop productivity plugin/);
+  assert.match(readme, /does \*\*not\*\* own lifecycle authority,\s+evolution evidence, lessons, or promotion decisions/);
+  assert.match(readme, /Use Pi Excalidraw only in a\s+trusted local project/);
+  assert.match(readme, /hostile concurrent\s+actor replaces filesystem objects after validation/);
+  assert.match(readme, /Node 24 or later and its experimental built-in\s+`node:sqlite` API/);
+  assert.match(readme, /nodes: Client, API, Database; Client -> API -> Database/);
+  assert.match(readme, /JSON-formatted visual nodes and arrow connections/);
   assert.match(readme, /Project profiles/);
   assert.match(readme, /Optional governance module/);
   assert.match(readme, /npm run validate:governance/);
