@@ -134,8 +134,8 @@ to reserve aggregate capacity for every new evidence artifact, the receipt
 artifact, commit, and durable acknowledgement. The narrow batch admission
 publishes an authenticated staging marker before its first artifact. Its HMAC
 and the immutable commit envelope bind one batch ID to the exact commit and its
-complete artifact references; a retained post-fsync acknowledgement is the
-only durable acceptance proof. Recovery validates all of those bindings before
+complete artifact references; a retained acknowledgement is acceptance proof
+only after its own containing directory fsync completes. Recovery validates all of those bindings before
 performing any cleanup. A valid but unacknowledged batch removes only its
 specific commit and newly-published artifacts after proving no other commit
 references them. An acknowledged batch is retained even if a stale pending

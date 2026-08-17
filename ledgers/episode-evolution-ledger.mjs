@@ -250,7 +250,7 @@ export class EpisodeEvolutionLedger {
     const admitted = this.#checkAdmission(e); if (admitted.idempotent) return { status: "idempotent", digest: e.digest, artifacts: refs };
     const directory = this.#path(this.commitDirectory, safe(record.episode.id)), target = join(directory, `commit-${String(record.sequence).padStart(16, "0")}-${e.digest}.json`);
     const marker = this.#path(".staging", `receipt-batch-${batch.id}.json`), markerDescriptor = { format: 2, committed: false, batch, commit: { directory: this.commitDirectory, episode: safe(record.episode.id), name: basename(target), digest: e.digest } }, markerBody = stable(this.#signedReceiptBatch(markerDescriptor)), acknowledgement = this.#receiptBatchAckPath(markerDescriptor), acknowledgementBody = stable(this.#signedReceiptBatch({ ...markerDescriptor, committed: true }));
-    const reservation = await this.#reservePublications([...newWrites.map((write) => ({ target: write.target, contents: write.bytes })), { target, contents: body }, { target: acknowledgement, contents: acknowledgementBody }]); let committed = false;
+    const reservation = await this.#reservePublications([...newWrites.map((write) => ({ target: write.target, contents: write.bytes })), { target, contents: body }, { target: acknowledgement, contents: acknowledgementBody }]); let committed = false, acknowledgementDurable = false;
     try {
       // This durable marker is published before the first artifact. On crash,
       // #recoverStaging removes its listed artifacts unless its post-fsync
@@ -261,10 +261,14 @@ export class EpisodeEvolutionLedger {
       await this.#atomicCreate(target, body, "receipt_commit", reservation);
       // The retained, authenticated acknowledgement is acceptance evidence. It
       // also defeats replayed pending markers after the staging marker is gone.
-      await this.#atomicCreate(acknowledgement, acknowledgementBody, "receipt_batch_ack", reservation);
+      try { await this.#atomicCreate(acknowledgement, acknowledgementBody, "receipt_batch_ack", reservation); acknowledgementDurable = true; }
+      catch (error) { acknowledgementDurable = error.publicationDurable === true; throw error; }
       await this.#atomicReplace(marker, acknowledgementBody, "receipt_batch_commit", reservation); committed = true; this.#admit(e); await unlink(marker); await fsyncDir(this.#path(".staging")); await this.#recount(); return { status: "committed", digest: e.digest, artifacts: refs };
     } catch (error) {
-      if (!committed && await this.#receiptBatchAcknowledged(markerDescriptor)) { await this.#reconcile(); await unlink(marker).catch((cause) => { if (cause.code !== "ENOENT") throw cause; }); return { status: "committed", digest: e.digest, artifacts: refs, recovered: true }; }
+      if (!committed && acknowledgementDurable && await this.#receiptBatchAcknowledged(markerDescriptor)) { await this.#reconcile(); await unlink(marker).catch((cause) => { if (cause.code !== "ENOENT") throw cause; }); return { status: "committed", digest: e.digest, artifacts: refs, recovered: true }; }
+      // A link is not acceptance until its containing acknowledgement directory
+      // was synced. Remove an uncertain acknowledgement before marker recovery.
+      if (!acknowledgementDurable) { await unlink(acknowledgement).catch((cause) => { if (cause.code !== "ENOENT") throw cause; }); await fsyncDir(this.#path(".receipt-batch-acks")); }
       if (await exists(marker)) await this.#recoverReceiptBatch(marker, true);
       else { for (const write of newWrites) await unlink(write.target).catch((cause) => { if (cause.code !== "ENOENT") throw cause; }); await fsyncDir(this.#path("artifacts")); }
       await this.#recoverAfterMutation(); throw error;

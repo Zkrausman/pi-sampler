@@ -192,6 +192,24 @@ test("all prepublication artifact and commit failures are residue-free and retry
   });
 });
 
+test("every receipt-batch acknowledgement boundary requires directory durability", async (t) => {
+  const lifecycle = [`before_receipt_batch_ack_stage`, `after_receipt_batch_ack_write`, `after_receipt_batch_ack_sync`, `before_receipt_batch_ack_publish`, `after_receipt_batch_ack_publish`, `after_receipt_batch_ack_dirsync`];
+  for (const boundary of lifecycle) await t.test(boundary, async () => {
+    const root = await mkdtemp(join(tmpdir(), "authority-receipt-ack-boundary-")); let ledger;
+    try {
+      ledger = await AuthoritativeReceiptLedger.open({ root, trustRoots: [fakeTrustRoot()], now: conformanceNow, faultInjector: (name) => name === boundary });
+      const fixture = receiptFixture(), durable = boundary === "after_receipt_batch_ack_dirsync";
+      if (durable) assert.equal((await ledger.accept(fixture.receipt, { artifactBodies: fixture.artifactBodies })).status, "committed");
+      else await assert.rejects(ledger.accept(fixture.receipt, { artifactBodies: fixture.artifactBodies }));
+      assert.equal((await ledger.lookup({ episodeId: "episode-1", idempotencyKey: "operation-key-1" })).status, durable ? "stored_not_reverified" : "missing");
+      if (!durable) assert.deepEqual(await artifactNames(root), []);
+      await ledger.close(); ledger = await AuthoritativeReceiptLedger.open({ root, trustRoots: [fakeTrustRoot()], now: conformanceNow });
+      if (!durable) assert.equal((await ledger.accept(fixture.receipt, { artifactBodies: fixture.artifactBodies })).status, "committed");
+      assert.equal((await ledger.lookup({ episodeId: "episode-1", idempotencyKey: "operation-key-1" })).status, "stored_not_reverified");
+    } finally { await ledger?.close(); await rm(root, { recursive: true, force: true }); }
+  });
+});
+
 test("crash after artifact publication recovers the durable batch marker without residue", async () => {
   const root = await mkdtemp(join(tmpdir(), "authority-receipt-crash-"));
   try {
