@@ -45,7 +45,7 @@ The agent **must** strictly adhere to the following execution constraints:
 As per the Global **Tech Planning Standard**, you must physically write the plan to the repository. **Do not just generate an out-of-band chat artifact.**
 
 1. Use the `write_to_file` tool to save the plan to: `docs/techPlans/[TICKET-ID]-implementation-plan.md`
-2. Commit and push the file to a new branch, and open a PR.
+2. Commit and push the file to a new branch, and open a PR. **CRITICAL:** You must sign-off your commits using the `-s` flag (e.g., `git commit -s -m "..."`) or the repository's DCO check will fail.
 
 The content of the file **must** use the rigid, copy-pasteable Markdown template below. Do not deviate from these headers.
 
