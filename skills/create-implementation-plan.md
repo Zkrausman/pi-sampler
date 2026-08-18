@@ -44,8 +44,13 @@ The agent **must** strictly adhere to the following execution constraints:
 
 As per the Global **Tech Planning Standard**, you must physically write the plan to the repository. **Do not just generate an out-of-band chat artifact.**
 
-1. Use the `write_to_file` tool to save the plan to: `docs/techPlans/[TICKET-ID]-implementation-plan.md`
-2. Commit and push the file to a new branch, and open a PR. **CRITICAL:** You must sign-off your commits using the `-s` flag (e.g., `git commit -s -m "..."`) or the repository's DCO check will fail.
+1. **Linear SDLC Sync:** Before committing, you **must** use the `linear_edit_issue` MCP tool to update the target issue:
+   *   Set the **Estimate** (T-Shirt size: XS, S, M, L, XL) matching the complexity found during the Adversarial Review. If the size exceeds XL, halt execution and request the issue be broken down.
+   *   Apply the `AI-Planned` label if the plan is completely successful and ready for a worker agent.
+   *   Apply the `High-Risk` label if the Adversary flagged major architectural dependencies or state migrations.
+   *   Apply the `Needs-Human` label if you hit an unresolvable roadblock or context limit.
+2. Use the `write_to_file` tool to save the plan to: `docs/techPlans/[TICKET-ID]-implementation-plan.md`
+3. Commit and push the file to a new branch, and open a PR. **CRITICAL:** You must sign-off your commits using the `-s` flag (e.g., `git commit -s -m "..."`) or the repository's DCO check will fail.
 
 The content of the file **must** use the rigid, copy-pasteable Markdown template below. Do not deviate from these headers.
 
@@ -53,7 +58,7 @@ The content of the file **must** use the rigid, copy-pasteable Markdown template
 # Implementation Plan: [TICKET-ID]
 
 ## Effort & Risk Analysis
-*   **Complexity:** [Small / Medium / Large]
+*   **Complexity (T-Shirt):** [XS / S / M / L / XL]
 *   **Estimated Effort:** [e.g., 2-4 hours, 1-2 days]
 *   **Primary Risk:** [What is the most likely thing to go wrong during execution?]
 
