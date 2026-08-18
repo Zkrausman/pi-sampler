@@ -1,11 +1,11 @@
 ---
 name: create-implementation-plan
-description: "AI agent skill defining the Definition of Done for all feature planning. Generates a strict IMPLEMENTATION_PLAN.md artifact."
+description: "AI agent skill defining the Definition of Done for all feature planning. Generates a strict implementation plan committed to docs/techPlans/."
 ---
 
 # Skill: Create Implementation Plan
 
-This document serves as the **Definition of Done** for all feature planning. It is a strict protocol that any AI agent must follow to generate an `IMPLEMENTATION_PLAN.md` artifact.
+This document serves as the **Definition of Done** for all feature planning. It is a strict protocol that any AI agent must follow to generate and commit an implementation plan.
 
 ## 1. Required Inputs (The Context)
 
@@ -22,7 +22,7 @@ To protect context limits and maximize reasoning, you **must** orchestrate the f
    * Spawn a `research` subagent to ingest the raw issue ticket, extract `pith` file boundaries, and summarize the relevant `governance/` policies.
    * *Compute Effort: Medium (Fast, efficient lookup).*
 2. **The Architect (Primary Agent)**:
-   * Use your own context (as Lead Architect) to synthesize the Researcher's summary and draft the initial `IMPLEMENTATION_PLAN.md`.
+   * Use your own context (as Lead Architect) to synthesize the Researcher's summary and draft the initial Implementation Plan.
 3. **The Adversary (`Model: inherit`)**:
    * Spawn an `adversary` subagent to review the draft. Instruct it to aggressively critique the plan for logical flaws, missing test cases, and governance violations. You must resolve its critiques before finalizing the output.
    * *Compute Effort: High (Deep reasoning, matches your exact UI configuration).*
@@ -40,12 +40,17 @@ The agent **must** strictly adhere to the following execution constraints:
     *   Define exact test cases required to validate the feature.
     *   Example: `go test -race <boundaries>` must be explicitly specified for the affected components.
 
-## 4. The Output Template (The Handoff)
+## 4. The Output Template & Handoff (Tech Planning Standard)
 
-The agent **must** output the final plan using the rigid, copy-pasteable Markdown template below. Do not deviate from these headers.
+As per the Global **Tech Planning Standard**, you must physically write the plan to the repository. **Do not just generate an out-of-band chat artifact.**
+
+1. Use the `write_to_file` tool to save the plan to: `docs/techPlans/[TICKET-ID]-implementation-plan.md`
+2. Commit and push the file to a new branch, and open a PR.
+
+The content of the file **must** use the rigid, copy-pasteable Markdown template below. Do not deviate from these headers.
 
 ```markdown
-# Implementation Plan
+# Implementation Plan: [TICKET-ID]
 
 ## Effort & Risk Analysis
 *   **Complexity:** [Small / Medium / Large]
