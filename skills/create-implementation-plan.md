@@ -14,7 +14,20 @@ Before generating the implementation plan, the agent **must** ingest and analyze
 *   **Relevant File Boundaries**: Codebase context and function signatures pulled via **pith's high-fidelity parsers**.
 *   **Architecture Exports**: Any provided `.excalidraw` JSON architecture exports that dictate structural design and component relationships.
 
-## 2. Execution Rules (The Guardrails)
+## 2. Orchestration Rules (The Subagent Workflow)
+
+To protect context limits and maximize reasoning, you **must** orchestrate the following subagents:
+
+1. **The Researcher (`Model: flash`)**: 
+   * Spawn a `research` subagent to ingest the raw issue ticket, extract `pith` file boundaries, and summarize the relevant `governance/` policies.
+   * *Compute Effort: Medium (Fast, efficient lookup).*
+2. **The Architect (Primary Agent)**:
+   * Use your own context (as Lead Architect) to synthesize the Researcher's summary and draft the initial `IMPLEMENTATION_PLAN.md`.
+3. **The Adversary (`Model: inherit`)**:
+   * Spawn an `adversary` subagent to review the draft. Instruct it to aggressively critique the plan for logical flaws, missing test cases, and governance violations. You must resolve its critiques before finalizing the output.
+   * *Compute Effort: High (Deep reasoning, matches your exact UI configuration).*
+
+## 3. Execution Rules (The Guardrails)
 
 The agent **must** strictly adhere to the following execution constraints:
 
@@ -27,12 +40,17 @@ The agent **must** strictly adhere to the following execution constraints:
     *   Define exact test cases required to validate the feature.
     *   Example: `go test -race <boundaries>` must be explicitly specified for the affected components.
 
-## 3. The Output Template (The Handoff)
+## 4. The Output Template (The Handoff)
 
 The agent **must** output the final plan using the rigid, copy-pasteable Markdown template below. Do not deviate from these headers.
 
 ```markdown
 # Implementation Plan
+
+## Effort & Risk Analysis
+*   **Complexity:** [Small / Medium / Large]
+*   **Estimated Effort:** [e.g., 2-4 hours, 1-2 days]
+*   **Primary Risk:** [What is the most likely thing to go wrong during execution?]
 
 ## Expected File Changes
 *List all files that will be modified, created, or deleted.*
