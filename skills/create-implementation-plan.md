@@ -18,6 +18,9 @@ Before generating the implementation plan, the agent **must** ingest and analyze
 
 To protect context limits and maximize reasoning, you **must** orchestrate the following subagents:
 
+0. **Workspace Preparation:**
+   * Run `squire prep [TICKET-ID]` to fetch the latest `main` branch and create an isolated git worktree.
+   * Command: `cd ../ai-workspaces/[TICKET-ID]` to move into the isolated workspace before doing any research or code changes.
 1. **The Researcher (`Model: flash`)**: 
    * Spawn a `research` subagent to ingest the raw issue ticket, extract `pith` file boundaries, and summarize the relevant `governance/` policies.
    * *Compute Effort: Medium (Fast, efficient lookup).*
