@@ -20,7 +20,8 @@
     "generate:ticket-episode-schema": "node scripts/export-ticket-episode-v1-schema.mjs",
     "validate:ticket-episode-schema": "node scripts/export-ticket-episode-v1-schema.mjs --check",
     "generate:authoritative-receipt-schema": "node scripts/export-authoritative-receipt-v1-schema.mjs",
-    "validate:authoritative-receipt-schema": "node scripts/export-authoritative-receipt-v1-schema.mjs --check"
+    "validate:authoritative-receipt-schema": "node scripts/export-authoritative-receipt-v1-schema.mjs --check",
+    "prepare": "npx simple-git-hooks"
   },
   "engines": {
     "node": ">=24"
@@ -37,6 +38,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.5",
+    "simple-git-hooks": "^2.13.1",
     "typebox": "^1.3.14",
     "typescript": "^5.9.3",
     "vite": "^8.2.1"
@@ -47,5 +49,9 @@
       "nanoid": "5.1.16"
     },
     "lodash-es": "4.18.1"
+  },
+  "simple-git-hooks": {
+    "prepare-commit-msg": "node scripts/hooks/prepare-commit-msg.mjs $1",
+    "pre-push": "node scripts/hooks/pre-push.mjs"
   }
 }
