@@ -47,11 +47,12 @@ The agent **must** strictly adhere to the following execution constraints:
 
 As per the Global **Tech Planning Standard**, you must physically write the plan to the repository. **Do not just generate an out-of-band chat artifact.**
 
-1. **Linear SDLC Sync:** Before committing, you **must** use the `linear_edit_issue` MCP tool to update the target issue:
-   *   Set the **Estimate** (T-Shirt size: XS, S, M, L, XL) matching the complexity found during the Adversarial Review. If the size exceeds XL, halt execution and request the issue be broken down.
-   *   Apply the `AI-Planned` label if the plan is completely successful and ready for a worker agent.
-   *   Apply the `High-Risk` label if the Adversary flagged major architectural dependencies or state migrations.
-   *   Apply the `Needs-Human` label if you hit an unresolvable roadblock or context limit.
+1. **Linear SDLC Sync**: Use the `linear` MCP tool's `save_issue` function to:
+    *   Set the ticket's **Estimate** (T-Shirt size: XS, S, M, L, XL).
+    *   Add the `AI-Planned` label.
+    *   Transition the issue's **state** to `"In Review"`.
+    *   Apply the `High-Risk` label if the Adversary flagged major architectural dependencies or state migrations.
+    *   Apply the `Needs-Human` label if you hit an unresolvable roadblock or context limit.
 2. Use the `write_to_file` tool to save the plan to: `docs/techPlans/[TICKET-ID]-implementation-plan.md`
 3. Commit and push the file to a new branch, and open a PR. **CRITICAL:** You must sign-off your commits using the `-s` flag (e.g., `git commit -s -m "..."`) or the repository's DCO check will fail.
 4. **Adversarial Review Evidence:** Any branch matching a ticket pattern (e.g. `zkrausman/aidev-*`) strictly requires a JSON attestation marker in the PR body. You **must** generate it and append it to the PR body using the repository's generator utility (e.g. `node scripts/generate-review-packet.mjs` or a custom script wrapping its output). For example, write and run this temporary script:
