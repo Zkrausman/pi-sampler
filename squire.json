@@ -1,0 +1,5 @@
+{
+  "macros": {
+    "prep": "git fetch origin main; git worktree add -B $1 ../ai-workspaces/$1 origin/main"
+  }
+}
