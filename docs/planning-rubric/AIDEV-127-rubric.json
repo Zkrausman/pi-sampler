@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "ticket": "AIDEV-127",
+  "trust_boundaries": {
+    "controller": "ReviewUX",
+    "implementer": "AnnotationLedger",
+    "reviewer": "Human",
+    "no_self_approval": true
+  },
+  "overlap_search": "Verified no existing annotation storage bounded engine exists other than EpisodeEvolutionLedger",
+  "non_go_verification": "npm run test",
+  "tests": {
+    "behavioral": true,
+    "negative_cases": true,
+    "async_safety": true,
+    "secret_redaction": true
+  }
+}
