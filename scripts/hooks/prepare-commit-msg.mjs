@@ -3,7 +3,7 @@ import fs from 'fs';
 import { execSync } from 'child_process';
 
 const commitMsgFile = process.argv[2];
-if (!commitMsgFile || !fs.existsSync(commitMsgFile)) {
+if (!commitMsgFile || !fs.existsSync(commitMsgFile) || fs.statSync(commitMsgFile).isDirectory()) {
   process.exit(0);
 }
 
