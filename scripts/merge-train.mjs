@@ -107,6 +107,28 @@ async function mergeTrain() {
     try {
       execSync(`gh pr merge ${prNum} --squash --admin`, { cwd, stdio: 'inherit' });
       console.log(`  ✅ Successfully merged PR ${prNum}!`);
+      
+      const ticketMatch = branch.match(/(aidev-\d+)/i);
+      if (ticketMatch && process.env.LINEAR_API_KEY) {
+        console.log(`  Transitioning Linear ticket ${ticketMatch[1].toUpperCase()} to Ready for Dev...`);
+        try {
+          const resp = await fetch('https://api.linear.app/graphql', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': process.env.LINEAR_API_KEY
+            },
+            body: JSON.stringify({
+              query: `mutation IssueUpdate($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }`,
+              variables: { id: ticketMatch[1].toUpperCase(), stateId: "03f5902c-293a-4c3e-9d0d-d226416002d7" }
+            })
+          });
+          const json = await resp.json();
+          if (json.errors) console.log(`  ⚠️ Linear transition failed: ${json.errors[0].message}`);
+        } catch(e) {
+          console.log(`  ⚠️ Failed to reach Linear API.`);
+        }
+      }
     } catch(err) {
       console.log(`  ❌ Failed to merge PR ${prNum}.`);
     }
