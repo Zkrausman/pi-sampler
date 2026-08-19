@@ -32,6 +32,7 @@ When invoked with a target issue (e.g. `AIDEV-148`), you must strictly follow th
 ### 5. Final Revision & Commit (You)
 *   Pass the Red-Teamer's critiques back to the Architect for a final revision.
 *   Once the plan is bulletproof, you (the Orchestrator) use `write_to_file` to save it to `docs/techPlans/[TICKET-ID]-implementation-plan.md`.
+*   **Linear SDLC Sync**: Use the `linear` MCP tool to set the ticket's **Estimate** (T-Shirt size: XS, S, M, L, XL) matching the complexity finalized by the Architect. If the size exceeds XL, halt execution and request the issue be broken down.
 *   Set the appropriate Linear ticket labels (`AI-Planned` or `High-Risk`), commit the branch with the `-s` (DCO) flag, and push the branch to origin.
 *   Finally, **you must open a Pull Request** using the `gh pr create` command and hand it off to the user.
 
