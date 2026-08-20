@@ -84,8 +84,8 @@ function artifactIdentity(lesson) { return `lesson-v1-${sha256(`${lesson.id}\u00
 function sourceTickets(lesson) { return new Set([...(lesson.provenance?.sourceTickets ?? []), ...(lesson.evidence ?? []).map((entry) => entry.ticketId).filter(Boolean)]); }
 function sourceEpisodes(lesson) { return new Set([...(lesson.provenance?.sourceEpisodes ?? []), ...(lesson.evidence ?? []).map((entry) => entry.episodeId).filter(Boolean)]); }
 function sourceEvents(lesson) { return new Set((lesson.evidence ?? []).map((entry) => entry.eventId).filter(Boolean)); }
-function active(lesson) { return ACTIVE_STATES.has(lesson.state); }
-function terminal(lesson) { return TERMINAL_STATES.has(lesson.state); }
+function active(lesson) { return Boolean(lesson && ACTIVE_STATES.has(lesson.state)); }
+function terminal(lesson) { return Boolean(lesson && TERMINAL_STATES.has(lesson.state)); }
 
 function conditionValue(condition) {
   if (condition.value !== undefined) return String(condition.value);
@@ -145,6 +145,7 @@ export class LessonRegistry {
   #versions = new Map();
   #sequences = new Map();
   #rebuildPromise = Promise.resolve();
+  #admissions = Promise.resolve();
 
   constructor({ ledger, projectId = "pi-sampler", repositoryId = "github.com/Zkrausman/pi-sampler", repositoryRevision = "0".repeat(40), ticket = { system: "lesson-registry", id: "LESSON-REGISTRY-V1" }, now = Date.now, limits = {}, currentRepositoryRevision, currentEvaluatorIdentity } = {}) {
     if (!ledger || typeof ledger !== "object") throw new LessonRegistryError("ledger_required", "an EpisodeEvolutionLedger facade is required");
@@ -240,16 +241,25 @@ export class LessonRegistry {
     return parsed;
   }
 
+  #checkCacheAdmission(lesson, maps = { latest: this.#latest, versions: this.#versions }) {
+    const key = lessonKey(lesson), priorVersion = maps.versions.get(key), priorLesson = maps.latest.get(lesson.id);
+    if (!priorVersion && maps.versions.size >= this.limits.maxStoredVersions) throw new LessonRegistryError("lesson_history_limit", "lesson registry history bound exceeded");
+    if (active(lesson) && !active(priorLesson)) {
+      let activeCount = 0;
+      for (const candidate of maps.latest.values()) if (active(candidate)) activeCount += 1;
+      if (activeCount >= this.limits.maxActiveLessons) throw new LessonRegistryError("active_lesson_limit", "lesson registry active lesson bound exceeded");
+    }
+  }
+
   #remember(lesson, maps = { latest: this.#latest, versions: this.#versions, sequences: this.#sequences }) {
     const key = lessonKey(lesson);
     const prior = maps.versions.get(key);
     if (prior && prior.contentDigest !== lesson.contentDigest) throw new LessonRegistryConflictError("lesson_version_conflict", "one lesson version has multiple immutable content identities", { lessonId: lesson.id, version: lesson.version });
+    this.#checkCacheAdmission(lesson, maps);
     if (!prior) maps.versions.set(key, { contentDigest: lesson.contentDigest, states: [] });
-    if (maps.versions.size > this.limits.maxStoredVersions) throw new LessonRegistryError("lesson_history_limit", "lesson registry history bound exceeded");
     const version = maps.versions.get(key);
     if (!version.states.some((stateEntry) => stateEntry.state === lesson.state && stateEntry.updatedAt === lesson.updatedAt && stateEntry.contentDigest === lesson.contentDigest)) version.states.push({ state: lesson.state, updatedAt: lesson.updatedAt ?? lesson.createdAt, contentDigest: lesson.contentDigest });
     maps.latest.set(lesson.id, clone(lesson));
-    if (maps.latest.size > this.limits.maxActiveLessons && [...maps.latest.values()].some(active)) throw new LessonRegistryError("active_lesson_limit", "lesson registry active lesson bound exceeded");
   }
 
   async rebuild({ batchSize = this.limits.maxRebuildBatch } = {}) {
@@ -374,7 +384,16 @@ export class LessonRegistry {
     }
   }
 
-  async #persistAndRemember(lesson) {
+  #persistAndRemember(lesson) {
+    const run = this.#admissions.catch(() => {}).then(() => this.#persistAndRememberExclusive(lesson));
+    this.#admissions = run.then(() => {}, () => {});
+    return run;
+  }
+
+  async #persistAndRememberExclusive(lesson) {
+    // Preflight before the first durable write. A cache-limit rejection must
+    // never leave a lesson event that rebuild cannot represent.
+    this.#checkCacheAdmission(lesson);
     const snapshot = { latest: this.#latest, versions: this.#versions, sequences: this.#sequences };
     try {
       const persisted = await this.#persist(lesson);

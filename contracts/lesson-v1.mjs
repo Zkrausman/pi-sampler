@@ -263,6 +263,7 @@ function semanticException(exception, lesson, errors) {
   const scopeTarget = exception.scope?.target;
   if (scopeKind !== "avoid") errors.push(issue("catastrophic_exception_scope_invalid", "catastrophic safety exception scope must be a narrow avoid prohibition", "/catastrophicSafetyException/scope"));
   if (typeof scopeTarget !== "string" || scopeTarget !== lesson?.behavior?.target) errors.push(issue("catastrophic_exception_target_mismatch", "catastrophic safety exception target must exactly bind the avoided behavior target", "/catastrophicSafetyException/scope/target"));
+  if ((lesson?.applicability?.conditions?.length ?? 0) > 4) errors.push(issue("catastrophic_exception_condition_limit", "catastrophic safety exceptions may bind no more than four applicability conditions", "/applicability/conditions"));
   if (exception.approvedAt !== undefined && !canonicalTimestamp(exception.approvedAt)) errors.push(issue("timestamp_not_canonical", "approvedAt must be a canonical UTC RFC 3339 timestamp", "/catastrophicSafetyException/approvedAt"));
   if (exception.expiresAt !== undefined && !canonicalTimestamp(exception.expiresAt)) errors.push(issue("timestamp_not_canonical", "expiresAt must be a canonical UTC RFC 3339 timestamp", "/catastrophicSafetyException/expiresAt"));
   const { episodes, tickets, events } = evidenceIdentitySets(lesson ?? {});

@@ -66,6 +66,11 @@ test("catastrophic safety metadata is narrow, bound to evidence, and fail-closed
   assert.equal(validateLessonV1(broad).ok, false);
   const mismatchedTarget = catastrophicLesson({ catastrophicSafetyException: { ...candidate.catastrophicSafetyException, scope: { kind: "avoid", target: "different-target" } } });
   assert.equal(validateLessonV1(mismatchedTarget).ok, false);
+  const broadConditions = catastrophicLesson({ applicability: { conditions: [
+    { field: "a", operator: "exists" }, { field: "b", operator: "exists" }, { field: "c", operator: "exists" },
+    { field: "d", operator: "exists" }, { field: "e", operator: "exists" },
+  ] } });
+  assert.equal(validateLessonV1(broadConditions).ok, false);
 });
 
 test("Lesson schema exporter emits only stdout and never creates the prohibited checked-in artifact", async () => {
