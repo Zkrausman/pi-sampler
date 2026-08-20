@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, createPublicKey, randomBytes, randomUUID, timingSafeEqual, verify } from "node:crypto";
 import { copyFile, link, lstat, mkdir, open, opendir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { validateTicketEpisodeV1 } from "../contracts/ticket-episode-v1.mjs";
@@ -13,7 +13,27 @@ const OUTCOMES = new Set(["accepted", "rejected", "failed", "rolled_back"]), enc
 const hash = (v) => createHash("sha256").update(v).digest("hex");
 const stable = (v) => v === undefined ? "null" : v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(stable).join(",")}]` : `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`;
 const digest = (v) => hash(stable(v)), safe = (v) => hash(String(v)), err = (e) => ({ code: e.code ?? "io_error", message: e.message, name: e.name });
-const envelopeDigest = (e) => e.format === 1 ? digest({ format: e.format, type: e.type, record: e.record, evolution: e.evolution, artifacts: e.artifacts, previousDigest: e.previousDigest }) : digest({ format: e.format, type: e.type, record: e.record, evolution: e.evolution, artifacts: e.artifacts, previousDigest: e.previousDigest, sourceDigest: e.sourceDigest, ...(e.receiptBatch === undefined ? {} : { receiptBatch: e.receiptBatch }) });
+const envelopeDigest = (e) => e.format === 1 ? digest({ format: e.format, type: e.type, record: e.record, evolution: e.evolution, artifacts: e.artifacts, previousDigest: e.previousDigest, ...(e.lessonAdmission === undefined ? {} : { lessonAdmission: e.lessonAdmission }) }) : digest({ format: e.format, type: e.type, record: e.record, evolution: e.evolution, artifacts: e.artifacts, previousDigest: e.previousDigest, sourceDigest: e.sourceDigest, ...(e.receiptBatch === undefined ? {} : { receiptBatch: e.receiptBatch }), ...(e.lessonAdmission === undefined ? {} : { lessonAdmission: e.lessonAdmission }) });
+const lessonAuthorityKeyPattern = /^[A-Za-z0-9+/]+={0,2}$/;
+const lessonSignaturePattern = /^[A-Za-z0-9_-]{80,128}$/;
+const normalizeLessonAuthority = (value) => {
+  if (typeof value !== "string" || value.length > 1024 || !lessonAuthorityKeyPattern.test(value)) throw new LedgerError("lesson_admission_authority_invalid", "lesson admission authority is invalid");
+  let key;
+  try { key = createPublicKey({ key: Buffer.from(value, "base64"), format: "der", type: "spki" }); } catch { throw new LedgerError("lesson_admission_authority_invalid", "lesson admission authority is invalid"); }
+  const canonical = key.export({ type: "spki", format: "der" }).toString("base64");
+  if (canonical !== value) throw new LedgerError("lesson_admission_authority_invalid", "lesson admission authority is not canonical");
+  return { value, key, id: hash(value) };
+};
+export function lessonAdmissionAuthorityId(publicKey) { return normalizeLessonAuthority(publicKey).id; }
+export function lessonAdmissionBindingDigest({ format, type, record, evolution, artifacts, previousDigest, receiptBatch, sourceDigest }) { return digest({ format, type, record, evolution, artifacts, previousDigest, receiptBatch, sourceDigest }); }
+export function verifyLessonAdmission(entry, marker, publicKey) {
+  try {
+    const authority = normalizeLessonAuthority(publicKey);
+    if (!marker || marker.version !== 1 || marker.algorithm !== "ed25519" || marker.authority !== authority.id || typeof marker.binding !== "string" || !/^[a-f0-9]{64}$/.test(marker.binding) || typeof marker.signature !== "string" || !lessonSignaturePattern.test(marker.signature)) return false;
+    const binding = lessonAdmissionBindingDigest({ format: entry.format, type: entry.type, record: entry.record, evolution: entry.evolution, artifacts: entry.artifacts, previousDigest: entry.previousDigest, receiptBatch: entry.receiptBatch, sourceDigest: entry.sourceDigest });
+    return marker.binding === binding && verify(null, Buffer.from(binding), authority.key, Buffer.from(marker.signature, "base64url"));
+  } catch { return false; }
+}
 const safeArchiveSegment = (value) => typeof value === "string" && value.length > 0 && value !== "." && value !== ".." && !/[\\/\0]/.test(value);
 function backupFileParts(path) {
   if (typeof path !== "string") throw new LedgerError("backup_invalid", "backup file path is unsafe", { path });
@@ -37,6 +57,9 @@ async function exists(path) { try { await lstat(path); return true; } catch (e) 
 
 /** Durable Ticket Episode v1 ledger. Ledger format v2 adds recoverable locks and migration checkpoints. */
 export class EpisodeEvolutionLedger {
+  #configuredLessonAdmissionAuthority;
+  #lessonAdmissionAuthority;
+
   static async open(options) { const l = new EpisodeEvolutionLedger(options); await l.#open(); return l; }
   static async restore({ backupPath, root, limits, trustedAuthorityIds, verifyAttestation } = {}) {
     if (!backupPath || !root) throw new LedgerError("restore_invalid", "backupPath and fresh root are required");
@@ -62,19 +85,39 @@ export class EpisodeEvolutionLedger {
     await rename(join(root, "ledger-manifest.json"), join(root, "manifest.json"));
     return EpisodeEvolutionLedger.open({ root, limits, trustedAuthorityIds, verifyAttestation });
   }
-  constructor({ root, limits = {}, trustedAuthorityIds = [], verifyAttestation, faultInjector } = {}) {
+  constructor({ root, limits = {}, trustedAuthorityIds = [], verifyAttestation, faultInjector, lessonAdmissionAuthority } = {}) {
     if (!root || typeof root !== "string") throw new LedgerError("root_required", "root is required"); this.root = resolve(root); this.limits = Object.freeze({ ...DEFAULT_LEDGER_LIMITS, ...limits });
     for (const [k, v] of Object.entries(this.limits)) if (!Number.isSafeInteger(v) || v <= 0) throw new LedgerError("invalid_limit", `invalid limit ${k}`);
-    this.validationOptions = { trustedAuthorityIds, verifyAttestation }; this.faultInjector = faultInjector; this.commitDirectory = "commits"; this.lockPath = join(this.root, ".writer.lock"); this.lockToken = randomUUID(); this.formatVersion = LEDGER_FORMAT_VERSION;
+    this.validationOptions = { trustedAuthorityIds, verifyAttestation }; this.faultInjector = faultInjector; this.#configuredLessonAdmissionAuthority = lessonAdmissionAuthority === undefined ? undefined : normalizeLessonAuthority(lessonAdmissionAuthority); this.commitDirectory = "commits"; this.lockPath = join(this.root, ".writer.lock"); this.lockToken = randomUUID(); this.formatVersion = LEDGER_FORMAT_VERSION;
     this.episodes = new Map(); this.eventIds = new Map(); this.identityOwners = new Map(); this.receiptBatchKey = undefined; this.storageBytes = 0; this.reservedStorageBytes = 0; this.pending = 0; this.queues = new Map(); this.closed = false; this.closing = false; this.usable = true;
   }
   async close() { if (this.closed) return; this.closing = true; await Promise.all([...this.queues.values()]); this.closed = true; await this.#releaseLock(); }
+  getLessonAdmissionAuthority() { return this.#lessonAdmissionAuthority?.value; }
+  async ensureLessonAdmissionAuthority(publicKey) {
+    const requested = normalizeLessonAuthority(publicKey);
+    return this.#enqueue("admission", async () => {
+      await this.#reconcile();
+      if (this.#lessonAdmissionAuthority) {
+        if (this.#lessonAdmissionAuthority.value !== requested.value) throw new LedgerError("lesson_admission_authority_conflict", "lesson admission authority is already bound");
+        return requested.value;
+      }
+      const manifest = await this.#readManifest();
+      if (manifest.lessonAdmissionAuthority !== undefined) throw new LedgerError("lesson_admission_authority_conflict", "lesson admission authority is already bound");
+      await this.#atomicReplace(this.#path("manifest.json"), stable({ ...manifest, lessonAdmissionAuthority: requested.value }), "lesson_admission_authority");
+      await this.#readManifest();
+      await this.#reconcile();
+      return requested.value;
+    });
+  }
   async #hit(b) { if (this.faultInjector && await this.faultInjector(b) === true) throw new InjectedFaultError(b); }
   #path(...p) { const x = resolve(this.root, ...p); if (!x.startsWith(`${this.root}${sep}`) && x !== this.root) throw new LedgerError("path_escape", "ledger path escaped root"); return x; }
   async #dir(path) { const s = await lstat(path); if (!s.isDirectory() || s.isSymbolicLink()) throw new LedgerError("unsafe_path", "managed ledger directory is unsafe", { path }); }
   async #readManifest() { const mp = this.#path("manifest.json"), mi = await lstat(mp); if (!mi.isFile() || mi.isSymbolicLink()) throw new LedgerError("unsafe_path", "ledger manifest must be regular"); const m = JSON.parse(await readFile(mp, "utf8"));
     if (m.format !== "episode-evolution-ledger" || ![1, LEDGER_FORMAT_VERSION].includes(m.version)) throw new LedgerError("unknown_ledger_version", "unknown or future ledger format is rejected", { manifest: m });
     const directory = m.commitDirectory ?? "commits"; if (!["commits", "commits-v2"].includes(directory) || (m.version === 1 && directory !== "commits")) throw new LedgerError("manifest_invalid", "manifest commit directory is invalid", { manifest: m });
+    const manifestAuthority = m.lessonAdmissionAuthority === undefined ? undefined : normalizeLessonAuthority(m.lessonAdmissionAuthority);
+    if (manifestAuthority && this.#configuredLessonAdmissionAuthority && manifestAuthority.value !== this.#configuredLessonAdmissionAuthority.value) throw new LedgerError("lesson_admission_authority_conflict", "configured lesson admission authority does not match the durable authority");
+    this.#lessonAdmissionAuthority = manifestAuthority ?? this.#configuredLessonAdmissionAuthority;
     await this.#dir(this.#path(directory)); this.formatVersion = m.version; this.commitDirectory = directory; return m; }
   async *#entries(path, limit = this.limits.maxIndexEntries + 64) { await this.#dir(path); let n = 0; const d = await opendir(path); try { for await (const e of d) { if (++n > limit) throw new LedgerLimitError("directoryEntries", n, limit); yield e; } } finally { await d.close().catch(() => {}); } }
   async #sortedEntries(path, limit) { const entries = []; for await (const entry of this.#entries(path, limit)) entries.push(entry); return entries.sort((a, b) => a.name.localeCompare(b.name)); }
@@ -96,9 +139,14 @@ export class EpisodeEvolutionLedger {
     try {
       await mkdir(this.root, { recursive: true }); await this.#dir(this.root);
       for (const d of ["commits", "commits-v2", "artifacts", "quarantine", ".staging", ".receipt-batch-acks", "projections", "exports", "backups", "migrations"]) { await mkdir(this.#path(d), { recursive: true }); await this.#dir(this.#path(d)); }
-      const mp = this.#path("manifest.json"); if (!await exists(mp)) await this.#atomicCreate(mp, stable({ format: "episode-evolution-ledger", version: LEDGER_FORMAT_VERSION }), "manifest");
-      await this.#readManifest();
-      await this.#acquireLock(); await this.#loadReceiptBatchKey(); await this.#recoverStaging(); await this.#reconcile();
+      const mp = this.#path("manifest.json"); if (!await exists(mp)) await this.#atomicCreate(mp, stable({ format: "episode-evolution-ledger", version: LEDGER_FORMAT_VERSION, ...(this.#configuredLessonAdmissionAuthority ? { lessonAdmissionAuthority: this.#configuredLessonAdmissionAuthority.value } : {}) }), "manifest");
+      const manifest = await this.#readManifest();
+      await this.#acquireLock();
+      if (this.#configuredLessonAdmissionAuthority && manifest.lessonAdmissionAuthority === undefined) {
+        await this.#atomicReplace(mp, stable({ ...manifest, lessonAdmissionAuthority: this.#configuredLessonAdmissionAuthority.value }), "lesson_admission_authority");
+        await this.#readManifest();
+      }
+      await this.#loadReceiptBatchKey(); await this.#recoverStaging(); await this.#reconcile();
     } catch (e) { await this.#releaseLock(); throw e; }
   }
   async #acquireLock() {
@@ -185,7 +233,16 @@ export class EpisodeEvolutionLedger {
   async #recoverStaging() { for await (const e of this.#entries(this.#path(".staging"), this.limits.maxPendingWrites * 4)) { const target = this.#path(".staging", e.name); if (/^receipt-batch-[0-9a-f-]{36}\.json$/.test(e.name)) await this.#recoverReceiptBatch(target); else if (e.name !== ".receipt-batch-key") await rm(target, { force: true, recursive: true }); } }
   async #quarantine(reason, context, material) { const id = `${Date.now()}-${randomUUID()}`, target = this.#path("quarantine", `${id}.json`); await this.#atomicCreate(target, stable({ format: 1, reason, context, quarantinedAt: new Date().toISOString() }), "quarantine"); if (material && await exists(material)) { await rename(material, this.#path("quarantine", `${id}.material`)).catch(() => {}); await fsyncDir(this.#path("quarantine")); } }
   #validateRef(r) { if (!r || !/^[a-f0-9]{64}$/.test(r.digest) || !Number.isSafeInteger(r.size) || r.size < 0 || ["identity", "evidenceClass", "coverage", "sensitivity", "provenance"].some((k) => typeof r[k] !== "string")) throw new LedgerError("artifact_reference_invalid", "invalid artifact reference"); }
-  #validate(e, expectedFormat = this.formatVersion) { if (!e || !["episode", "evolution"].includes(e.type) || ![1, 2].includes(e.format) || e.format !== expectedFormat || typeof e.digest !== "string" || e.digest !== envelopeDigest(e) || (e.format === 1 ? e.sourceDigest !== undefined : e.sourceDigest !== undefined && (typeof e.sourceDigest !== "string" || !/^[a-f0-9]{64}$/.test(e.sourceDigest)))) throw new LedgerError("digest_mismatch", "commit checksum mismatch"); if (e.receiptBatch !== undefined && (!e.receiptBatch || !/^[0-9a-f-]{36}$/.test(e.receiptBatch.id) || !/^[a-f0-9]{64}$/.test(e.receiptBatch.binding))) throw new LedgerError("receipt_batch_invalid", "receipt batch commit binding is invalid"); const v = validateTicketEpisodeV1(e.record, this.validationOptions); if (!v.ok) throw new LedgerError("ticket_episode_invalid", "canonical Ticket Episode v1 validation failed", { errors: v.errors }); if (!Array.isArray(e.artifacts)) throw new LedgerError("artifact_references_invalid", "artifact references must be array"); for (const r of e.artifacts) this.#validateRef(r); if (e.type === "evolution" ? e.record.event.kind !== "evolution" || !e.evolution || typeof e.evolution.id !== "string" || typeof e.evolution.explanation !== "string" || !OUTCOMES.has(e.evolution.outcome) : e.evolution !== undefined) throw new LedgerError("evolution_invalid", "invalid evolution envelope"); }
+  #validateLessonAdmission(e) { if (!this.#lessonAdmissionAuthority || !verifyLessonAdmission(e, e.lessonAdmission, this.#lessonAdmissionAuthority.value)) throw new LedgerError("lesson_admission_invalid", "lesson admission signature is invalid or not bound to this ledger"); }
+  #validate(e, expectedFormat = this.formatVersion) {
+    if (!e || !["episode", "evolution"].includes(e.type) || ![1, 2].includes(e.format) || e.format !== expectedFormat || typeof e.digest !== "string" || e.digest !== envelopeDigest(e) || (e.format === 1 ? e.sourceDigest !== undefined : e.sourceDigest !== undefined && (typeof e.sourceDigest !== "string" || !/^[a-f0-9]{64}$/.test(e.sourceDigest)))) throw new LedgerError("digest_mismatch", "commit checksum mismatch");
+    if (e.receiptBatch !== undefined && (!e.receiptBatch || !/^[0-9a-f-]{36}$/.test(e.receiptBatch.id) || !/^[a-f0-9]{64}$/.test(e.receiptBatch.binding))) throw new LedgerError("receipt_batch_invalid", "receipt batch commit binding is invalid");
+    const isLesson = e.record?.event?.kind === "lesson";
+    if (e.lessonAdmission !== undefined && (!e.lessonAdmission || typeof e.lessonAdmission !== "object" || e.lessonAdmission.version !== 1)) throw new LedgerError("lesson_admission_invalid", "lesson admission marker is invalid");
+    if (isLesson && e.lessonAdmission === undefined) throw new LedgerError("lesson_admission_namespace_reserved", "lesson events require the protected registry admission path");
+    if (!isLesson && e.lessonAdmission !== undefined) throw new LedgerError("lesson_admission_invalid", "only lesson events may carry a lesson admission marker");
+    const v = validateTicketEpisodeV1(e.record, this.validationOptions); if (!v.ok) throw new LedgerError("ticket_episode_invalid", "canonical Ticket Episode v1 validation failed", { errors: v.errors }); if (!Array.isArray(e.artifacts)) throw new LedgerError("artifact_references_invalid", "artifact references must be array"); for (const r of e.artifacts) this.#validateRef(r); if (e.type === "evolution" ? e.record.event.kind !== "evolution" || !e.evolution || typeof e.evolution.id !== "string" || typeof e.evolution.explanation !== "string" || !OUTCOMES.has(e.evolution.outcome) : e.evolution !== undefined) throw new LedgerError("evolution_invalid", "invalid evolution envelope");
+  }
   #checkAdmission(e) {
     this.#validate(e); const r = e.record, old = this.eventIds.get(r.event.id); if (old) { if (old === e.digest) return { idempotent: true }; throw new LedgerConflictError(r.event.id, { existingDigest: old, receivedDigest: e.digest }); }
     const ticket = `${r.project.id}\0${r.ticket.system}\0${r.ticket.id}`, owners = [["episode", r.episode.id], ["attempt", r.attempt.id], ["session", r.session.id], ["agentRun", r.agentRun.runId]];
@@ -232,7 +289,19 @@ export class EpisodeEvolutionLedger {
    * checked before publication. If no commit is durable, newly published batch
    * artifacts are removed and capacity is reconciled before the error escapes.
    */
-  async appendEpisodeWithArtifactBatch(record, { artifacts = [] } = {}) { if (!record?.episode?.id || !Array.isArray(artifacts)) throw new LedgerError("batch_invalid", "record and artifact batch are required"); return this.#enqueue("admission", async () => {
+  async appendLesson(_lesson, { record, artifact, admissionSigner } = {}) {
+    if (!record || !artifact || typeof admissionSigner !== "function") throw new LedgerError("lesson_admission_invalid", "lesson append requires the protected registry admission signer");
+    return this.#appendEpisodeWithArtifactBatch(record, { artifacts: [artifact], admissionSigner, protectedAdmission: true });
+  }
+  async appendEpisodeWithArtifactBatch(record, { artifacts = [], capability, lessonAdmission } = {}) {
+    if (!record?.episode?.id || !Array.isArray(artifacts)) throw new LedgerError("batch_invalid", "record and artifact batch are required");
+    if (record.event?.kind === "lesson" || capability !== undefined || lessonAdmission !== undefined) throw new LedgerError("lesson_admission_namespace_reserved", "lesson events are writable only through the protected registry admission path");
+    return this.#appendEpisodeWithArtifactBatch(record, { artifacts });
+  }
+  async #appendEpisodeWithArtifactBatch(record, { artifacts = [], admissionSigner, protectedAdmission = false } = {}) {
+    if (!record?.episode?.id || !Array.isArray(artifacts)) throw new LedgerError("batch_invalid", "record and artifact batch are required");
+    if ((record.event?.kind === "lesson") !== protectedAdmission || (protectedAdmission && typeof admissionSigner !== "function")) throw new LedgerError("lesson_admission_invalid", "protected lesson admission arguments are invalid");
+    return this.#enqueue("admission", async () => {
     await this.#reconcile(); const refs = [], writes = new Map();
     for (const [index, item] of artifacts.entries()) {
       if (!item || !(item.bytes instanceof Uint8Array) || !item.metadata || ["identity", "evidenceClass", "coverage", "provenance", "sensitivity"].some((key) => typeof item.metadata[key] !== "string")) throw new LedgerError("batch_artifact_invalid", "batch artifact bytes and metadata are required", { index });
@@ -245,7 +314,8 @@ export class EpisodeEvolutionLedger {
     const newWrites = [];
     for (const write of writes.values()) { const artifactTarget = this.#path("artifacts", write.ref.digest); if (!await exists(artifactTarget)) newWrites.push({ ...write, target: artifactTarget }); }
     const batch = { id: randomUUID(), artifactsDigest: digest(refs), newArtifactDigests: newWrites.map((write) => write.ref.digest) }; batch.binding = this.#receiptBatchBinding(batch);
-    const e = { format: this.formatVersion, type: "episode", record, artifacts: refs, previousDigest: this.episodes.get(record.episode.id)?.head?.digest ?? null, receiptBatch: { id: batch.id, binding: batch.binding } }; e.digest = envelopeDigest(e); const body = stable(e), bytes = enc.encode(body).byteLength;
+    const previousDigest = this.episodes.get(record.episode.id)?.head?.digest ?? null, receiptBatch = { id: batch.id, binding: batch.binding };
+    const e = { format: this.formatVersion, type: "episode", record, artifacts: refs, previousDigest, receiptBatch, ...(protectedAdmission ? { lessonAdmission: await admissionSigner({ format: this.formatVersion, type: "episode", record, artifacts: refs, previousDigest, receiptBatch }) } : {}) }; e.digest = envelopeDigest(e); if (protectedAdmission) this.#validateLessonAdmission(e); const body = stable(e), bytes = enc.encode(body).byteLength;
     if (bytes > this.limits.maxEncodedRecordBytes) throw new LedgerLimitError("maxEncodedRecordBytes", bytes, this.limits.maxEncodedRecordBytes);
     const admitted = this.#checkAdmission(e); if (admitted.idempotent) return { status: "idempotent", digest: e.digest, artifacts: refs };
     const directory = this.#path(this.commitDirectory, safe(record.episode.id)), target = join(directory, `commit-${String(record.sequence).padStart(16, "0")}-${e.digest}.json`);
@@ -288,9 +358,31 @@ export class EpisodeEvolutionLedger {
     const records = this.#orderedRecords();
     return { records: records.slice(0, limit).map((entry) => structuredClone(entry)), truncated: records.length > limit };
   }
-  async readArtifact(reference) {
+  /**
+   * Stream durable records without constructing an unbounded result array.
+   * Registry facades use this boundary for rebuilds and cross-episode scans;
+   * the bounded in-memory ledger index remains the source of ordering.
+   */
+  async *streamRecords({ batchSize = this.limits.maxRebuildBatch } = {}) {
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > this.limits.maxRebuildBatch) throw new LedgerLimitError("maxRebuildBatch", batchSize, this.limits.maxRebuildBatch);
+    if (this.closed || this.closing || !this.usable) throw new LedgerError(this.usable ? "closed" : "reopen_required", "ledger is unavailable");
+    const episodes = [...this.episodes.keys()].sort((a, b) => safe(a).localeCompare(safe(b)));
+    for (const episodeId of episodes) {
+      // Admission appends records in sequence order and reconciliation loads
+      // them in the same deterministic order, so iteration needs no second
+      // unbounded per-episode array or sort buffer.
+      for (const entry of this.episodes.get(episodeId)?.records ?? []) yield structuredClone(entry);
+    }
+  }
+  async readArtifact(reference, { maxBytes = this.limits.maxArtifactBytes } = {}) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new LedgerError("query_invalid", "invalid artifact read bound");
+    this.#validateRef(reference);
+    if (reference.size > maxBytes) throw new LedgerLimitError("maxArtifactBytes", reference.size, maxBytes);
+    const path = this.#path("artifacts", reference.digest), info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) throw new LedgerError("artifact_unsafe_path", "artifact path is unsafe");
+    if (info.size > maxBytes) throw new LedgerLimitError("maxArtifactBytes", info.size, maxBytes);
     await this.#verifyRefs([reference]);
-    return new Uint8Array(await readFile(this.#path("artifacts", reference.digest)));
+    return new Uint8Array(await readFile(path));
   }
   async queryEvolutions({ outcome, ...o } = {}) {
     const checked = this.#query([], o), out = []; let bytes = 0;
@@ -329,7 +421,7 @@ export class EpisodeEvolutionLedger {
     const checkpoint = this.#path("migrations", "v1-to-v2.json"); let state = { format: 2, fromVersion: 1, toVersion: 2, sourceAnchor, cursor: 0, status: "copying", batches: [] }; if (await exists(checkpoint)) state = JSON.parse(await readFile(checkpoint, "utf8"));
     if (state.format !== 2 || state.fromVersion !== 1 || state.toVersion !== 2 || state.sourceAnchor !== sourceAnchor || !Number.isSafeInteger(state.cursor) || state.cursor < 0 || state.cursor > source.length || !Array.isArray(state.batches)) throw new LedgerError("migration_checkpoint_invalid", "migration checkpoint does not bind this v1 source");
     const finalBatches = [...state.batches]; for (let cursor = state.cursor; cursor < source.length; cursor += batchSize) { const end = Math.min(source.length, cursor + batchSize); finalBatches.push(hash(stable(source.slice(cursor, end).map((e, i) => ({ source: e.digest, target: targets[cursor + i].digest }))))); }
-    const finalState = { ...state, cursor: source.length, status: "published", batches: finalBatches }, manifest = stable({ format: "episode-evolution-ledger", version: 2, commitDirectory: "commits-v2", migrationSourceAnchor: sourceAnchor, migrationTargetAnchor: hash(finalBatches.join("")) }), publications = [...targets.map((target) => ({ target: this.#path("commits-v2", safe(target.record.episode.id), `commit-${String(target.record.sequence).padStart(16, "0")}-${target.digest}.json`), contents: stable(target) })), { target: checkpoint, contents: stable(finalState) }, { target: this.#path("manifest.json"), contents: manifest }];
+    const finalState = { ...state, cursor: source.length, status: "published", batches: finalBatches }, manifest = stable({ format: "episode-evolution-ledger", version: 2, commitDirectory: "commits-v2", migrationSourceAnchor: sourceAnchor, migrationTargetAnchor: hash(finalBatches.join("")), ...(this.#lessonAdmissionAuthority ? { lessonAdmissionAuthority: this.#lessonAdmissionAuthority.value } : {}) }), publications = [...targets.map((target) => ({ target: this.#path("commits-v2", safe(target.record.episode.id), `commit-${String(target.record.sequence).padStart(16, "0")}-${target.digest}.json`), contents: stable(target) })), { target: checkpoint, contents: stable(finalState) }, { target: this.#path("manifest.json"), contents: manifest }];
     const reservation = await this.#reservePublications(publications);
     try { while (state.cursor < source.length) { const end = Math.min(source.length, state.cursor + batchSize); for (let i = state.cursor; i < end; i++) { const target = targets[i], dir = this.#path("commits-v2", safe(target.record.episode.id)); await mkdir(dir, { recursive: true }); await this.#dir(dir); await this.#ensureMigrationTarget(join(dir, `commit-${String(target.record.sequence).padStart(16, "0")}-${target.digest}.json`), stable(target), reservation); } state.batches.push(hash(stable(source.slice(state.cursor, end).map((e, i) => ({ source: e.digest, target: targets[state.cursor + i].digest }))))); state.cursor = end; await this.#atomicReplace(checkpoint, stable(state), "migration_checkpoint", reservation); await this.#hit("after_migration_batch"); }
       const sourceIntegrity = await this.verifyIntegrity(); if (!sourceIntegrity.ok) throw new LedgerError("migration_verification_failed", "source must verify before format publication", { integrity: sourceIntegrity }); await this.#verifyMigrationTarget(source); state.status = "verified"; await this.#atomicReplace(checkpoint, stable(state), "migration_checkpoint", reservation);
