@@ -122,7 +122,7 @@ LessonRegistry -> EpisodeEvolutionLedger
 The contract module does not import the registry or ledger. A registry event
 contains a classified `lesson` Ticket Episode record and one canonical JSON
 artifact. Lesson events use a protected `appendLesson` path. Their admission
-marker contains an Ed25519 signature over the immutable event/artifact binding;
+marker contains an Ed25519 signature over the immutable envelope binding, including the predecessor and receipt binding;
 the corresponding public key is durably bound in `manifest.json`, and the
 registry's private signing key is retained in the runtime-only
 `.lesson-registry-authority.json` file. `LessonRegistry.backup()` includes this

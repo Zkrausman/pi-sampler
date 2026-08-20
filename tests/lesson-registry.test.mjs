@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { canonicalJson, sha256Hex } from "../contracts/lesson-v1.mjs";
 import { LessonRegistry, LessonRegistryConflictError, LessonRegistryError, LessonRegistryPromotionError } from "../ledgers/lesson-registry.mjs";
-import { EpisodeEvolutionLedger } from "../ledgers/episode-evolution-ledger.mjs";
+import { EpisodeEvolutionLedger, verifyLessonAdmission } from "../ledgers/episode-evolution-ledger.mjs";
 import { catastrophicLesson, lesson, singleTicketLesson } from "./helpers/lesson-conformance.mjs";
 
 const fixedNow = Date.parse("2026-08-18T00:00:00.000Z");
@@ -272,6 +272,9 @@ test("injected ledgers bind and reuse a durable registry authority", async () =>
     assert.match(episode.records[0].lessonAdmission.authority, /^[a-f0-9]{64}$/);
     assert.match(episode.records[0].lessonAdmission.binding, /^[a-f0-9]{64}$/);
     assert.match(episode.records[0].lessonAdmission.signature, /^[A-Za-z0-9_-]{80,128}$/);
+    assert.equal(verifyLessonAdmission(episode.records[0], episode.records[0].lessonAdmission, ledger.getLessonAdmissionAuthority()), true);
+    assert.equal(verifyLessonAdmission({ ...episode.records[0], previousDigest: "a".repeat(64) }, episode.records[0].lessonAdmission, ledger.getLessonAdmissionAuthority()), false);
+    assert.equal(verifyLessonAdmission({ ...episode.records[0], receiptBatch: { ...episode.records[0].receiptBatch, id: `b${episode.records[0].receiptBatch.id.slice(1)}` } }, episode.records[0].lessonAdmission, ledger.getLessonAdmissionAuthority()), false);
     assert.match(ledger.getLessonAdmissionAuthority(), /^[A-Za-z0-9+/]+={0,2}$/);
     await registry.close();
     const reopenedLedger = await EpisodeEvolutionLedger.open({ root, lessonAdmissionCapability: Object.freeze({}) });

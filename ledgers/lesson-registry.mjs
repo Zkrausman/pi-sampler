@@ -507,10 +507,9 @@ export class LessonRegistry {
     const bytes = encoder.encode(canonicalJson(lesson));
     const artifact = { bytes, metadata: { identity: artifactIdentity(lesson), evidenceClass: "caller_claim", coverage: "partial", provenance: canonicalJson({ lessonId: lesson.id, version: lesson.version, state: lesson.state }), sensitivity: "internal" } };
     if (!this.#admissionAuthority || typeof this.#ledger.appendLesson !== "function") throw new LessonRegistryError("lesson_admission_api_unavailable", "lesson persistence requires the protected registry admission API");
-    const reference = { digest: sha256(bytes), size: bytes.byteLength, ...artifact.metadata };
-    const admission = signedLessonAdmission(this.#admissionAuthority, { format: this.#ledger.formatVersion ?? 2, type: "episode", record, artifacts: [reference] });
+    const admissionSigner = (envelope) => signedLessonAdmission(this.#admissionAuthority, envelope);
     try {
-      return { result: await this.#ledger.appendLesson(clone(lesson), { record: clone(record), artifact: clone(artifact), admission }), record };
+      return { result: await this.#ledger.appendLesson(clone(lesson), { record: clone(record), artifact: clone(artifact), admissionSigner }), record };
     } catch (error) {
       if (error instanceof LessonRegistryError) throw error;
       throw new LessonRegistryError("persistence_failed", "lesson registry persistence failed closed", { causeCode: compactErrorCode(error) });

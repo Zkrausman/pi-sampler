@@ -25,12 +25,12 @@ const normalizeLessonAuthority = (value) => {
   return { value, key, id: hash(value) };
 };
 export function lessonAdmissionAuthorityId(publicKey) { return normalizeLessonAuthority(publicKey).id; }
-export function lessonAdmissionBindingDigest({ format, type, record, evolution, artifacts }) { return digest({ format, type, record, evolution, artifacts }); }
+export function lessonAdmissionBindingDigest({ format, type, record, evolution, artifacts, previousDigest, receiptBatch, sourceDigest }) { return digest({ format, type, record, evolution, artifacts, previousDigest, receiptBatch, sourceDigest }); }
 export function verifyLessonAdmission(entry, marker, publicKey) {
   try {
     const authority = normalizeLessonAuthority(publicKey);
     if (!marker || marker.version !== 1 || marker.algorithm !== "ed25519" || marker.authority !== authority.id || typeof marker.binding !== "string" || !/^[a-f0-9]{64}$/.test(marker.binding) || typeof marker.signature !== "string" || !lessonSignaturePattern.test(marker.signature)) return false;
-    const binding = lessonAdmissionBindingDigest({ format: entry.format, type: entry.type, record: entry.record, evolution: entry.evolution, artifacts: entry.artifacts });
+    const binding = lessonAdmissionBindingDigest({ format: entry.format, type: entry.type, record: entry.record, evolution: entry.evolution, artifacts: entry.artifacts, previousDigest: entry.previousDigest, receiptBatch: entry.receiptBatch, sourceDigest: entry.sourceDigest });
     return marker.binding === binding && verify(null, Buffer.from(binding), authority.key, Buffer.from(marker.signature, "base64url"));
   } catch { return false; }
 }
@@ -290,18 +290,18 @@ export class EpisodeEvolutionLedger {
    * checked before publication. If no commit is durable, newly published batch
    * artifacts are removed and capacity is reconciled before the error escapes.
    */
-  async appendLesson(_lesson, { record, artifact, admission } = {}) {
-    if (!record || !artifact || !admission) throw new LedgerError("lesson_admission_invalid", "lesson append requires a durable registry admission signature");
-    return this.#appendEpisodeWithArtifactBatch(record, { artifacts: [artifact], lessonAdmission: admission, protectedAdmission: true });
+  async appendLesson(_lesson, { record, artifact, admissionSigner } = {}) {
+    if (!record || !artifact || typeof admissionSigner !== "function") throw new LedgerError("lesson_admission_invalid", "lesson append requires the protected registry admission signer");
+    return this.#appendEpisodeWithArtifactBatch(record, { artifacts: [artifact], admissionSigner, protectedAdmission: true });
   }
   async appendEpisodeWithArtifactBatch(record, { artifacts = [], capability, lessonAdmission } = {}) {
     if (!record?.episode?.id || !Array.isArray(artifacts)) throw new LedgerError("batch_invalid", "record and artifact batch are required");
     if (record.event?.kind === "lesson" || capability !== undefined || lessonAdmission !== undefined) throw new LedgerError("lesson_admission_namespace_reserved", "lesson events are writable only through the protected registry admission path");
     return this.#appendEpisodeWithArtifactBatch(record, { artifacts });
   }
-  async #appendEpisodeWithArtifactBatch(record, { artifacts = [], lessonAdmission, protectedAdmission = false } = {}) {
+  async #appendEpisodeWithArtifactBatch(record, { artifacts = [], admissionSigner, protectedAdmission = false } = {}) {
     if (!record?.episode?.id || !Array.isArray(artifacts)) throw new LedgerError("batch_invalid", "record and artifact batch are required");
-    if ((record.event?.kind === "lesson") !== protectedAdmission || (protectedAdmission && !lessonAdmission)) throw new LedgerError("lesson_admission_invalid", "protected lesson admission arguments are invalid");
+    if ((record.event?.kind === "lesson") !== protectedAdmission || (protectedAdmission && typeof admissionSigner !== "function")) throw new LedgerError("lesson_admission_invalid", "protected lesson admission arguments are invalid");
     return this.#enqueue("admission", async () => {
     await this.#reconcile(); const refs = [], writes = new Map();
     for (const [index, item] of artifacts.entries()) {
@@ -315,7 +315,8 @@ export class EpisodeEvolutionLedger {
     const newWrites = [];
     for (const write of writes.values()) { const artifactTarget = this.#path("artifacts", write.ref.digest); if (!await exists(artifactTarget)) newWrites.push({ ...write, target: artifactTarget }); }
     const batch = { id: randomUUID(), artifactsDigest: digest(refs), newArtifactDigests: newWrites.map((write) => write.ref.digest) }; batch.binding = this.#receiptBatchBinding(batch);
-    const e = { format: this.formatVersion, type: "episode", record, artifacts: refs, previousDigest: this.episodes.get(record.episode.id)?.head?.digest ?? null, receiptBatch: { id: batch.id, binding: batch.binding }, ...(protectedAdmission ? { lessonAdmission } : {}) }; e.digest = envelopeDigest(e); if (protectedAdmission) this.#validateLessonAdmission(e); const body = stable(e), bytes = enc.encode(body).byteLength;
+    const previousDigest = this.episodes.get(record.episode.id)?.head?.digest ?? null, receiptBatch = { id: batch.id, binding: batch.binding };
+    const e = { format: this.formatVersion, type: "episode", record, artifacts: refs, previousDigest, receiptBatch, ...(protectedAdmission ? { lessonAdmission: await admissionSigner({ format: this.formatVersion, type: "episode", record, artifacts: refs, previousDigest, receiptBatch }) } : {}) }; e.digest = envelopeDigest(e); if (protectedAdmission) this.#validateLessonAdmission(e); const body = stable(e), bytes = enc.encode(body).byteLength;
     if (bytes > this.limits.maxEncodedRecordBytes) throw new LedgerLimitError("maxEncodedRecordBytes", bytes, this.limits.maxEncodedRecordBytes);
     const admitted = this.#checkAdmission(e); if (admitted.idempotent) return { status: "idempotent", digest: e.digest, artifacts: refs };
     const directory = this.#path(this.commitDirectory, safe(record.episode.id)), target = join(directory, `commit-${String(record.sequence).padStart(16, "0")}-${e.digest}.json`);
