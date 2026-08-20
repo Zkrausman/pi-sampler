@@ -1,7 +1,7 @@
 ---
 name: codebase-researcher
 description: "Dives deep into directories to map out affected file boundaries, dependencies, and relevant governance rules."
-model: flash
+thinking: low
 enable_write_tools: false
 enable_mcp_tools: false
 ---

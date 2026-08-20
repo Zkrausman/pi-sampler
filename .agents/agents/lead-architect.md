@@ -1,7 +1,7 @@
 ---
 name: lead-architect
 description: "Drafts the structural tech plan using strict Pi-Sampler standards."
-model: pro
+thinking: high
 enable_write_tools: false
 enable_mcp_tools: false
 ---
