@@ -128,14 +128,15 @@ function safeLessonSummary(lesson, reason, conflict = false) {
 
 export class LessonRegistry {
   static async open(options = {}) {
+    const admissionCapability = Object.freeze({});
     let ledger = options.ledger;
     let ownsLedger = false;
     if (!ledger) {
       if (typeof options.root !== "string" || options.root.length === 0) throw new LessonRegistryError("root_required", "lesson registry root is required");
-      ledger = await EpisodeEvolutionLedger.open({ root: options.root, ...(options.ledgerOptions ?? {}), limits: options.ledgerLimits ?? options.ledgerOptions?.limits });
+      ledger = await EpisodeEvolutionLedger.open({ root: options.root, ...(options.ledgerOptions ?? {}), limits: options.ledgerLimits ?? options.ledgerOptions?.limits, lessonAdmissionCapability: admissionCapability });
       ownsLedger = true;
     }
-    const registry = new LessonRegistry({ ...options, ledger });
+    const registry = new LessonRegistry({ ...options, ledger, admissionCapability });
     try { await registry.rebuild(); return registry; }
     catch (error) { if (ownsLedger) await ledger.close().catch(() => {}); throw error; }
   }
@@ -147,8 +148,9 @@ export class LessonRegistry {
   #rebuildPromise = Promise.resolve();
   #admissions = Promise.resolve();
   #authorizedHumanIdentities;
+  #admissionCapability;
 
-  constructor({ ledger, projectId = "pi-sampler", repositoryId = "github.com/Zkrausman/pi-sampler", repositoryRevision = "0".repeat(40), ticket = { system: "lesson-registry", id: "LESSON-REGISTRY-V1" }, now = Date.now, limits = {}, currentRepositoryRevision, currentEvaluatorIdentity, authorizedHumanIdentities = [] } = {}) {
+  constructor({ ledger, projectId = "pi-sampler", repositoryId = "github.com/Zkrausman/pi-sampler", repositoryRevision = "0".repeat(40), ticket = { system: "lesson-registry", id: "LESSON-REGISTRY-V1" }, now = Date.now, limits = {}, currentRepositoryRevision, currentEvaluatorIdentity, authorizedHumanIdentities = [], admissionCapability } = {}) {
     if (!ledger || typeof ledger !== "object") throw new LessonRegistryError("ledger_required", "an EpisodeEvolutionLedger facade is required");
     if (!identifier(projectId) || !identifier(repositoryId) || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(repositoryRevision) || !identifier(ticket.system) || !identifier(ticket.id)) throw new LessonRegistryError("registry_identity_invalid", "lesson registry identity is invalid");
     if (!Array.isArray(authorizedHumanIdentities) || authorizedHumanIdentities.length > 128 || authorizedHumanIdentities.some((value) => !identifier(value))) throw new LessonRegistryError("registry_identity_invalid", "authorized human identities are invalid");
@@ -162,6 +164,7 @@ export class LessonRegistry {
     this.currentRepositoryRevision = currentRepositoryRevision;
     this.currentEvaluatorIdentity = currentEvaluatorIdentity;
     this.#authorizedHumanIdentities = new Set(authorizedHumanIdentities);
+    this.#admissionCapability = admissionCapability;
     this.closed = false;
   }
 
@@ -265,7 +268,8 @@ export class LessonRegistry {
     maps.latest.set(lesson.id, clone(lesson));
   }
 
-  #validateDurableLifecycle(lesson, record, prior) {
+  #validateDurableLifecycle(lesson, record, prior, admission) {
+    if (admission?.version !== 1) throw new LessonRegistryError("lesson_admission_invalid", "durable lesson event lacks the registry admission capability marker");
     if (record?.event?.kind !== "lesson" || record.project?.id !== this.projectId || record.repository?.id !== this.repositoryId || record.ticket?.system !== this.ticket.system || record.ticket?.id !== this.ticket.id || record.producer?.id !== "lesson-registry" || record.producer?.kind !== "system" || record.state !== "quarantined" || record.evidence?.class !== "caller_claim" || record.evidence?.authority?.level !== "untrusted" || record.coverage?.status !== "partial") throw new LessonRegistryError("lesson_event_untrusted", "durable lesson event is not an authenticated registry admission");
     const history = lesson.stateHistory;
     if (!prior || lesson.version > prior.version) {
@@ -297,7 +301,7 @@ export class LessonRegistry {
       }
       if (!lesson) continue;
       const prepared = this.#prepare(lesson);
-      this.#validateDurableLifecycle(prepared, record, durableLatest.get(prepared.id));
+      this.#validateDurableLifecycle(prepared, record, durableLatest.get(prepared.id), entry?.lessonAdmission);
       durableLatest.set(prepared.id, prepared);
       yield { lesson: prepared, record };
     }
@@ -405,10 +409,10 @@ export class LessonRegistry {
     const artifact = { bytes, metadata: { identity: artifactIdentity(lesson), evidenceClass: "caller_claim", coverage: "partial", provenance: canonicalJson({ lessonId: lesson.id, version: lesson.version, state: lesson.state }), sensitivity: "internal" } };
     try {
       if (typeof this.#ledger.appendLesson === "function") {
-        return { result: await this.#ledger.appendLesson(clone(lesson), { record: clone(record), artifact: clone(artifact) }), record };
+        return { result: await this.#ledger.appendLesson(clone(lesson), { record: clone(record), artifact: clone(artifact), capability: this.#admissionCapability }), record };
       }
       if (typeof this.#ledger.appendEpisodeWithArtifactBatch === "function") {
-        return { result: await this.#ledger.appendEpisodeWithArtifactBatch(record, { artifacts: [artifact] }), record };
+        return { result: await this.#ledger.appendEpisodeWithArtifactBatch(record, { artifacts: [artifact], capability: this.#admissionCapability }), record };
       }
       if (typeof this.#ledger.writeArtifact !== "function" || typeof this.#ledger.appendEpisode !== "function") throw new Error("ledger_write_api_unavailable");
       const reference = await this.#ledger.writeArtifact(bytes, artifact.metadata);

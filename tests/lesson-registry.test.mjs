@@ -223,7 +223,7 @@ test("rebuild rejects raw ledger promotions without an admitted lifecycle", asyn
         }],
       });
     } finally { await ledger.close(); }
-    await assert.rejects(LessonRegistry.open({ root, now: () => fixedNow, authorizedHumanIdentities: ["safety-owner"] }), (error) => error.code === "lesson_lifecycle_invalid");
+    await assert.rejects(LessonRegistry.open({ root, now: () => fixedNow, authorizedHumanIdentities: ["safety-owner"] }), (error) => error.code === "lesson_admission_invalid");
   } finally {
     await registry?.close();
     await rm(root, { recursive: true, force: true });
