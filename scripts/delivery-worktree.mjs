@@ -137,14 +137,17 @@ function pathInside(parent, candidate) {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
-async function canonicalRepository(repoOption) {
+async function repositoryContext(repoOption) {
   const start = resolve(repoOption || process.cwd());
-  const currentRoot = resolve(git(start, ["rev-parse", "--show-toplevel"]).stdout);
-  const firstWorktree = git(currentRoot, ["worktree", "list", "--porcelain"]).stdout
+  const checkoutRoot = await realpath(resolve(git(start, ["rev-parse", "--show-toplevel"]).stdout));
+  const firstWorktree = git(checkoutRoot, ["worktree", "list", "--porcelain"]).stdout
     .split(/\r?\n/)
     .find((line) => line.startsWith("worktree "));
   if (!firstWorktree) fail("repository_invalid", "repository has no primary worktree");
-  return realpath(resolve(firstWorktree.slice("worktree ".length)));
+  return {
+    checkoutRoot,
+    repositoryRoot: await realpath(resolve(firstWorktree.slice("worktree ".length))),
+  };
 }
 
 async function profileLocation(repoRoot, profileOption) {
@@ -253,11 +256,11 @@ async function rollbackPrepared(repoRoot, worktreePath, branch, leasePath, baseS
 export async function prepareDeliveryWorktree(options) {
   if (typeof options.workItem !== "string" || options.workItem.length > 64 || !/^[A-Za-z0-9-]+$/.test(options.workItem)) fail("work_item_invalid", "--work-item is required and must be a bounded identifier");
   const workItem = options.workItem.toUpperCase();
-  const repoRoot = await canonicalRepository(options.repo);
-  const profilePath = await profileLocation(repoRoot, options.profile);
-  const checkoutHead = git(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]).stdout;
-  if (!treePathExists(repoRoot, checkoutHead, profilePath.relative)) fail("checkout_profile_missing", `checkout HEAD does not contain ${profilePath.relative}`);
-  const checkoutProfile = validateProfile(parseProfile(git(repoRoot, ["show", `${checkoutHead}:${profilePath.relative}`]).stdout), workItem);
+  const { checkoutRoot, repositoryRoot: repoRoot } = await repositoryContext(options.repo);
+  const profilePath = await profileLocation(checkoutRoot, options.profile);
+  const checkoutHead = git(checkoutRoot, ["rev-parse", "--verify", "HEAD^{commit}"]).stdout;
+  if (!treePathExists(checkoutRoot, checkoutHead, profilePath.relative)) fail("checkout_profile_missing", `checkout HEAD does not contain ${profilePath.relative}`);
+  const checkoutProfile = validateProfile(parseProfile(git(checkoutRoot, ["show", `${checkoutHead}:${profilePath.relative}`]).stdout), workItem);
   const initialDelivery = checkoutProfile.delivery;
   const { baseSha, baseRef } = resolveBase(repoRoot, initialDelivery, options.base || process.env.PI_DELIVERY_BASE_SHA, options.fetch !== false);
   if (!treePathExists(repoRoot, baseSha, profilePath.relative)) fail("base_profile_missing", `base ${baseSha} does not contain ${profilePath.relative}`);
@@ -349,7 +352,7 @@ function equalToken(left, right) {
 
 export async function cleanupDeliveryWorktree(options) {
   if (typeof options.worktree !== "string" || typeof options.lease !== "string") fail("usage", "cleanup requires --worktree and --lease");
-  const repoRoot = await canonicalRepository(options.repo);
+  const { repositoryRoot: repoRoot } = await repositoryContext(options.repo);
   const requested = resolve(options.worktree);
   const canonicalTarget = await realpath(requested).catch(() => fail("worktree_missing", "delivery worktree does not exist"));
   const commonDir = await commonGitDirectory(repoRoot);
