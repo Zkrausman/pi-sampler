@@ -77,12 +77,35 @@ intentionally does not register Pi operations or provide browser UX.
 
 [`profiles/project-profile.schema.json`](profiles/project-profile.schema.json)
 defines the consumer-owned project-profile shape: work-item identifiers, source
-repository, verification commands, required checks, and evidence/specification
-paths. [`profiles/example-project.json`](profiles/example-project.json) and
-[`profiles/gelt-trading.example.json`](profiles/gelt-trading.example.json) are
-examples, not repository defaults or active runtime configuration. Validate a
-consumer profile against that schema with the consumer's JSON Schema validator;
-repository changes to the schema or examples are covered by `npm test`.
+repository, automatic delivery-worktree configuration, verification commands,
+required checks, and evidence/specification paths. Delivery configuration names
+the Git remote and base branch, a repository-relative worktree root, branch
+prefix, and random suffix length. [`profiles/example-project.json`](profiles/example-project.json)
+and [`profiles/gelt-trading.example.json`](profiles/gelt-trading.example.json)
+are examples; [`profiles/pi-sampler.json`](profiles/pi-sampler.json) is the
+approved local profile for this repository.
+
+The project-delivery skill provisions a unique leased worktree automatically:
+
+```powershell
+npm run delivery:worktree -- prepare --profile profiles/pi-sampler.json --work-item AIDEV-123
+```
+
+The command fetches the configured base branch, resolves an immutable commit,
+verifies that commit contains the profile, and emits JSON containing the unique
+worktree path, branch, base SHA, and lease token. A coordinated experiment can
+pin all runs with `--base <SHA>` or `PI_DELIVERY_BASE_SHA`. Do not store the
+lease token in Git. Clean cancellation or a confirmed merge can release the
+worktree with the emitted token:
+
+```powershell
+npm run delivery:worktree -- cleanup --worktree <PATH> --lease <TOKEN> --delete-branch
+```
+
+Cleanup refuses dirty worktrees, invalid leases, changed branches, and unmerged
+commits. Validate a consumer profile against the schema with the consumer's JSON
+Schema validator; repository changes to the schema or examples are covered by
+`npm test`.
 
 ## Optional governance module
 

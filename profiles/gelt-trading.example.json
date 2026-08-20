@@ -2,6 +2,13 @@
   "projectId": "gelt-trading",
   "workItem": { "idPattern": "^ZAR-[0-9]+$" },
   "repository": { "source": "sources/github/Zkrausman/Gelt" },
+  "delivery": {
+    "remote": "origin",
+    "baseBranch": "main",
+    "worktreeRoot": "../ai-workspaces",
+    "branchPrefix": "zkrausman",
+    "suffixLength": 6
+  },
   "verification": {
     "commands": [
       { "command": "go", "args": ["test", "-race", "./..."] },
