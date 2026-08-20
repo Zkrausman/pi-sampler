@@ -22,7 +22,8 @@
     "generate:authoritative-receipt-schema": "node scripts/export-authoritative-receipt-v1-schema.mjs",
     "validate:authoritative-receipt-schema": "node scripts/export-authoritative-receipt-v1-schema.mjs --check",
     "prepare": "npx simple-git-hooks",
-    "merge-train": "node scripts/merge-train.mjs"
+    "merge-train": "node scripts/merge-train.mjs",
+    "delivery:worktree": "node scripts/delivery-worktree.mjs"
   },
   "engines": {
     "node": ">=24"

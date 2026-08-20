@@ -2,6 +2,13 @@
   "projectId": "example-service",
   "workItem": { "idPattern": "^ENG-[0-9]+$" },
   "repository": { "source": "sources/github/example-org/example-service" },
+  "delivery": {
+    "remote": "origin",
+    "baseBranch": "main",
+    "worktreeRoot": "../ai-workspaces",
+    "branchPrefix": "automation",
+    "suffixLength": 6
+  },
   "verification": {
     "commands": [
       { "command": "npm", "args": ["test"] },
