@@ -288,6 +288,22 @@ export class EpisodeEvolutionLedger {
     const records = this.#orderedRecords();
     return { records: records.slice(0, limit).map((entry) => structuredClone(entry)), truncated: records.length > limit };
   }
+  /**
+   * Stream durable records without constructing an unbounded result array.
+   * Registry facades use this boundary for rebuilds and cross-episode scans;
+   * the bounded in-memory ledger index remains the source of ordering.
+   */
+  async *streamRecords({ batchSize = this.limits.maxRebuildBatch } = {}) {
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > this.limits.maxRebuildBatch) throw new LedgerLimitError("maxRebuildBatch", batchSize, this.limits.maxRebuildBatch);
+    if (this.closed || this.closing || !this.usable) throw new LedgerError(this.usable ? "closed" : "reopen_required", "ledger is unavailable");
+    const episodes = [...this.episodes.keys()].sort((a, b) => safe(a).localeCompare(safe(b)));
+    for (const episodeId of episodes) {
+      // Admission appends records in sequence order and reconciliation loads
+      // them in the same deterministic order, so iteration needs no second
+      // unbounded per-episode array or sort buffer.
+      for (const entry of this.episodes.get(episodeId)?.records ?? []) yield structuredClone(entry);
+    }
+  }
   async readArtifact(reference) {
     await this.#verifyRefs([reference]);
     return new Uint8Array(await readFile(this.#path("artifacts", reference.digest)));
