@@ -40,6 +40,7 @@ cloud-telemetry-backup/
 # Fail closed: only canonical schema, templates, and Markdown pages are tracked.
 /.llm-wiki/*
 !/.llm-wiki/README.md
+!/.llm-wiki/config.json
 !/.llm-wiki/WIKI_SCHEMA.md
 !/.llm-wiki/templates/
 !/.llm-wiki/templates/**/

@@ -64,7 +64,7 @@ func TestPolicyClassifiesCollaborationBoundary(t *testing.T) {
 		".pi/policy.json":                                   Canonical,
 		"evidence/references/WORK-121.json":                 Canonical,
 		".llm-wiki/meta/registry.json":                      GeneratedLocal,
-		".llm-wiki/config.json":                             GeneratedLocal,
+		".llm-wiki/config.json":                             Canonical,
 		".llm-wiki/raw/sources/SRC-2026-08-06-001/original": ExternalEvidence,
 		"evidence/raw/SRC-2026-08-06-001/original":          ExternalEvidence,
 		".pi/oauth/state.json":                              SensitiveLocal,

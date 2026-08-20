@@ -26,6 +26,7 @@ func TestCleanCloneRebuildsCanonicalMetadataWithoutRawEvidence(t *testing.T) {
 		".gitignore",
 		"docs/wiki-governance/path-policy-v1.json",
 		".llm-wiki/README.md",
+		".llm-wiki/config.json",
 		".llm-wiki/WIKI_SCHEMA.md",
 		".llm-wiki/templates/pages/concept.md",
 		".llm-wiki/wiki/index.md",
@@ -50,6 +51,9 @@ func TestCleanCloneRebuildsCanonicalMetadataWithoutRawEvidence(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(clone, ".llm-wiki", "raw")); !os.IsNotExist(err) {
 		t.Fatalf("clean clone includes raw evidence: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(clone, ".llm-wiki", "config.json")); err != nil {
+		t.Fatalf("clean clone is missing canonical wiki config: %v", err)
 	}
 	policy, err := LoadPolicy(clone)
 	if err != nil {
