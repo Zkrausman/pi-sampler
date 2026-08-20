@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { generateKeyPairSync } from "node:crypto";
+import { mkdtemp, rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -193,7 +194,7 @@ test("rebuild rejects lesson artifacts whose repository provenance binding is al
   await assert.rejects(registry.rebuild(), (error) => error.code === "lesson_artifact_binding_invalid");
 });
 
-test("rebuild rejects raw ledger promotions without an admitted lifecycle", async () => {
+test("generic raw ledger writers cannot forge registry lifecycle admissions after reopen", async () => {
   const root = await mkdtemp(join(tmpdir(), "lesson-registry-raw-promotion-"));
   let registry;
   try {
@@ -201,29 +202,38 @@ test("rebuild rejects raw ledger promotions without an admitted lifecycle", asyn
     const candidate = lesson({ id: "lesson-raw-promotion" });
     const proposed = await registry.propose(candidate);
     await registry.close();
-    const ledger = await EpisodeEvolutionLedger.open({ root });
+    const attackerCapability = Object.freeze({});
+    const ledger = await EpisodeEvolutionLedger.open({ root, lessonAdmissionCapability: attackerCapability });
     try {
+      for (const state of ["evaluated", "promoted"]) {
+        const forged = lesson({ id: candidate.id, state });
+        const bytes = new TextEncoder().encode(canonicalJson(forged));
+        const eventId = `lesson-v1-${sha256Hex(`${forged.id}\u0000${forged.version}\u0000${forged.state}\u0000${forged.contentDigest}`)}`;
+        const rawRecord = structuredClone(proposed.record);
+        rawRecord.sequence = 1;
+        rawRecord.event = { ...rawRecord.event, id: eventId };
+        rawRecord.agentRun = { ...rawRecord.agentRun, runId: `lesson-run-${sha256Hex(eventId).slice(0, 48)}` };
+        await assert.rejects(ledger.appendEpisodeWithArtifactBatch(rawRecord, {
+          artifacts: [{
+            bytes,
+            metadata: {
+              identity: `lesson-v1-${sha256Hex(`${forged.id}\u0000${forged.version}\u0000${forged.contentDigest}`)}`,
+              evidenceClass: "caller_claim",
+              coverage: "partial",
+              provenance: canonicalJson({ lessonId: forged.id, version: forged.version, state: forged.state }),
+              sensitivity: "internal",
+            },
+          }],
+          capability: attackerCapability,
+          lessonAdmission: { version: 1 },
+        }), (error) => error.code === "lesson_admission_namespace_reserved");
+      }
       const forged = lesson({ id: candidate.id, state: "promoted" });
       const bytes = new TextEncoder().encode(canonicalJson(forged));
-      const eventId = `lesson-v1-${sha256Hex(`${forged.id}\u0000${forged.version}\u0000${forged.state}\u0000${forged.contentDigest}`)}`;
-      const rawRecord = structuredClone(proposed.record);
-      rawRecord.sequence = 1;
-      rawRecord.event = { ...rawRecord.event, id: eventId };
-      rawRecord.agentRun = { ...rawRecord.agentRun, runId: `lesson-run-${sha256Hex(eventId).slice(0, 48)}` };
-      await ledger.appendEpisodeWithArtifactBatch(rawRecord, {
-        artifacts: [{
-          bytes,
-          metadata: {
-            identity: `lesson-v1-${sha256Hex(`${forged.id}\u0000${forged.version}\u0000${forged.contentDigest}`)}`,
-            evidenceClass: "caller_claim",
-            coverage: "partial",
-            provenance: canonicalJson({ lessonId: forged.id, version: forged.version, state: forged.state }),
-            sensitivity: "internal",
-          },
-        }],
-      });
+      await assert.rejects(ledger.appendLesson(forged, { record: structuredClone(proposed.record), artifact: { bytes, metadata: { identity: "lesson-v1-forged", evidenceClass: "caller_claim", coverage: "partial", provenance: "{}", sensitivity: "internal" } }, capability: attackerCapability }), (error) => error.code === "lesson_admission_invalid");
     } finally { await ledger.close(); }
-    await assert.rejects(LessonRegistry.open({ root, now: () => fixedNow, authorizedHumanIdentities: ["safety-owner"] }), (error) => error.code === "lesson_admission_invalid");
+    registry = await LessonRegistry.open({ root, now: () => fixedNow, authorizedHumanIdentities: ["safety-owner"] });
+    assert.equal(registry.get(candidate.id).state, "proposed");
   } finally {
     await registry?.close();
     await rm(root, { recursive: true, force: true });
@@ -249,19 +259,72 @@ test("bounded streams refuse an incomplete listRecords fallback", async () => {
   await assert.rejects(registry.rebuild({ batchSize: 1 }), (error) => error instanceof LessonRegistryError && error.code === "ledger_stream_truncated");
 });
 
-test("injected ledgers require and honor their matching admission capability", async () => {
+test("injected ledgers bind and reuse a durable registry authority", async () => {
   const root = await mkdtemp(join(tmpdir(), "lesson-registry-injected-"));
-  const capability = Object.freeze({});
-  const ledger = await EpisodeEvolutionLedger.open({ root, lessonAdmissionCapability: capability });
+  const ledger = await EpisodeEvolutionLedger.open({ root, lessonAdmissionCapability: Object.freeze({}) });
+  let registry;
   try {
-    await assert.rejects(LessonRegistry.open({ ledger }), (error) => error.code === "lesson_admission_capability_required");
-    const registry = await LessonRegistry.open({ ledger, admissionCapability: capability, now: () => fixedNow });
+    registry = await LessonRegistry.open({ ledger, now: () => fixedNow });
+    const result = await registry.propose(lesson({ id: "lesson-injected-ledger" }));
+    const episode = await ledger.queryEpisode(result.record.episode.id);
+    assert.equal(episode.records[0].lessonAdmission.version, 1);
+    assert.equal(episode.records[0].lessonAdmission.algorithm, "ed25519");
+    assert.match(episode.records[0].lessonAdmission.authority, /^[a-f0-9]{64}$/);
+    assert.match(episode.records[0].lessonAdmission.binding, /^[a-f0-9]{64}$/);
+    assert.match(episode.records[0].lessonAdmission.signature, /^[A-Za-z0-9_-]{80,128}$/);
+    assert.match(ledger.getLessonAdmissionAuthority(), /^[A-Za-z0-9+/]+={0,2}$/);
+    await registry.close();
+    const reopenedLedger = await EpisodeEvolutionLedger.open({ root, lessonAdmissionCapability: Object.freeze({}) });
     try {
-      const result = await registry.propose(lesson({ id: "lesson-injected-ledger" }));
-      const episode = await ledger.queryEpisode(result.record.episode.id);
-      assert.equal(episode.records[0].lessonAdmission.version, 1);
-    } finally { await registry.close(); }
-  } finally { await ledger.close(); await rm(root, { recursive: true, force: true }); }
+      const reopened = await LessonRegistry.open({ ledger: reopenedLedger, now: () => fixedNow });
+      try { assert.equal(reopened.get("lesson-injected-ledger").state, "proposed"); }
+      finally { await reopened.close(); }
+    } finally { await reopenedLedger.close(); }
+  } finally { await registry?.close(); await ledger.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("reopening without the registry private authority fails closed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lesson-registry-authority-loss-"));
+  let registry;
+  try {
+    registry = await LessonRegistry.open({ root, now: () => fixedNow });
+    await registry.propose(lesson({ id: "lesson-authority-loss" }));
+    await registry.close();
+    await unlink(join(root, ".lesson-registry-authority.json"));
+    await assert.rejects(LessonRegistry.open({ root, now: () => fixedNow }), (error) => error.code === "lesson_admission_authority_conflict");
+  } finally { await registry?.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("a raw writer cannot select the durable registry authority", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lesson-registry-authority-selection-"));
+  try {
+    const { publicKey } = generateKeyPairSync("ed25519", { publicKeyEncoding: { type: "spki", format: "der" } });
+    const raw = await EpisodeEvolutionLedger.open({ root, lessonAdmissionAuthority: publicKey.toString("base64") });
+    await raw.close();
+    await assert.rejects(LessonRegistry.open({ root, now: () => fixedNow }), (error) => error.code === "lesson_admission_authority_conflict");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("registry-owned backups preserve the private authority for restore", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lesson-registry-backup-"));
+  const restoredRoot = await mkdtemp(join(tmpdir(), "lesson-registry-restored-"));
+  let registry;
+  let restoredLedger;
+  try {
+    registry = await LessonRegistry.open({ root, now: () => fixedNow });
+    await registry.propose(lesson({ id: "lesson-backup-restore" }));
+    const backup = await registry.backup();
+    await registry.close();
+    restoredLedger = await EpisodeEvolutionLedger.restore({ backupPath: backup.path, root: restoredRoot });
+    const reopened = await LessonRegistry.open({ ledger: restoredLedger, now: () => fixedNow });
+    try { assert.equal(reopened.get("lesson-backup-restore").state, "proposed"); }
+    finally { await reopened.close(); restoredLedger = undefined; }
+  } finally {
+    await registry?.close();
+    await restoredLedger?.close();
+    await rm(root, { recursive: true, force: true });
+    await rm(restoredRoot, { recursive: true, force: true });
+  }
 });
 
 test("registry only depends on the ledger write direction", async () => {

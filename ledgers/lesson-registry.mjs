@@ -1,6 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import { lstat, open, readFile, rename, unlink } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { TextDecoder, TextEncoder } from "node:util";
-import { EpisodeEvolutionLedger } from "./episode-evolution-ledger.mjs";
+import { EpisodeEvolutionLedger, lessonAdmissionAuthorityId, lessonAdmissionBindingDigest, verifyLessonAdmission } from "./episode-evolution-ledger.mjs";
 import {
   LESSON_BEHAVIOR_KINDS,
   LESSON_LIFECYCLE_STATES,
@@ -33,6 +35,8 @@ const DEFAULT_REGISTRY_LIMITS = Object.freeze({
 export { DEFAULT_REGISTRY_LIMITS };
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+const LESSON_AUTHORITY_FILE = ".lesson-registry-authority.json";
+const AUTHORITY_B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const clone = (value) => structuredClone(value);
 const compactErrorCode = (error) => typeof error?.code === "string" && /^[a-z0-9_:-]{1,96}$/.test(error.code) ? error.code : "unknown";
 const compactErrors = (errors) => Array.isArray(errors) ? errors.slice(0, 32).map((error) => ({ code: compactErrorCode(error), path: typeof error?.path === "string" ? error.path.slice(0, 256) : "" })) : [];
@@ -125,24 +129,94 @@ function behaviorConflict(left, right) {
 function safeLessonSummary(lesson, reason, conflict = false) {
   return { lessonId: lesson.id, version: lesson.version, state: lesson.state, reason, conflict };
 }
+function authorityPayload(authority) {
+  return { format: 1, algorithm: "ed25519", publicKey: authority.publicKey, privateKey: authority.privateKey.export({ type: "pkcs8", format: "der" }).toString("base64") };
+}
+function parseAuthority(payload) {
+  if (!payload || payload.format !== 1 || payload.algorithm !== "ed25519" || typeof payload.publicKey !== "string" || !AUTHORITY_B64.test(payload.publicKey) || typeof payload.privateKey !== "string" || !AUTHORITY_B64.test(payload.privateKey) || payload.publicKey.length > 1024 || payload.privateKey.length > 4096) throw new LessonRegistryError("lesson_admission_authority_invalid", "lesson registry authority is invalid");
+  try {
+    const privateKey = createPrivateKey({ key: Buffer.from(payload.privateKey, "base64"), format: "der", type: "pkcs8" });
+    const publicKey = createPublicKey({ key: Buffer.from(payload.publicKey, "base64"), format: "der", type: "spki" });
+    if (publicKey.export({ type: "spki", format: "der" }).toString("base64") !== payload.publicKey || createPublicKey(privateKey).export({ type: "spki", format: "der" }).toString("base64") !== payload.publicKey) throw new Error("authority binding mismatch");
+    return Object.freeze({ publicKey: payload.publicKey, privateKey, authorityId: lessonAdmissionAuthorityId(payload.publicKey) });
+  } catch { throw new LessonRegistryError("lesson_admission_authority_invalid", "lesson registry authority is invalid"); }
+}
+function generateAuthority() {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519", { publicKeyEncoding: { type: "spki", format: "der" }, privateKeyEncoding: { type: "pkcs8", format: "der" } });
+  return parseAuthority({ format: 1, algorithm: "ed25519", publicKey: publicKey.toString("base64"), privateKey: privateKey.toString("base64") });
+}
+async function readAuthority(root) {
+  const path = join(resolve(root), LESSON_AUTHORITY_FILE);
+  let info;
+  try { info = await lstat(path); } catch (error) { if (error.code === "ENOENT") return { path, authority: undefined }; throw error; }
+  if (!info.isFile() || info.isSymbolicLink() || info.size > 16 * 1024) throw new LessonRegistryError("lesson_admission_authority_invalid", "lesson registry authority file is unsafe");
+  let payload; try { payload = JSON.parse(await readFile(path, "utf8")); } catch { throw new LessonRegistryError("lesson_admission_authority_invalid", "lesson registry authority file is invalid"); }
+  return { path, authority: parseAuthority(payload) };
+}
+async function writeAuthority(path, authority) {
+  const body = canonicalJson(authorityPayload(authority));
+  try {
+    const handle = await open(path, "wx", 0o600);
+    try { await handle.writeFile(body); await handle.sync(); }
+    finally { await handle.close(); }
+    try {
+      const directory = await open(resolve(path, ".."), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+    } catch (error) { if (!['EINVAL', 'EPERM', 'EISDIR'].includes(error.code)) throw error; }
+  } catch (error) {
+    if (error.code !== "EEXIST") throw new LessonRegistryError("lesson_admission_authority_invalid", "lesson registry authority could not be persisted");
+    const existing = await readAuthority(resolve(path, ".."));
+    if (!existing.authority || existing.authority.publicKey !== authority.publicKey || existing.authority.privateKey.export({ type: "pkcs8", format: "der" }).toString("base64") !== authority.privateKey.export({ type: "pkcs8", format: "der" }).toString("base64")) throw new LessonRegistryError("lesson_admission_authority_conflict", "lesson registry authority was replaced");
+  }
+}
+async function authorityForRoot(root, durablePublicKey) {
+  const loaded = await readAuthority(root);
+  const authority = loaded.authority ?? generateAuthority();
+  if (durablePublicKey !== undefined && durablePublicKey !== authority.publicKey) throw new LessonRegistryError("lesson_admission_authority_conflict", "registry authority does not match the durable ledger authority");
+  return { ...loaded, authority, created: loaded.authority === undefined };
+}
+async function replaceJson(path, value) {
+  const temporary = `${path}.${randomUUID()}.tmp`, body = canonicalJson(value);
+  try {
+    const handle = await open(temporary, "wx", 0o600);
+    try { await handle.writeFile(body); await handle.sync(); }
+    finally { await handle.close(); }
+    await rename(temporary, path);
+  } finally { await unlink(temporary).catch(() => {}); }
+}
+function signedLessonAdmission(authority, envelope) {
+  const binding = lessonAdmissionBindingDigest(envelope);
+  return { version: 1, algorithm: "ed25519", authority: authority.authorityId, binding, signature: sign(null, Buffer.from(binding), authority.privateKey).toString("base64url") };
+}
 
 export class LessonRegistry {
   static async open(options = {}) {
     let ledger = options.ledger;
-    let admissionCapability;
+    let admissionAuthority;
     let ownsLedger = false;
+    let authorityState;
     if (!ledger) {
       if (typeof options.root !== "string" || options.root.length === 0) throw new LessonRegistryError("root_required", "lesson registry root is required");
-      admissionCapability = Object.freeze({});
-      ledger = await EpisodeEvolutionLedger.open({ root: options.root, ...(options.ledgerOptions ?? {}), limits: options.ledgerLimits ?? options.ledgerOptions?.limits, lessonAdmissionCapability: admissionCapability });
+      authorityState = await authorityForRoot(options.root);
+      ledger = await EpisodeEvolutionLedger.open({ ...(options.ledgerOptions ?? {}), root: options.root, limits: options.ledgerLimits ?? options.ledgerOptions?.limits, lessonAdmissionAuthority: undefined });
       ownsLedger = true;
     } else {
-      admissionCapability = options.admissionCapability;
-      if (typeof ledger.hasLessonAdmissionCapability !== "function" || !ledger.hasLessonAdmissionCapability(admissionCapability)) throw new LessonRegistryError("lesson_admission_capability_required", "an injected ledger requires its matching private lesson admission capability");
+      if (typeof ledger.root !== "string" || typeof ledger.getLessonAdmissionAuthority !== "function") throw new LessonRegistryError("lesson_admission_authority_required", "an injected ledger must expose its durable lesson admission authority");
+      authorityState = await authorityForRoot(ledger.root, ledger.getLessonAdmissionAuthority());
     }
-    const registry = new LessonRegistry({ ...options, ledger, admissionCapability });
-    try { await registry.rebuild(); return registry; }
-    catch (error) { if (ownsLedger) await ledger.close().catch(() => {}); throw error; }
+    admissionAuthority = authorityState.authority;
+    try {
+      const durableAuthority = ledger.getLessonAdmissionAuthority();
+      if (durableAuthority !== undefined && durableAuthority !== admissionAuthority.publicKey) throw new LessonRegistryError("lesson_admission_authority_conflict", "registry authority does not match the durable ledger authority");
+      if (durableAuthority === undefined) {
+        if (authorityState.created) await writeAuthority(authorityState.path, admissionAuthority);
+        if (typeof ledger.ensureLessonAdmissionAuthority !== "function") throw new LessonRegistryError("lesson_admission_authority_required", "an injected ledger cannot bind a durable lesson admission authority");
+        await ledger.ensureLessonAdmissionAuthority(admissionAuthority.publicKey);
+      }
+      const registry = new LessonRegistry({ ...options, ledger, admissionAuthority });
+      await registry.rebuild();
+      return registry;
+    } catch (error) { if (ownsLedger) await ledger.close().catch(() => {}); throw error; }
   }
 
   #ledger;
@@ -152,9 +226,9 @@ export class LessonRegistry {
   #rebuildPromise = Promise.resolve();
   #admissions = Promise.resolve();
   #authorizedHumanIdentities;
-  #admissionCapability;
+  #admissionAuthority;
 
-  constructor({ ledger, projectId = "pi-sampler", repositoryId = "github.com/Zkrausman/pi-sampler", repositoryRevision = "0".repeat(40), ticket = { system: "lesson-registry", id: "LESSON-REGISTRY-V1" }, now = Date.now, limits = {}, currentRepositoryRevision, currentEvaluatorIdentity, authorizedHumanIdentities = [], admissionCapability } = {}) {
+  constructor({ ledger, projectId = "pi-sampler", repositoryId = "github.com/Zkrausman/pi-sampler", repositoryRevision = "0".repeat(40), ticket = { system: "lesson-registry", id: "LESSON-REGISTRY-V1" }, now = Date.now, limits = {}, currentRepositoryRevision, currentEvaluatorIdentity, authorizedHumanIdentities = [], admissionAuthority } = {}) {
     if (!ledger || typeof ledger !== "object") throw new LessonRegistryError("ledger_required", "an EpisodeEvolutionLedger facade is required");
     if (!identifier(projectId) || !identifier(repositoryId) || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(repositoryRevision) || !identifier(ticket.system) || !identifier(ticket.id)) throw new LessonRegistryError("registry_identity_invalid", "lesson registry identity is invalid");
     if (!Array.isArray(authorizedHumanIdentities) || authorizedHumanIdentities.length > 128 || authorizedHumanIdentities.some((value) => !identifier(value))) throw new LessonRegistryError("registry_identity_invalid", "authorized human identities are invalid");
@@ -168,12 +242,33 @@ export class LessonRegistry {
     this.currentRepositoryRevision = currentRepositoryRevision;
     this.currentEvaluatorIdentity = currentEvaluatorIdentity;
     this.#authorizedHumanIdentities = new Set(authorizedHumanIdentities);
-    this.#admissionCapability = admissionCapability;
+    this.#admissionAuthority = admissionAuthority;
     this.closed = false;
   }
 
   get ledger() { return this.#ledger; }
   async close() { if (!this.closed && typeof this.#ledger.close === "function") await this.#ledger.close(); this.closed = true; }
+  async backup(options = {}) {
+    this.#assertOpen();
+    if (!this.#admissionAuthority || typeof this.#ledger.backup !== "function") throw new LessonRegistryError("backup_unavailable", "lesson registry backup requires a durable ledger backup API");
+    try {
+      const result = await this.#ledger.backup(options), archive = resolve(result.path), authorityPath = join(archive, LESSON_AUTHORITY_FILE);
+      const authorityBody = canonicalJson(authorityPayload(this.#admissionAuthority)), authorityBytes = Buffer.byteLength(authorityBody);
+      if (Number.isSafeInteger(options.maxBytes) && result.bytes + authorityBytes > options.maxBytes) throw new LessonRegistryError("backup_limit_exceeded", "registry authority would exceed the requested backup byte bound");
+      await writeAuthority(authorityPath, this.#admissionAuthority);
+      const manifestPath = join(archive, "backup-manifest.json"), manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      if (manifest.format !== "episode-evolution-ledger-backup" || manifest.version !== 1 || !Array.isArray(manifest.files)) throw new Error("backup_manifest_invalid");
+      const authorityDescriptor = { path: LESSON_AUTHORITY_FILE, size: authorityBytes, digest: sha256(authorityBody) };
+      const files = manifest.files.filter((file) => file.path !== LESSON_AUTHORITY_FILE);
+      files.push(authorityDescriptor);
+      const anchor = sha256(canonicalJson(files));
+      await replaceJson(manifestPath, { ...manifest, anchor, files });
+      return { ...result, anchor, files: files.length, bytes: result.bytes + authorityBytes };
+    } catch (error) {
+      if (error instanceof LessonRegistryError) throw error;
+      throw new LessonRegistryError("backup_failed", "lesson registry backup failed closed", { causeCode: compactErrorCode(error) });
+    }
+  }
 
   #assertOpen() { if (this.closed) throw new LessonRegistryError("closed", "lesson registry is closed"); }
   #time() { return nowIso(this.now); }
@@ -272,8 +367,8 @@ export class LessonRegistry {
     maps.latest.set(lesson.id, clone(lesson));
   }
 
-  #validateDurableLifecycle(lesson, record, prior, admission) {
-    if (admission?.version !== 1) throw new LessonRegistryError("lesson_admission_invalid", "durable lesson event lacks the registry admission capability marker");
+  #validateDurableLifecycle(lesson, record, prior, admission, entry) {
+    if (!this.#admissionAuthority || !verifyLessonAdmission(entry, admission, this.#admissionAuthority.publicKey)) throw new LessonRegistryError("lesson_admission_invalid", "durable lesson event lacks a valid registry authority binding");
     if (record?.event?.kind !== "lesson" || record.project?.id !== this.projectId || record.repository?.id !== this.repositoryId || record.ticket?.system !== this.ticket.system || record.ticket?.id !== this.ticket.id || record.producer?.id !== "lesson-registry" || record.producer?.kind !== "system" || record.state !== "quarantined" || record.evidence?.class !== "caller_claim" || record.evidence?.authority?.level !== "untrusted" || record.coverage?.status !== "partial") throw new LessonRegistryError("lesson_event_untrusted", "durable lesson event is not an authenticated registry admission");
     const history = lesson.stateHistory;
     if (!prior || lesson.version > prior.version) {
@@ -305,9 +400,9 @@ export class LessonRegistry {
       }
       if (!lesson) continue;
       const prepared = this.#prepare(lesson);
-      this.#validateDurableLifecycle(prepared, record, durableLatest.get(prepared.id), entry?.lessonAdmission);
+      this.#validateDurableLifecycle(prepared, record, durableLatest.get(prepared.id), entry?.lessonAdmission, entry);
       durableLatest.set(prepared.id, prepared);
-      yield { lesson: prepared, record };
+      yield { lesson: prepared, record, entry };
     }
   }
 
@@ -411,16 +506,11 @@ export class LessonRegistry {
     };
     const bytes = encoder.encode(canonicalJson(lesson));
     const artifact = { bytes, metadata: { identity: artifactIdentity(lesson), evidenceClass: "caller_claim", coverage: "partial", provenance: canonicalJson({ lessonId: lesson.id, version: lesson.version, state: lesson.state }), sensitivity: "internal" } };
+    if (!this.#admissionAuthority || typeof this.#ledger.appendLesson !== "function") throw new LessonRegistryError("lesson_admission_api_unavailable", "lesson persistence requires the protected registry admission API");
+    const reference = { digest: sha256(bytes), size: bytes.byteLength, ...artifact.metadata };
+    const admission = signedLessonAdmission(this.#admissionAuthority, { format: this.#ledger.formatVersion ?? 2, type: "episode", record, artifacts: [reference] });
     try {
-      if (typeof this.#ledger.appendLesson === "function") {
-        return { result: await this.#ledger.appendLesson(clone(lesson), { record: clone(record), artifact: clone(artifact), capability: this.#admissionCapability }), record };
-      }
-      if (typeof this.#ledger.appendEpisodeWithArtifactBatch === "function") {
-        return { result: await this.#ledger.appendEpisodeWithArtifactBatch(record, { artifacts: [artifact], capability: this.#admissionCapability }), record };
-      }
-      if (typeof this.#ledger.writeArtifact !== "function" || typeof this.#ledger.appendEpisode !== "function") throw new Error("ledger_write_api_unavailable");
-      const reference = await this.#ledger.writeArtifact(bytes, artifact.metadata);
-      return { result: await this.#ledger.appendEpisode(record, { artifacts: [reference] }), record };
+      return { result: await this.#ledger.appendLesson(clone(lesson), { record: clone(record), artifact: clone(artifact), admission }), record };
     } catch (error) {
       if (error instanceof LessonRegistryError) throw error;
       throw new LessonRegistryError("persistence_failed", "lesson registry persistence failed closed", { causeCode: compactErrorCode(error) });
