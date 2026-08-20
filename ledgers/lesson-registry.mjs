@@ -458,7 +458,10 @@ export class LessonRegistry {
       if (!metadata.evaluation || typeof metadata.evaluation !== "object") throw new LessonRegistryTransitionError("evaluation_required", "evaluating a lesson requires an evaluation identity");
       next.evaluation = { identity: metadata.evaluation.identity, evaluatedAt: metadata.evaluation.evaluatedAt ?? changedAt, ...(metadata.evaluation.score === undefined ? {} : { score: metadata.evaluation.score }), ...(metadata.evaluation.notes === undefined ? {} : { notes: String(metadata.evaluation.notes).slice(0, 4096) }) };
     }
-    if (targetState === "promoted") await this.#guardPromotion(next);
+    if (targetState === "promoted") {
+      if (current.state === "proposed" && next.catastrophicSafetyException === undefined) throw new LessonRegistryPromotionError("evaluation_required", "normal promotion requires an evaluated lesson");
+      await this.#guardPromotion(next);
+    }
     next.contentDigest = lessonContentDigest(next);
     const result = validateLessonV1(next, { now: Date.parse(changedAt) });
     if (!result.ok) throw new LessonRegistryTransitionError("transition_invalid", "lesson lifecycle transition failed closed validation", { codes: compactErrors(result.errors).map((error) => error.code) });

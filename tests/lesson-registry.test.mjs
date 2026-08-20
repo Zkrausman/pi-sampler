@@ -91,6 +91,13 @@ test("immutable transition conflicts fail before append and reopen cleanly", asy
   } finally { await reopened.close(); }
 }));
 
+test("ordinary proposed lessons cannot bypass evaluation", async () => withRegistry(async (registry) => {
+  const candidate = lesson({ id: "lesson-proposed-promotion" });
+  await registry.propose(candidate);
+  await assert.rejects(registry.promote(candidate.id), (error) => error instanceof LessonRegistryPromotionError && error.code === "evaluation_required");
+  assert.equal(registry.get(candidate.id).state, "proposed");
+}));
+
 test("normal promotion requires multiple tickets and preserves a clean cache on rejection", async () => withRegistry(async (registry) => {
   const candidate = singleTicketLesson();
   await registry.propose(candidate);
