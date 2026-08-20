@@ -66,6 +66,18 @@ test("catastrophic safety metadata is narrow, bound to evidence, and fail-closed
   assert.equal(validateLessonV1(broad).ok, false);
   const mismatchedTarget = catastrophicLesson({ catastrophicSafetyException: { ...candidate.catastrophicSafetyException, scope: { kind: "avoid", target: "different-target" } } });
   assert.equal(validateLessonV1(mismatchedTarget).ok, false);
+  const inventedDecision = catastrophicLesson();
+  inventedDecision.catastrophicSafetyException = { ...inventedDecision.catastrophicSafetyException, approvedBy: "model-agent", humanDecisionId: "invented-decision" };
+  inventedDecision.contentDigest = lessonContentDigest(inventedDecision);
+  const inventedResult = validateLessonV1(inventedDecision);
+  assert.equal(inventedResult.ok, false);
+  assert.ok(codes(inventedResult).includes("catastrophic_exception_decision_unbound"));
+  const mismatchedApprover = catastrophicLesson();
+  mismatchedApprover.catastrophicSafetyException = { ...mismatchedApprover.catastrophicSafetyException, approvedBy: "model-agent" };
+  mismatchedApprover.contentDigest = lessonContentDigest(mismatchedApprover);
+  const mismatchedApproverResult = validateLessonV1(mismatchedApprover);
+  assert.equal(mismatchedApproverResult.ok, false);
+  assert.ok(codes(mismatchedApproverResult).includes("catastrophic_exception_approver_mismatch"));
   const broadConditions = catastrophicLesson({ applicability: { conditions: [
     { field: "a", operator: "exists" }, { field: "b", operator: "exists" }, { field: "c", operator: "exists" },
     { field: "d", operator: "exists" }, { field: "e", operator: "exists" },

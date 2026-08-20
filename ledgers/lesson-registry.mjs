@@ -146,10 +146,12 @@ export class LessonRegistry {
   #sequences = new Map();
   #rebuildPromise = Promise.resolve();
   #admissions = Promise.resolve();
+  #authorizedHumanIdentities;
 
-  constructor({ ledger, projectId = "pi-sampler", repositoryId = "github.com/Zkrausman/pi-sampler", repositoryRevision = "0".repeat(40), ticket = { system: "lesson-registry", id: "LESSON-REGISTRY-V1" }, now = Date.now, limits = {}, currentRepositoryRevision, currentEvaluatorIdentity } = {}) {
+  constructor({ ledger, projectId = "pi-sampler", repositoryId = "github.com/Zkrausman/pi-sampler", repositoryRevision = "0".repeat(40), ticket = { system: "lesson-registry", id: "LESSON-REGISTRY-V1" }, now = Date.now, limits = {}, currentRepositoryRevision, currentEvaluatorIdentity, authorizedHumanIdentities = [] } = {}) {
     if (!ledger || typeof ledger !== "object") throw new LessonRegistryError("ledger_required", "an EpisodeEvolutionLedger facade is required");
     if (!identifier(projectId) || !identifier(repositoryId) || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(repositoryRevision) || !identifier(ticket.system) || !identifier(ticket.id)) throw new LessonRegistryError("registry_identity_invalid", "lesson registry identity is invalid");
+    if (!Array.isArray(authorizedHumanIdentities) || authorizedHumanIdentities.length > 128 || authorizedHumanIdentities.some((value) => !identifier(value))) throw new LessonRegistryError("registry_identity_invalid", "authorized human identities are invalid");
     this.#ledger = ledger;
     this.projectId = projectId;
     this.repositoryId = repositoryId;
@@ -159,6 +161,7 @@ export class LessonRegistry {
     this.limits = configuredLimits(limits);
     this.currentRepositoryRevision = currentRepositoryRevision;
     this.currentEvaluatorIdentity = currentEvaluatorIdentity;
+    this.#authorizedHumanIdentities = new Set(authorizedHumanIdentities);
     this.closed = false;
   }
 
@@ -262,18 +265,52 @@ export class LessonRegistry {
     maps.latest.set(lesson.id, clone(lesson));
   }
 
+  #validateDurableLifecycle(lesson, record, prior) {
+    if (record?.event?.kind !== "lesson" || record.project?.id !== this.projectId || record.repository?.id !== this.repositoryId || record.ticket?.system !== this.ticket.system || record.ticket?.id !== this.ticket.id || record.producer?.id !== "lesson-registry" || record.producer?.kind !== "system" || record.state !== "quarantined" || record.evidence?.class !== "caller_claim" || record.evidence?.authority?.level !== "untrusted" || record.coverage?.status !== "partial") throw new LessonRegistryError("lesson_event_untrusted", "durable lesson event is not an authenticated registry admission");
+    const history = lesson.stateHistory;
+    if (!prior || lesson.version > prior.version) {
+      if (lesson.state !== "proposed" || history.length !== 0 || lesson.evaluation !== undefined) throw new LessonRegistryError("lesson_lifecycle_invalid", "durable lesson history must begin with an unevaluated proposal", { lessonId: lesson.id, version: lesson.version });
+    } else {
+      if (lesson.version < prior.version) throw new LessonRegistryError("lesson_lifecycle_invalid", "durable lesson history regressed to an older version", { lessonId: lesson.id, version: lesson.version });
+      if (lesson.contentDigest !== prior.contentDigest) throw new LessonRegistryConflictError("lesson_version_conflict", "durable lesson history contains multiple immutable content identities", { lessonId: lesson.id, version: lesson.version });
+      const transition = history.at(-1);
+      if (history.length !== prior.stateHistory.length + 1 || !transition || transition.from !== prior.state || transition.to !== lesson.state || !validateLessonTransition(transition.from, transition.to).ok) throw new LessonRegistryError("lesson_lifecycle_invalid", "durable lesson history does not contain the admitted prior transition", { lessonId: lesson.id, version: lesson.version });
+    }
+    if (lesson.state === "evaluated" && !lesson.evaluation) throw new LessonRegistryError("lesson_lifecycle_invalid", "evaluated lessons must contain a durable evaluation");
+    if (lesson.state === "promoted" && prior?.state === "evaluated" && !lesson.evaluation) throw new LessonRegistryError("lesson_lifecycle_invalid", "normal promoted lessons must retain their durable evaluation");
+    if (lesson.state === "promoted" && prior?.state === "proposed") {
+      if (lesson.catastrophicSafetyException === undefined) throw new LessonRegistryError("lesson_lifecycle_invalid", "direct promotion must carry the catastrophic safety exception");
+      if (!this.#authorizedHumanIdentities.has(lesson.catastrophicSafetyException.approvedBy)) throw new LessonRegistryError("catastrophic_exception_approver_unauthorized", "durable catastrophic promotion lacks an authorized human approver");
+    }
+  }
+
+  async *#streamValidatedLessons({ batchSize = this.limits.maxRebuildBatch } = {}) {
+    const durableLatest = new Map(), nextSequences = new Map();
+    for await (const entry of this.#streamEntries({ batchSize })) {
+      const lesson = await this.#decodeEntry(entry);
+      const record = entry?.record;
+      if (typeof record?.episode?.id === "string") {
+        if (!Number.isSafeInteger(record.sequence)) throw new LessonRegistryError("lesson_lifecycle_invalid", "durable lesson event sequence is invalid");
+        const expected = nextSequences.get(record.episode.id) ?? 0;
+        if (record.sequence !== expected) throw new LessonRegistryError("lesson_lifecycle_invalid", "durable lesson event sequence is not contiguous");
+        nextSequences.set(record.episode.id, expected + 1);
+      }
+      if (!lesson) continue;
+      const prepared = this.#prepare(lesson);
+      this.#validateDurableLifecycle(prepared, record, durableLatest.get(prepared.id));
+      durableLatest.set(prepared.id, prepared);
+      yield { lesson: prepared, record };
+    }
+  }
+
   async rebuild({ batchSize = this.limits.maxRebuildBatch } = {}) {
     this.#assertOpen();
     const run = this.#rebuildPromise.catch(() => {}).then(async () => {
       const latest = new Map(), versions = new Map(), sequences = new Map();
       try {
-        for await (const entry of this.#streamEntries({ batchSize })) {
-          const lesson = await this.#decodeEntry(entry);
-          const eventRecord = entry?.record;
+        for await (const { lesson, record: eventRecord } of this.#streamValidatedLessons({ batchSize })) {
           if (eventRecord?.episode?.id && Number.isSafeInteger(eventRecord.sequence)) sequences.set(eventRecord.episode.id, Math.max(sequences.get(eventRecord.episode.id) ?? -1, eventRecord.sequence + 1));
-          if (!lesson) continue;
-          const prepared = this.#prepare(lesson);
-          this.#remember(prepared, { latest, versions, sequences });
+          this.#remember(lesson, { latest, versions, sequences });
         }
       } catch (error) {
         if (error instanceof LessonRegistryError) throw error;
@@ -335,10 +372,7 @@ export class LessonRegistry {
   async *streamLessons({ state, batchSize = this.limits.maxRebuildBatch } = {}) {
     this.#assertOpen();
     const seen = new Set();
-    for await (const entry of this.#streamEntries({ batchSize })) {
-      const lesson = await this.#decodeEntry(entry);
-      if (!lesson) continue;
-      const prepared = this.#prepare(lesson);
+    for await (const { lesson: prepared } of this.#streamValidatedLessons({ batchSize })) {
       const key = contentKey(prepared) + `\u0000${prepared.state}`;
       if (seen.has(key) || (state !== undefined && prepared.state !== state)) continue;
       seen.add(key);
@@ -553,6 +587,7 @@ export class LessonRegistry {
       const exception = validateCatastrophicSafetyException(emergency, lesson);
       if (!exception.ok) throw new LessonRegistryPromotionError("catastrophic_exception_malformed", "catastrophic safety exception was rejected fail closed", { codes: compactErrors(exception.errors).map((error) => error.code) });
       if (tickets.size !== 1 || episodes.size !== 1 || events.size !== 1 || lesson.behavior.kind !== "avoid" || lesson.applicability.conditions.length > 4) throw new LessonRegistryPromotionError("catastrophic_exception_scope_invalid", "catastrophic safety exception is broader than the narrow emergency policy");
+      if (!this.#authorizedHumanIdentities.has(emergency.approvedBy)) throw new LessonRegistryPromotionError("catastrophic_exception_approver_unauthorized", "catastrophic safety exception requires an authorized human approver");
     } else if (tickets.size < 2) {
       throw new LessonRegistryPromotionError("evidence_ticket_breadth_insufficient", "promotion requires evidence from at least two distinct tickets");
     }

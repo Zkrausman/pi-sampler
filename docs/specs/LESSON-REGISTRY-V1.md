@@ -94,6 +94,11 @@ boolean bypass. It must:
 
 - have `kind: catastrophic_safety` and the exact supported policy version;
 - bind one cited episode, event, and ticket;
+- bind a cited `humanDecisionId` whose decision is `approve`, whose author is
+  exactly `approvedBy`, and whose episode/event/ticket bindings match the
+  exception;
+- pass the registry's configured `authorizedHumanIdentities` trust boundary;
+  an empty authorization set disables the one-ticket exception;
 - name a bounded reason and a human approver;
 - scope only an `avoid` behavior and no more than four applicability
   conditions; and
@@ -119,8 +124,10 @@ contains a classified `lesson` Ticket Episode record and one canonical JSON
 artifact. Rebuilding reads bounded pages or an async ledger stream, validates
 each artifact, and swaps the cache only after the complete stream succeeds.
 Malformed lesson artifacts, conflicting content identities, missing pages, and
-truncated streams fail closed. Registry queries return clones and never expose
-raw ledger packets.
+truncated streams fail closed. Rebuild also requires the registry event binding,
+contiguous episode sequence, an initial unevaluated proposal, and a complete
+state-history chain for every later version/state. Registry queries return clones
+and never expose raw ledger packets.
 
 Conflict, overlap, stale-evidence, and accumulation queries use the same
 bounded stream boundary. Limits apply to lesson bytes, conditions, evidence,
@@ -134,6 +141,8 @@ serialize an unbounded ledger or use a partial page as a complete decision.
 | One ticket generalizes an accident into a rule | Distinct-ticket promotion gate; explicit emergency policy only for a narrow avoid lesson. |
 | Conflicting rules are ordered by arrival or confidence | Streamed conflict detection and explicit supersession/rejection; no silent tie-break. |
 | Model or adapter mints authority | Episode evidence remains classified and human decisions/evaluator identity are required. |
+| Raw ledger append mints a promoted lesson | Rebuild authenticates the registry event shape and requires a contiguous durable proposal/evaluation/lifecycle chain. |
+| Forged catastrophic approval bypasses the two-ticket rule | The exception binds an approving human decision and author to the cited evidence, then checks the configured human-identity trust boundary. |
 | Stale evaluation is reused after repository/evaluator drift | Immutable revision/evaluator identity and fail-closed staleness checks. |
 | Malformed emergency metadata bypasses policy | Strict structural and semantic exception validation; malformed data denies promotion. |
 | OOM or partial rebuild hides accumulated rules | Bounded stream/page interfaces, configured limits, and atomic cache replacement. |

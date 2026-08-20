@@ -67,7 +67,7 @@ export function catastrophicLesson(overrides = {}) {
     provenance: {
       sourceEpisodes: ["catastrophic-episode"],
       sourceTickets: ["AIDEV-999"],
-      humanDecisions: [{ id: "catastrophic-decision", authorId: "safety-owner", decision: "approve", decidedAt: "2026-08-17T00:00:00.000Z", rationale: "Immediate narrow prohibition" }],
+      humanDecisions: [{ id: "catastrophic-decision", authorId: "safety-owner", decision: "approve", decidedAt: "2026-08-17T00:00:00.000Z", episodeId: "catastrophic-episode", eventId: "catastrophic-event", ticketId: "AIDEV-999", rationale: "Immediate narrow prohibition" }],
     },
     risk: { level: "critical", rationale: "The operation caused catastrophic safety harm" },
     catastrophicSafetyException: {

@@ -111,7 +111,7 @@ const CatastrophicSafetyExceptionSchema = Type.Object({
   ticketId: identifier("Catastrophic safety ticket identity"),
   reason: boundedText("Catastrophic safety reason", 4096),
   approvedBy: identifier("Emergency policy approver identity"),
-  humanDecisionId: Type.Optional(identifier("Emergency human decision identity")),
+  humanDecisionId: identifier("Emergency human decision identity"),
   scope: Type.Object({ kind: Type.Literal("avoid"), target: identifier("Narrow prohibition target") }, { additionalProperties: false }),
   immediate: Type.Optional(Type.Boolean()),
   approvedAt: Type.Optional(timestamp),
@@ -259,6 +259,13 @@ function semanticException(exception, lesson, errors) {
   if (lesson?.behavior?.kind !== "avoid") errors.push(issue("catastrophic_exception_behavior_invalid", "catastrophic safety exceptions may create only avoid prohibitions", "/behavior/kind"));
   if (!exception.reason || typeof exception.reason !== "string" || exception.reason.length > 4096) errors.push(issue("catastrophic_exception_reason_invalid", "catastrophic safety exception requires a bounded reason", "/catastrophicSafetyException/reason"));
   if (!exception.approvedBy || typeof exception.approvedBy !== "string" || !identifierPattern.test(exception.approvedBy)) errors.push(issue("catastrophic_exception_approval_missing", "catastrophic safety exception requires an approving human identity", "/catastrophicSafetyException/approvedBy"));
+  const decision = lesson?.provenance?.humanDecisions?.find((candidate) => candidate.id === exception.humanDecisionId);
+  if (!decision) errors.push(issue("catastrophic_exception_decision_unbound", "catastrophic safety exception must bind a cited human decision", "/catastrophicSafetyException/humanDecisionId"));
+  else {
+    if (decision.decision !== "approve") errors.push(issue("catastrophic_exception_decision_invalid", "catastrophic safety exception must bind an approving human decision", "/provenance/humanDecisions"));
+    if (decision.authorId !== exception.approvedBy) errors.push(issue("catastrophic_exception_approver_mismatch", "catastrophic safety exception approver must match the approving human decision", "/catastrophicSafetyException/approvedBy"));
+    for (const field of ["episodeId", "eventId", "ticketId"]) if (decision[field] !== exception[field]) errors.push(issue("catastrophic_exception_decision_binding_invalid", "catastrophic safety approval must bind the cited episode, event, and ticket", `/provenance/humanDecisions/${field}`));
+  }
   const scopeKind = typeof exception.scope === "string" ? exception.scope : exception.scope?.kind;
   const scopeTarget = exception.scope?.target;
   if (scopeKind !== "avoid") errors.push(issue("catastrophic_exception_scope_invalid", "catastrophic safety exception scope must be a narrow avoid prohibition", "/catastrophicSafetyException/scope"));

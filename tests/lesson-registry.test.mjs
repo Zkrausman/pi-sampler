@@ -13,7 +13,7 @@ async function withRegistry(body, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "lesson-registry-"));
   let registry;
   try {
-    registry = await LessonRegistry.open({ root, now: () => fixedNow, ...options });
+    registry = await LessonRegistry.open({ root, now: () => fixedNow, authorizedHumanIdentities: ["safety-owner"], ...options });
     await body(registry, root);
   } finally {
     await registry?.close();
@@ -113,6 +113,13 @@ test("catastrophic safety exception permits only the narrow one-ticket avoid pat
   assert.equal(result.lesson.state, "promoted");
 }));
 
+test("catastrophic promotion requires an authorized bound human decision", async () => withRegistry(async (registry) => {
+  const candidate = catastrophicLesson();
+  await registry.propose(candidate);
+  await assert.rejects(registry.promote(candidate.id), (error) => error.code === "catastrophic_exception_approver_unauthorized");
+  assert.equal(registry.get(candidate.id).state, "proposed");
+}, { authorizedHumanIdentities: [] }));
+
 test("promotion detects contradictory overlapping behavior rather than choosing a winner", async () => withRegistry(async (registry) => {
   const first = lesson({ id: "lesson-repeat", behavior: { kind: "repeat", description: "repeat the safe operation", action: "retry" } });
   await proposeAndEvaluate(registry, first);
@@ -184,6 +191,43 @@ test("rebuild rejects lesson artifacts whose repository provenance binding is al
   };
   const registry = new LessonRegistry({ ledger: fakeLedger, now: () => fixedNow });
   await assert.rejects(registry.rebuild(), (error) => error.code === "lesson_artifact_binding_invalid");
+});
+
+test("rebuild rejects raw ledger promotions without an admitted lifecycle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lesson-registry-raw-promotion-"));
+  let registry;
+  try {
+    registry = await LessonRegistry.open({ root, now: () => fixedNow, authorizedHumanIdentities: ["safety-owner"] });
+    const candidate = lesson({ id: "lesson-raw-promotion" });
+    const proposed = await registry.propose(candidate);
+    await registry.close();
+    const ledger = await EpisodeEvolutionLedger.open({ root });
+    try {
+      const forged = lesson({ id: candidate.id, state: "promoted" });
+      const bytes = new TextEncoder().encode(canonicalJson(forged));
+      const eventId = `lesson-v1-${sha256Hex(`${forged.id}\u0000${forged.version}\u0000${forged.state}\u0000${forged.contentDigest}`)}`;
+      const rawRecord = structuredClone(proposed.record);
+      rawRecord.sequence = 1;
+      rawRecord.event = { ...rawRecord.event, id: eventId };
+      rawRecord.agentRun = { ...rawRecord.agentRun, runId: `lesson-run-${sha256Hex(eventId).slice(0, 48)}` };
+      await ledger.appendEpisodeWithArtifactBatch(rawRecord, {
+        artifacts: [{
+          bytes,
+          metadata: {
+            identity: `lesson-v1-${sha256Hex(`${forged.id}\u0000${forged.version}\u0000${forged.contentDigest}`)}`,
+            evidenceClass: "caller_claim",
+            coverage: "partial",
+            provenance: canonicalJson({ lessonId: forged.id, version: forged.version, state: forged.state }),
+            sensitivity: "internal",
+          },
+        }],
+      });
+    } finally { await ledger.close(); }
+    await assert.rejects(LessonRegistry.open({ root, now: () => fixedNow, authorizedHumanIdentities: ["safety-owner"] }), (error) => error.code === "lesson_lifecycle_invalid");
+  } finally {
+    await registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("rebuild rejects oversized lesson artifacts before reading their bytes", async () => {
