@@ -2,7 +2,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "no
 import { lstat, open, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { canonicalJson } from "../contracts/lesson-v1.mjs";
-import { lessonAdmissionAuthorityId, lessonAdmissionBindingDigest } from "./episode-evolution-ledger.mjs";
+import { EpisodeEvolutionLedger, lessonAdmissionAuthorityId, lessonAdmissionBindingDigest } from "./episode-evolution-ledger.mjs";
 
 export const LESSON_AUTHORITY_FILE = ".lesson-registry-authority.json";
 const AUTHORITY_B64 = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -63,6 +63,22 @@ export async function backupRegistryLedger(ledger, authority, options = {}) {
   if (Number.isSafeInteger(options.maxBytes) && result.bytes + authorityBytes > options.maxBytes) throw new LessonRegistryAuthorityError("backup_limit_exceeded", "registry authority would exceed the requested backup byte bound");
   await writeAuthority(authorityPath, authority);
   return { ...result, registryAuthorityPath: authorityPath, bytes: result.bytes + authorityBytes };
+}
+export async function restoreRegistry({ backupPath, root, registryAuthorityPath, ledgerLimits, trustedAuthorityIds, verifyAttestation, ...options }, openRegistry) {
+  const source = await readAuthorityPath(registryAuthorityPath ?? `${resolve(backupPath)}.${LESSON_AUTHORITY_FILE}`);
+  if (!source.authority) throw new LessonRegistryAuthorityError("lesson_admission_authority_required", "registry restore requires its private authority sidecar");
+  let ledger;
+  try {
+    ledger = await EpisodeEvolutionLedger.restore({ backupPath, root, limits: ledgerLimits, trustedAuthorityIds, verifyAttestation });
+    await writeAuthority(join(resolve(root), LESSON_AUTHORITY_FILE), source.authority);
+    await ledger.close();
+    ledger = undefined;
+    return openRegistry({ root, ...options });
+  } catch (error) {
+    if (ledger) await ledger.close().catch(() => {});
+    if (error instanceof LessonRegistryAuthorityError) throw error;
+    throw new LessonRegistryAuthorityError("restore_failed", "lesson registry restore failed closed");
+  }
 }
 export function signedLessonAdmission(authority, envelope) {
   const binding = lessonAdmissionBindingDigest(envelope);

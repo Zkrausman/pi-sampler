@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
 import { TextDecoder, TextEncoder } from "node:util";
-import { authorityForRoot, backupRegistryLedger, LESSON_AUTHORITY_FILE, readAuthorityPath, signedLessonAdmission, writeAuthority } from "./lesson-registry-authority.mjs";
+import { authorityForRoot, backupRegistryLedger, restoreRegistry, signedLessonAdmission, writeAuthority } from "./lesson-registry-authority.mjs";
 import { EpisodeEvolutionLedger, verifyLessonAdmission } from "./episode-evolution-ledger.mjs";
 import {
   LESSON_BEHAVIOR_KINDS,
@@ -156,22 +155,9 @@ export class LessonRegistry {
       return registry;
     } catch (error) { if (ownsLedger) await ledger.close().catch(() => {}); throw error; }
   }
-  static async restore({ backupPath, root, registryAuthorityPath, ledgerLimits, trustedAuthorityIds, verifyAttestation, ...options } = {}) {
-    if (typeof backupPath !== "string" || typeof root !== "string") throw new LessonRegistryError("restore_invalid", "backupPath and root are required");
-    const source = await readAuthorityPath(registryAuthorityPath ?? `${resolve(backupPath)}.${LESSON_AUTHORITY_FILE}`);
-    if (!source.authority) throw new LessonRegistryError("lesson_admission_authority_required", "registry restore requires its private authority sidecar");
-    let ledger;
-    try {
-      ledger = await EpisodeEvolutionLedger.restore({ backupPath, root, limits: ledgerLimits, trustedAuthorityIds, verifyAttestation });
-      await writeAuthority(join(resolve(root), LESSON_AUTHORITY_FILE), source.authority);
-      await ledger.close();
-      ledger = undefined;
-      return LessonRegistry.open({ root, ...options });
-    } catch (error) {
-      await ledger?.close().catch(() => {});
-      if (error instanceof LessonRegistryError) throw error;
-      throw new LessonRegistryError("restore_failed", "lesson registry restore failed closed", { causeCode: compactErrorCode(error) });
-    }
+  static async restore(options = {}) {
+    if (typeof options.backupPath !== "string" || typeof options.root !== "string") throw new LessonRegistryError("restore_invalid", "backupPath and root are required");
+    return restoreRegistry(options, (openOptions) => LessonRegistry.open(openOptions));
   }
 
   #ledger;
