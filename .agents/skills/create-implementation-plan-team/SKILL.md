@@ -14,8 +14,8 @@ This multi-agent architecture guarantees strict adherence to the Pi-Sampler Defi
 When invoked with a target issue (e.g. `AIDEV-148`), you must strictly follow this orchestration sequence:
 
 ### 1. Workspace Preparation (You)
-*   Run `squire prep [TICKET-ID]` to generate a clean, isolated worktree.
-*   Change into that directory (`cd ../ai-workspaces/[TICKET-ID]`).
+*   Run `npm run delivery:worktree -- prepare --purpose plan --profile <approved-profile> --work-item [TICKET-ID] --slug implementation-plan` to generate a unique leased worktree under the configured worktree root's `plan/` subfolder from the profile-declared base.
+*   Change into the returned worktree and retain its branch, base SHA, lease ID, and lease token as the planning-run identity. Never handcraft `git worktree add`, reuse `ai-workspaces/[TICKET-ID]`, or fall back to a ticket-named branch.
 
 ### 2. Spawn The Researcher (Model: `flash`)
 *   **Action**: Use `invoke_subagent` to spawn the officially registered `codebase-researcher` subagent.

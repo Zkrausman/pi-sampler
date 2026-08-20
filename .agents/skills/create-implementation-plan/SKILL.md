@@ -19,8 +19,8 @@ Before generating the implementation plan, the agent **must** ingest and analyze
 To protect context limits and maximize reasoning, you **must** orchestrate the following subagents:
 
 0. **Workspace Preparation:**
-   * Run `squire prep [TICKET-ID]` to fetch the latest `main` branch and create an isolated git worktree.
-   * Command: `cd ../ai-workspaces/[TICKET-ID]` to move into the isolated workspace before doing any research or code changes.
+   * Run `npm run delivery:worktree -- prepare --purpose plan --profile <approved-profile> --work-item [TICKET-ID] --slug implementation-plan` before research or changes. The shared provisioner resolves the profile-declared base, creates a unique leased worktree under the configured worktree root's `plan/` subfolder, and returns its exact identity.
+   * Change into the returned worktree path. Retain its branch, base SHA, lease ID, and lease token as the planning-run identity; never handcraft `git worktree add`, reuse `ai-workspaces/[TICKET-ID]`, or fall back to a ticket-named branch.
 1. **The Researcher (`Model: flash`)**: 
    * Spawn a `research` subagent to ingest the raw issue ticket, extract `pith` file boundaries, and summarize the relevant `governance/` policies.
    * *Compute Effort: Medium (Fast, efficient lookup).*
