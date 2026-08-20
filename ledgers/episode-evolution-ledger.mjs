@@ -304,9 +304,15 @@ export class EpisodeEvolutionLedger {
       for (const entry of this.episodes.get(episodeId)?.records ?? []) yield structuredClone(entry);
     }
   }
-  async readArtifact(reference) {
+  async readArtifact(reference, { maxBytes = this.limits.maxArtifactBytes } = {}) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new LedgerError("query_invalid", "invalid artifact read bound");
+    this.#validateRef(reference);
+    if (reference.size > maxBytes) throw new LedgerLimitError("maxArtifactBytes", reference.size, maxBytes);
+    const path = this.#path("artifacts", reference.digest), info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) throw new LedgerError("artifact_unsafe_path", "artifact path is unsafe");
+    if (info.size > maxBytes) throw new LedgerLimitError("maxArtifactBytes", info.size, maxBytes);
     await this.#verifyRefs([reference]);
-    return new Uint8Array(await readFile(this.#path("artifacts", reference.digest)));
+    return new Uint8Array(await readFile(path));
   }
   async queryEvolutions({ outcome, ...o } = {}) {
     const checked = this.#query([], o), out = []; let bytes = 0;

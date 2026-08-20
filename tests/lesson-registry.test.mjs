@@ -106,6 +106,17 @@ test("history queries are bounded by record and byte limits", async () => withRe
   assert.equal(result.historyTruncated, true);
 }));
 
+test("rebuild rejects oversized lesson artifacts before reading their bytes", async () => {
+  let read = false;
+  const fakeLedger = {
+    async *streamRecords() { yield { record: { event: { kind: "lesson" } }, artifacts: [{ identity: "lesson-v1-oversized", size: 2_000, digest: "a".repeat(64) }] }; },
+    async readArtifact() { read = true; throw new Error("must not read"); },
+  };
+  const registry = new LessonRegistry({ ledger: fakeLedger, now: () => fixedNow, limits: { maxLessonBytes: 1 } });
+  await assert.rejects(registry.rebuild(), (error) => error.code === "lesson_oversized");
+  assert.equal(read, false);
+});
+
 test("bounded streams refuse an incomplete listRecords fallback", async () => {
   const fakeLedger = {
     async listRecords() { return { records: [], truncated: true }; },

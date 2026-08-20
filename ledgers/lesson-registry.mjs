@@ -222,10 +222,12 @@ export class LessonRegistry {
     const refs = Array.isArray(entry.artifacts) ? entry.artifacts : [];
     const reference = refs.find((candidate) => typeof candidate?.identity === "string" && candidate.identity.startsWith("lesson-v1-"));
     if (!reference || typeof this.#ledger.readArtifact !== "function") throw new LessonRegistryError("lesson_artifact_missing", "durable lesson event has no readable lesson artifact");
+    if (!Number.isSafeInteger(reference.size) || reference.size < 0 || reference.size > this.limits.maxLessonBytes) throw new LessonRegistryError("lesson_oversized", "durable lesson artifact exceeds its configured byte bound");
     let bytes;
-    try { bytes = await this.#ledger.readArtifact(reference); }
+    try { bytes = await this.#ledger.readArtifact(reference, { maxBytes: this.limits.maxLessonBytes }); }
     catch { throw new LessonRegistryError("lesson_artifact_unreadable", "durable lesson artifact could not be read"); }
     if (!(bytes instanceof Uint8Array) && !Buffer.isBuffer(bytes)) throw new LessonRegistryError("lesson_artifact_invalid", "durable lesson artifact is not byte data");
+    if (bytes.byteLength > this.limits.maxLessonBytes) throw new LessonRegistryError("lesson_oversized", "durable lesson artifact exceeds its configured byte bound");
     let parsed;
     try {
       parsed = JSON.parse(decoder.decode(bytes));
