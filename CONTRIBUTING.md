@@ -65,6 +65,14 @@ correct an existing unsigned commit, amend it with `git commit --amend
 --signoff` and update the branch according to the repository's contribution
 process. Do not sign off on work you are not authorized to contribute.
 
+## Project wiki changes
+
+The public project wiki uses company mode. Version `.llm-wiki/config.json`, `.llm-wiki/WIKI_SCHEMA.md`, templates, and redacted Markdown under `.llm-wiki/wiki/`. Keep `.llm-wiki/raw/`, `.llm-wiki/meta/`, outputs, discoveries, logs, credentials, sessions, and unredacted tool output local.
+
+Before every handoff, run `git status --short -- .llm-wiki`. Include durable wiki pages directly related to the current change in that pull request. Put durable but unrelated knowledge in a focused `docs(wiki): ...` pull request. Do not publish transient observations or personal working memory: move personal knowledge to the personal vault, and scrub credentials, lease tokens, personal identifiers, absolute machine paths, raw prompts, transcripts, and tool output from anything staged for this public repository.
+
+Run `npm test` and inspect the staged wiki diff; the root policy test verifies that runtime and sensitive wiki paths remain ignored. When changing the nested governance collaboration fixture itself, also validate it from `governance/` with `go run ./cmd/wiki-governance validate -repo-root .`. Generated metadata may be rebuilt locally but must not be committed.
+
 ## Local checks
 
 ```powershell

@@ -7,3 +7,5 @@ okf_version: "0.2"
 ## Directories
 
 - [sources/](sources/)
+- [decisions/](decisions/)
+- [changes/](changes/)

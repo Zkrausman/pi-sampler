@@ -3,6 +3,7 @@
   "schema_version": "wiki-governance-path-policy/v1",
   "canonical_versioned": [
     ".llm-wiki/README.md",
+    ".llm-wiki/config.json",
     ".llm-wiki/WIKI_SCHEMA.md",
     ".llm-wiki/templates/*.md",
     ".llm-wiki/templates/**/*.md",
@@ -19,7 +20,6 @@
     "docs/planning-rubric/**"
   ],
   "generated_local": [
-    ".llm-wiki/config.json",
     ".llm-wiki/meta/**",
     ".llm-wiki/outputs/**",
     ".llm-wiki/.discoveries/**"
@@ -45,7 +45,6 @@
     ".llm-wiki/meta/**",
     ".llm-wiki/outputs/**",
     ".llm-wiki/.discoveries/**",
-    ".llm-wiki/config.json",
     ".pi/sessions/**",
     ".pi/oauth/**",
     ".pi/credentials/**",

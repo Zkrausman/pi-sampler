@@ -12,8 +12,8 @@ This repository shares only reviewable canonical Wiki/OKF Markdown, schemas, tem
 
 | Classification | Location | Git rule | Contents |
 | --- | --- | --- | --- |
-| Canonical/versioned | `.llm-wiki/wiki/**/*.md`, `.llm-wiki/templates/**/*.md`, `.llm-wiki/WIKI_SCHEMA.md`, `.pi/policy.json`, `docs/specs/`, `docs/okf/`, `docs/wiki-governance/`, `evidence/delivery/`, `evidence/references/` | Allowlisted | Redacted knowledge, schemas, templates, IDs, SHA-256 digests, delivery state, and optional harness cost metadata (numeric counters + anonymized `developer_id` only) |
-| Generated/local | `.llm-wiki/meta/`, `outputs/`, `.discoveries/`, `config.json` | Ignored | Rebuildable metadata, plugin output, local configuration, and embeddings. |
+| Canonical/versioned | `.llm-wiki/config.json`, `.llm-wiki/wiki/**/*.md`, `.llm-wiki/templates/**/*.md`, `.llm-wiki/WIKI_SCHEMA.md`, `.pi/policy.json`, `docs/specs/`, `docs/okf/`, `docs/wiki-governance/`, `evidence/delivery/`, `evidence/references/` | Allowlisted | Declarative vault mode/topic, redacted knowledge, schemas, templates, IDs, SHA-256 digests, delivery state, and optional harness cost metadata (numeric counters + anonymized `developer_id` only) |
+| Generated/local | `.llm-wiki/meta/`, `outputs/`, `.discoveries/` | Ignored | Rebuildable metadata, plugin output, and embeddings. |
 | External immutable evidence | `.llm-wiki/raw/`, `evidence/raw/` | Ignored and rejected by validator | Raw packets/assets stay outside Git; committed references contain only a source ID, digest, classification, and redaction state. |
 | Sensitive/local | `.pi/sessions/`, `.pi/oauth/`, `.pi/credentials/`, `.pi/npm/`, `.pi/cache/`, `.pi/tmp/`, `artifacts/tool-output/` | Ignored and rejected by validator | Credentials, OAuth/browser state, session files, package installation, caches, and unredacted output. |
 

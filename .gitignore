@@ -15,7 +15,15 @@ coverage/
 .env.*
 !.env.example
 
-# LLM Wiki runtime state and immutable source packets stay local.
+# LLM Wiki runtime state, immutable source packets, and sensitive artifacts stay local.
 .llm-wiki/raw/
 .llm-wiki/meta/
+.llm-wiki/outputs/
+.llm-wiki/.discoveries/
+.llm-wiki/sessions/
+.llm-wiki/session*.json
+.llm-wiki/**/*.token
+.llm-wiki/**/*.pem
+.llm-wiki/**/*.key
 .llm-wiki/wiki/log.md
+/artifacts/tool-output/
