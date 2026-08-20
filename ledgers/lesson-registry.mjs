@@ -519,7 +519,7 @@ export class LessonRegistry {
     const errors = [];
     const clock = now === undefined ? Date.now() : (typeof now === "function" ? now() : now);
     if (!Number.isFinite(clock)) errors.push("clock_invalid");
-    if (currentRepositoryRevision && candidate.provenance.repositoryRevision && candidate.provenance.repositoryRevision !== currentRepositoryRevision) errors.push("repository_revision_stale");
+    if (currentRepositoryRevision && candidate.provenance.repositoryRevision !== currentRepositoryRevision) errors.push("repository_revision_stale");
     const evaluatorIdentity = candidate.evaluator.identityDigest ?? `${candidate.evaluator.id}@${candidate.evaluator.version}`;
     if (currentEvaluatorIdentity && evaluatorIdentity !== currentEvaluatorIdentity && candidate.evaluator.id !== currentEvaluatorIdentity) errors.push("evaluator_identity_stale");
     const created = Date.parse(candidate.createdAt);
