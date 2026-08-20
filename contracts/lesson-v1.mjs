@@ -112,10 +112,7 @@ const CatastrophicSafetyExceptionSchema = Type.Object({
   reason: boundedText("Catastrophic safety reason", 4096),
   approvedBy: identifier("Emergency policy approver identity"),
   humanDecisionId: Type.Optional(identifier("Emergency human decision identity")),
-  scope: Type.Union([
-    Type.Literal("avoid"),
-    Type.Object({ kind: Type.Literal("avoid"), target: identifier("Narrow prohibition target") }, { additionalProperties: false }),
-  ]),
+  scope: Type.Object({ kind: Type.Literal("avoid"), target: identifier("Narrow prohibition target") }, { additionalProperties: false }),
   immediate: Type.Optional(Type.Boolean()),
   approvedAt: Type.Optional(timestamp),
   expiresAt: Type.Optional(timestamp),

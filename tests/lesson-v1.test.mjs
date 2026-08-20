@@ -62,6 +62,8 @@ test("catastrophic safety metadata is narrow, bound to evidence, and fail-closed
   assert.ok(codes(result).includes("schema_invalid") || codes(result).includes("catastrophic_exception_policy_invalid"));
   const unbound = catastrophicLesson({ catastrophicSafetyException: { ...candidate.catastrophicSafetyException, eventId: "event-not-cited" } });
   assert.equal(validateLessonV1(unbound).ok, false);
+  const broad = catastrophicLesson({ catastrophicSafetyException: { ...candidate.catastrophicSafetyException, scope: "avoid" } });
+  assert.equal(validateLessonV1(broad).ok, false);
 });
 
 test("Lesson schema exporter emits only stdout and never creates the prohibited checked-in artifact", async () => {
