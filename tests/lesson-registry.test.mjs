@@ -274,7 +274,7 @@ test("injected ledgers bind and reuse a durable registry authority", async () =>
     assert.match(episode.records[0].lessonAdmission.signature, /^[A-Za-z0-9_-]{80,128}$/);
     assert.equal(verifyLessonAdmission(episode.records[0], episode.records[0].lessonAdmission, ledger.getLessonAdmissionAuthority()), true);
     assert.equal(verifyLessonAdmission({ ...episode.records[0], previousDigest: "a".repeat(64) }, episode.records[0].lessonAdmission, ledger.getLessonAdmissionAuthority()), false);
-    assert.equal(verifyLessonAdmission({ ...episode.records[0], receiptBatch: { ...episode.records[0].receiptBatch, id: `b${episode.records[0].receiptBatch.id.slice(1)}` } }, episode.records[0].lessonAdmission, ledger.getLessonAdmissionAuthority()), false);
+    assert.equal(verifyLessonAdmission({ ...episode.records[0], receiptBatch: { ...episode.records[0].receiptBatch, id: `${episode.records[0].receiptBatch.id[0] === "a" ? "b" : "a"}${episode.records[0].receiptBatch.id.slice(1)}` } }, episode.records[0].lessonAdmission, ledger.getLessonAdmissionAuthority()), false);
     assert.match(ledger.getLessonAdmissionAuthority(), /^[A-Za-z0-9+/]+={0,2}$/);
     await registry.close();
     const reopenedLedger = await EpisodeEvolutionLedger.open({ root, lessonAdmissionCapability: Object.freeze({}) });
