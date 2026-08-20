@@ -98,6 +98,14 @@ test("supersession and retirement preserve historical states", async () => withR
   await assert.rejects(registry.promote(candidate.id), (error) => error.code === "state_transition_invalid");
 }));
 
+test("history queries are bounded by record and byte limits", async () => withRegistry(async (registry) => {
+  await registry.propose(lesson({ id: "lesson-history-a" }));
+  await registry.propose(lesson({ id: "lesson-history-b" }));
+  const result = registry.list({ includeHistory: true, historyLimit: 1, maxBytes: 1024 * 1024 });
+  assert.equal(result.history.length, 1);
+  assert.equal(result.historyTruncated, true);
+}));
+
 test("bounded streams refuse an incomplete listRecords fallback", async () => {
   const fakeLedger = {
     async listRecords() { return { records: [], truncated: true }; },

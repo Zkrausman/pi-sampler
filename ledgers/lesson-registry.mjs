@@ -25,6 +25,7 @@ const DEFAULT_REGISTRY_LIMITS = Object.freeze({
   maxQueryBytes: 4 * 1024 * 1024,
   maxLessonBytes: 256 * 1024,
   maxActiveLessons: 4096,
+  maxStoredVersions: 4096,
   maxConditionCount: 64,
   maxAgeMs: 90 * 24 * 60 * 60 * 1000,
   maxFutureSkewMs: 30 * 1000,
@@ -242,6 +243,7 @@ export class LessonRegistry {
     const prior = maps.versions.get(key);
     if (prior && prior.contentDigest !== lesson.contentDigest) throw new LessonRegistryConflictError("lesson_version_conflict", "one lesson version has multiple immutable content identities", { lessonId: lesson.id, version: lesson.version });
     if (!prior) maps.versions.set(key, { contentDigest: lesson.contentDigest, states: [] });
+    if (maps.versions.size > this.limits.maxStoredVersions) throw new LessonRegistryError("lesson_history_limit", "lesson registry history bound exceeded");
     const version = maps.versions.get(key);
     if (!version.states.some((stateEntry) => stateEntry.state === lesson.state && stateEntry.updatedAt === lesson.updatedAt && stateEntry.contentDigest === lesson.contentDigest)) version.states.push({ state: lesson.state, updatedAt: lesson.updatedAt ?? lesson.createdAt, contentDigest: lesson.contentDigest });
     maps.latest.set(lesson.id, clone(lesson));
@@ -294,12 +296,26 @@ export class LessonRegistry {
   }
   getLesson(id, version) { return this.get(id, version); }
   has(id, version) { return this.get(id, version) !== undefined; }
-  list({ state, limit = this.limits.maxQueryRecords, includeHistory = false } = {}) {
+  list({ state, limit = this.limits.maxQueryRecords, includeHistory = false, historyLimit = limit, maxBytes = this.limits.maxQueryBytes } = {}) {
     this.#assertOpen();
-    if (!Number.isSafeInteger(limit) || limit < 0 || limit > this.limits.maxQueryRecords) throw new LessonRegistryError("query_invalid", "lesson query limit is outside its bound");
-    const lessons = [...this.#latest.values()].filter((lesson) => state === undefined || lesson.state === state).sort((a, b) => a.id.localeCompare(b.id) || a.version - b.version).slice(0, limit).map(clone);
-    if (includeHistory) return { lessons, truncated: this.#latest.size > lessons.length, history: [...this.#versions.entries()].map(([key, value]) => ({ key, contentDigest: value.contentDigest, states: clone(value.states) })) };
-    return { lessons, truncated: this.#latest.size > lessons.length };
+    if (!Number.isSafeInteger(limit) || limit < 0 || limit > this.limits.maxQueryRecords || !Number.isSafeInteger(historyLimit) || historyLimit < 0 || historyLimit > this.limits.maxQueryRecords || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > this.limits.maxQueryBytes) throw new LessonRegistryError("query_invalid", "lesson query limit is outside its bound");
+    const lessons = [], lessonIterator = this.#latest.values();
+    let lessonTruncated = false;
+    for (const lesson of lessonIterator) {
+      if (state !== undefined && lesson.state !== state) continue;
+      if (lessons.length >= limit) { lessonTruncated = true; break; }
+      lessons.push(clone(lesson));
+    }
+    if (!includeHistory) return { lessons, truncated: lessonTruncated };
+    const history = [];
+    let historyBytes = 0, historyTruncated = false;
+    for (const [key, value] of this.#versions) {
+      if (history.length >= historyLimit) { historyTruncated = true; break; }
+      const item = { key, contentDigest: value.contentDigest, states: clone(value.states) }, bytes = encoder.encode(canonicalJson(item)).byteLength;
+      if (historyBytes + bytes > maxBytes) { historyTruncated = true; break; }
+      history.push(item); historyBytes += bytes;
+    }
+    return { lessons, truncated: lessonTruncated, history, historyTruncated, historyBytes };
   }
   listLessons(options = {}) { return this.list(options); }
 
@@ -534,11 +550,15 @@ export class LessonRegistry {
   }
 
   async analyzeAccumulation({ maxActiveLessons = this.limits.maxActiveLessons } = {}) {
-    const lessons = [...this.#latest.values()];
-    const activeCount = lessons.filter((lesson) => ["promoted", "monitored"].includes(lesson.state)).length;
-    const byKind = Object.fromEntries(LESSON_BEHAVIOR_KINDS.map((kind) => [kind, lessons.filter((lesson) => lesson.behavior.kind === kind && active(lesson)).length]));
-    const byRisk = Object.fromEntries(LESSON_RISK_LEVELS.map((level) => [level, lessons.filter((lesson) => lesson.risk.level === level && active(lesson)).length]));
-    return { activeCount, maxActiveLessons, exceeded: activeCount > maxActiveLessons, byKind, byRisk, terminalCount: lessons.filter(terminal).length };
+    let activeCount = 0, terminalCount = 0;
+    const byKind = Object.fromEntries(LESSON_BEHAVIOR_KINDS.map((kind) => [kind, 0]));
+    const byRisk = Object.fromEntries(LESSON_RISK_LEVELS.map((level) => [level, 0]));
+    for (const lesson of this.#latest.values()) {
+      if (["promoted", "monitored"].includes(lesson.state)) activeCount += 1;
+      if (terminal(lesson)) terminalCount += 1;
+      if (active(lesson)) { byKind[lesson.behavior.kind] = (byKind[lesson.behavior.kind] ?? 0) + 1; byRisk[lesson.risk.level] = (byRisk[lesson.risk.level] ?? 0) + 1; }
+    }
+    return { activeCount, maxActiveLessons, exceeded: activeCount > maxActiveLessons, byKind, byRisk, terminalCount };
   }
   async stats(options = {}) { return this.analyzeAccumulation(options); }
 }
