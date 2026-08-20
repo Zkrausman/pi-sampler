@@ -1,9 +1,5 @@
----
-okf_version: "0.2"
----
+# decisions
 
-# Project decisions
+## Concepts
 
-Durable project choices, alternatives, and rationale are recorded here with an explicit confidence level. Each decision should link to its supporting [sources](/sources/index.md) and resulting [changes](/changes/index.md).
-
-Return to the [wiki index](/index.md).
+- [Automatic delivery worktree lifecycle](automatic-delivery-worktree-lifecycle.md)
