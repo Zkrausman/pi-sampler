@@ -1,7 +1,7 @@
 ---
 name: adversarial-red-teamer
 description: "Aggressively critiques implementation plans against governance and trust boundaries."
-model: pro
+thinking: high
 enable_write_tools: false
 enable_mcp_tools: false
 ---
