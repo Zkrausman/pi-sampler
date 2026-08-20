@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { canonicalJson, sha256Hex } from "../contracts/lesson-v1.mjs";
 import { LessonRegistry, LessonRegistryConflictError, LessonRegistryError, LessonRegistryPromotionError } from "../ledgers/lesson-registry.mjs";
 import { EpisodeEvolutionLedger } from "../ledgers/episode-evolution-ledger.mjs";
 import { catastrophicLesson, lesson, singleTicketLesson } from "./helpers/lesson-conformance.mjs";
@@ -129,6 +130,26 @@ test("history queries are bounded by record and byte limits", async () => withRe
   assert.equal(result.history.length, 1);
   assert.equal(result.historyTruncated, true);
 }));
+
+test("rebuild rejects lesson artifacts whose repository provenance binding is altered", async () => {
+  const candidate = lesson({ id: "lesson-binding" });
+  const bytes = new TextEncoder().encode(canonicalJson(candidate));
+  const artifact = {
+    identity: `lesson-v1-${sha256Hex(`${candidate.id}\u0000${candidate.version}\u0000${candidate.contentDigest}`)}`,
+    digest: sha256Hex(bytes),
+    size: bytes.byteLength,
+  };
+  const eventId = `lesson-v1-${sha256Hex(`${candidate.id}\u0000${candidate.version}\u0000${candidate.state}\u0000${candidate.contentDigest}`)}`;
+  const episodeId = `lesson-episode-${sha256Hex(candidate.id)}`;
+  const fakeLedger = {
+    async *streamRecords() {
+      yield { record: { event: { kind: "lesson", id: eventId }, episode: { id: episodeId }, repository: { revision: "b".repeat(40) } }, artifacts: [artifact] };
+    },
+    async readArtifact() { return bytes; },
+  };
+  const registry = new LessonRegistry({ ledger: fakeLedger, now: () => fixedNow });
+  await assert.rejects(registry.rebuild(), (error) => error.code === "lesson_artifact_binding_invalid");
+});
 
 test("rebuild rejects oversized lesson artifacts before reading their bytes", async () => {
   let read = false;

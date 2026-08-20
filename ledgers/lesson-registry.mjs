@@ -237,7 +237,7 @@ export class LessonRegistry {
     if (typeof parsed.id !== "string" || !Number.isSafeInteger(parsed.version) || typeof parsed.contentDigest !== "string") throw new LessonRegistryError("lesson_artifact_invalid", "durable lesson artifact lacks a bounded immutable identity");
     const canonicalBytes = encoder.encode(canonicalJson(parsed));
     if (!Number.isSafeInteger(reference.size) || reference.size !== bytes.byteLength || typeof reference.digest !== "string" || sha256(bytes) !== reference.digest || !Buffer.from(canonicalBytes).equals(Buffer.from(bytes))) throw new LessonRegistryError("lesson_artifact_integrity_failed", "durable lesson artifact content address or canonical bytes do not match");
-    if (reference.identity !== artifactIdentity(parsed) || record.event.id !== eventIdentity(parsed) || record.episode?.id !== episodeIdentity(parsed)) throw new LessonRegistryError("lesson_artifact_binding_invalid", "durable lesson artifact is not bound to its lesson event identity");
+    if (reference.identity !== artifactIdentity(parsed) || record.event.id !== eventIdentity(parsed) || record.episode?.id !== episodeIdentity(parsed) || record.repository?.revision !== parsed.provenance.repositoryRevision) throw new LessonRegistryError("lesson_artifact_binding_invalid", "durable lesson artifact is not bound to its lesson event identity and repository provenance");
     return parsed;
   }
 
