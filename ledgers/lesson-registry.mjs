@@ -500,7 +500,7 @@ export class LessonRegistry {
       throw new LessonRegistryPromotionError("evidence_ticket_breadth_insufficient", "promotion requires evidence from at least two distinct tickets");
     }
     const stale = this.detectStaleness(lesson);
-    if (stale.stale && emergency === undefined) throw new LessonRegistryPromotionError("evidence_stale", "promotion evidence is stale", { errors: stale.errors });
+    if (stale.stale) throw new LessonRegistryPromotionError("evidence_stale", "promotion evidence is stale", { errors: stale.errors });
     let conflicts;
     try { conflicts = await this.detectConflicts(lesson); }
     catch (error) { throw new LessonRegistryPromotionError("conflict_detection_failed", "promotion failed closed because conflict detection was unavailable", { causeCode: compactErrorCode(error) }); }

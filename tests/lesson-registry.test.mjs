@@ -69,6 +69,12 @@ test("promotion detects contradictory overlapping behavior rather than choosing 
   assert.equal(registry.get(second.id).state, "evaluated");
 }));
 
+test("catastrophic exceptions do not bypass stale repository evidence", async () => withRegistry(async (registry) => {
+  const candidate = catastrophicLesson({ id: "lesson-stale-catastrophic" });
+  await registry.propose(candidate);
+  await assert.rejects(registry.promote(candidate.id), (error) => error.code === "evidence_stale");
+}, { currentRepositoryRevision: "b".repeat(40) }));
+
 test("conflict and overlap detector failures reject promotion without leaking ledger packets", async () => withRegistry(async (registry) => {
   const candidate = lesson({ id: "lesson-detector-failure" });
   await proposeAndEvaluate(registry, candidate);
