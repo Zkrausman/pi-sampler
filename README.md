@@ -93,7 +93,9 @@ npm run delivery:worktree -- prepare --profile profiles/pi-sampler.json --work-i
 
 The command fetches the configured base branch, resolves an immutable commit,
 verifies that commit contains the profile, and emits JSON containing the unique
-worktree path, branch, base SHA, and lease token. A coordinated experiment can
+worktree path, branch, base SHA, and lease token. When invoked from a linked
+worktree, checkout and profile validation use that invoking checkout rather than
+a potentially stale or dirty primary worktree. A coordinated experiment can
 pin all runs with `--base <SHA>` or `PI_DELIVERY_BASE_SHA`. Do not store the
 lease token in Git. Clean cancellation or a confirmed merge can release the
 worktree with the emitted token:

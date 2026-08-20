@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -133,6 +133,46 @@ test("delivery worktree provisioning is unique, exact, leased, and safely cleane
     assert.equal(cleanedSecond.branchDeleted, true);
     assert.equal(git(f.control, "branch", "--list", first.branch), "");
     assert.equal(git(f.control, "branch", "--list", second.branch), "");
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("linked checkout provisioning ignores a stale and dirty primary checkout", async () => {
+  const f = await fixture();
+  try {
+    const profilePath = join(f.control, "profiles", "test.json");
+    const currentProfile = JSON.parse(await readFile(profilePath, "utf8"));
+    const staleProfile = structuredClone(currentProfile);
+    delete staleProfile.delivery;
+    await writeFile(profilePath, `${JSON.stringify(staleProfile, null, 2)}\n`);
+    git(f.control, "add", "profiles/test.json");
+    git(f.control, "commit", "-m", "remove delivery configuration");
+    const stalePrimarySha = git(f.control, "rev-parse", "HEAD");
+
+    await writeFile(profilePath, `${JSON.stringify(currentProfile, null, 2)}\n`);
+    git(f.control, "add", "profiles/test.json");
+    git(f.control, "commit", "-m", "restore delivery configuration");
+    const linkedHead = git(f.control, "rev-parse", "HEAD");
+    git(f.control, "push", "origin", "main");
+    const linked = join(f.root, "linked-control");
+    git(f.control, "worktree", "add", "-b", "linked-control", linked, linkedHead);
+
+    git(f.control, "reset", "--hard", stalePrimarySha);
+    await writeFile(join(f.control, "primary-only-untracked.txt"), "dirty primary checkout\n");
+    const prepared = JSON.parse(invoke([
+      "prepare",
+      "--profile", "profiles/test.json",
+      "--work-item", "AIDEV-777",
+      "--slug", "linked-control",
+    ], { cwd: linked }).stdout);
+
+    assert.equal(prepared.baseSha, linkedHead);
+    assert.equal(prepared.repositoryRoot, await realpath(f.control));
+    assert.match(prepared.worktreePath.replaceAll("\\", "/"), /\/worktrees\/AIDEV-777-[a-f0-9]{6}$/);
+    assert.equal(git(prepared.worktreePath, "rev-parse", "HEAD"), linkedHead);
+    assert.equal(git(f.control, "status", "--porcelain=v1"), "?? primary-only-untracked.txt");
+    cleanup(linked, prepared, ["--delete-branch"]);
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }
