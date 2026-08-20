@@ -21,6 +21,8 @@
     "validate:ticket-episode-schema": "node scripts/export-ticket-episode-v1-schema.mjs --check",
     "generate:authoritative-receipt-schema": "node scripts/export-authoritative-receipt-v1-schema.mjs",
     "validate:authoritative-receipt-schema": "node scripts/export-authoritative-receipt-v1-schema.mjs --check",
+    "generate:lesson-schema": "node scripts/export-lesson-v1-schema.mjs > /dev/null",
+    "validate:lesson-schema": "node scripts/export-lesson-v1-schema.mjs > /dev/null",
     "prepare": "npx simple-git-hooks",
     "merge-train": "node scripts/merge-train.mjs",
     "delivery:worktree": "node scripts/delivery-worktree.mjs"
