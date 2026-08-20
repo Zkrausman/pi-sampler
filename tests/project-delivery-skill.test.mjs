@@ -11,9 +11,10 @@ async function skillText() {
 test("project delivery automatically provisions an exact leased worktree", async () => {
   const skill = await skillText();
 
-  assert.match(skill, /npm run delivery:worktree -- prepare --profile <approved-profile> --work-item <WORK-ITEM>/i);
+  assert.match(skill, /npm run delivery:worktree -- prepare --purpose implement --profile <approved-profile> --work-item <WORK-ITEM>/i);
   assert.match(skill, /fetches the profile-declared base branch, resolves an immutable base commit/i);
-  assert.match(skill, /generates a unique branch and worktree with a random suffix/i);
+  assert.match(skill, /verifies that the selected base contains the approved profile and implementation plan/i);
+  assert.match(skill, /generates a unique branch and leased worktree under the configured worktree root's `implement\/` subfolder/i);
   assert.match(skill, /acquires a worktree-scoped writer lease/i);
   assert.match(skill, /--base <SHA>.*PI_DELIVERY_BASE_SHA/i);
   assert.match(skill, /Never handcraft `git worktree add`, infer a base from a ticket branch, or reuse a similarly named worktree/i);

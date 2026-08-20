@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -80,6 +80,7 @@ function prepare(control, extra = []) {
     "--repo", control,
     "--profile", "profiles/test.json",
     "--work-item", "AIDEV-777",
+    "--purpose", "implement",
     ...extra,
   ], { cwd: control });
   return JSON.parse(result.stdout);
@@ -105,19 +106,21 @@ test("delivery worktree provisioning is unique, exact, leased, and safely cleane
       "--repo", first.worktreePath,
       "--profile", "profiles/test.json",
       "--work-item", "AIDEV-777",
+      "--purpose", "implement",
     ], { cwd: first.worktreePath }).stdout);
 
     assert.equal(first.format, "pi-sampler.delivery-worktree");
     assert.equal(first.workItem, "AIDEV-777");
-    assert.match(first.worktreePath.replaceAll("\\", "/"), /\/worktrees\/AIDEV-777-[a-f0-9]{6}$/);
-    assert.match(first.branch, /^automation\/aidev-777-delivery-[a-f0-9]{6}$/);
+    assert.equal(first.purpose, "implement");
+    assert.match(first.worktreePath.replaceAll("\\", "/"), /\/worktrees\/implement\/AIDEV-777-[a-f0-9]{6}$/);
+    assert.match(first.branch, /^automation\/aidev-777-implement-[a-f0-9]{6}$/);
     assert.match(first.baseSha, /^[a-f0-9]{40}$/);
     assert.equal(first.planPath, "docs/techPlans/AIDEV-777-implementation-plan.md");
     assert.match(first.leaseId, /^[a-f0-9]{24}$/);
     assert.match(first.leaseToken, /^[a-f0-9]{48}$/);
     assert.notEqual(first.worktreePath, second.worktreePath);
     assert.notEqual(first.branch, second.branch);
-    assert.match(fromLinkedWorktree.worktreePath.replaceAll("\\", "/"), /\/worktrees\/AIDEV-777-[a-f0-9]{6}$/);
+    assert.match(fromLinkedWorktree.worktreePath.replaceAll("\\", "/"), /\/worktrees\/implement\/AIDEV-777-[a-f0-9]{6}$/);
     assert.notEqual(fromLinkedWorktree.worktreePath, first.worktreePath);
     assert.equal(git(first.worktreePath, "rev-parse", "HEAD"), first.baseSha);
     const ignoredPath = join(first.worktreePath, "node_modules", ...Array.from({ length: 10 }, (_, index) => `ignored-directory-${index}`));
@@ -130,9 +133,66 @@ test("delivery worktree provisioning is unique, exact, leased, and safely cleane
     const cleanedSecond = JSON.parse(cleanup(f.control, second, ["--delete-branch"]).stdout);
     assert.equal(cleanedFromLinked.branchDeleted, true);
     assert.equal(cleanedFirst.branchDeleted, true);
+    assert.equal(cleanedFirst.purpose, "implement");
     assert.equal(cleanedSecond.branchDeleted, true);
     assert.equal(git(f.control, "branch", "--list", first.branch), "");
     assert.equal(git(f.control, "branch", "--list", second.branch), "");
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("plan and implementation purposes use distinct workspace namespaces", async () => {
+  const f = await fixture();
+  try {
+    const planned = prepare(f.control, ["--purpose", "plan", "--slug", "architecture"]);
+    const implemented = prepare(f.control, ["--slug", "feature"]);
+
+    assert.equal(planned.purpose, "plan");
+    assert.match(planned.worktreePath.replaceAll("\\", "/"), /\/worktrees\/plan\/AIDEV-777-[a-f0-9]{6}$/);
+    assert.match(planned.branch, /^automation\/aidev-777-plan-architecture-[a-f0-9]{6}$/);
+    assert.equal(implemented.purpose, "implement");
+    assert.match(implemented.worktreePath.replaceAll("\\", "/"), /\/worktrees\/implement\/AIDEV-777-[a-f0-9]{6}$/);
+    assert.match(implemented.branch, /^automation\/aidev-777-implement-feature-[a-f0-9]{6}$/);
+    assert.equal(planned.baseSha, implemented.baseSha);
+
+    cleanup(f.control, planned, ["--delete-branch"]);
+    cleanup(f.control, implemented, ["--delete-branch"]);
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("implementation purpose requires a merged plan while planning permits its absence", async () => {
+  const f = await fixture();
+  try {
+    git(f.control, "rm", "docs/techPlans/AIDEV-777-implementation-plan.md");
+    git(f.control, "commit", "-m", "remove implementation plan");
+    git(f.control, "push", "origin", "main");
+
+    const missingPurpose = invoke([
+      "prepare",
+      "--repo", f.control,
+      "--profile", "profiles/test.json",
+      "--work-item", "AIDEV-777",
+    ], { cwd: f.control, allowFailure: true });
+    assert.notEqual(missingPurpose.status, 0);
+    assert.match(missingPurpose.stderr, /delivery-worktree:purpose_invalid:/);
+
+    const implementation = invoke([
+      "prepare",
+      "--repo", f.control,
+      "--profile", "profiles/test.json",
+      "--work-item", "AIDEV-777",
+      "--purpose", "implement",
+    ], { cwd: f.control, allowFailure: true });
+    assert.notEqual(implementation.status, 0);
+    assert.match(implementation.stderr, /delivery-worktree:plan_missing:/);
+
+    const planned = prepare(f.control, ["--purpose", "plan"]);
+    assert.equal(planned.purpose, "plan");
+    assert.equal(planned.planPath, null);
+    cleanup(f.control, planned, ["--delete-branch"]);
   } finally {
     await rm(f.root, { recursive: true, force: true });
   }
@@ -164,12 +224,13 @@ test("linked checkout provisioning ignores a stale and dirty primary checkout", 
       "prepare",
       "--profile", "profiles/test.json",
       "--work-item", "AIDEV-777",
+      "--purpose", "implement",
       "--slug", "linked-control",
     ], { cwd: linked }).stdout);
 
     assert.equal(prepared.baseSha, linkedHead);
     assert.equal(prepared.repositoryRoot, await realpath(f.control));
-    assert.match(prepared.worktreePath.replaceAll("\\", "/"), /\/worktrees\/AIDEV-777-[a-f0-9]{6}$/);
+    assert.match(prepared.worktreePath.replaceAll("\\", "/"), /\/worktrees\/implement\/AIDEV-777-[a-f0-9]{6}$/);
     assert.equal(git(prepared.worktreePath, "rev-parse", "HEAD"), linkedHead);
     assert.equal(git(f.control, "status", "--porcelain=v1"), "?? primary-only-untracked.txt");
     cleanup(linked, prepared, ["--delete-branch"]);
@@ -186,6 +247,7 @@ test("a raced suffix collision is retried without deleting the winning worktree"
       repo: f.control,
       profile: "profiles/test.json",
       workItem: "AIDEV-777",
+      purpose: "implement",
       fetch: false,
       suffixSource: (_length, attempt) => attempt === 0 ? "aaaaaa" : "bbbbbb",
       beforeAdd: async ({ attempt, repoRoot, branch, worktreePath, baseSha }) => {
@@ -195,7 +257,7 @@ test("a raced suffix collision is retried without deleting the winning worktree"
       },
     });
 
-    assert.equal(prepared.branch, "automation/aidev-777-delivery-bbbbbb");
+    assert.equal(prepared.branch, "automation/aidev-777-implement-bbbbbb");
     assert.equal(await lstat(collision.worktreePath).then((entry) => entry.isDirectory()), true);
     assert.equal(git(collision.worktreePath, "branch", "--show-current"), collision.branch);
     await cleanupDeliveryWorktree({ repo: f.control, worktree: prepared.worktreePath, lease: prepared.leaseToken, deleteBranch: true, fetch: false });
@@ -209,7 +271,7 @@ test("a raced suffix collision is retried without deleting the winning worktree"
 test("lease reservation failure rolls back only the invocation-owned worktree", async () => {
   const f = await fixture();
   try {
-    const target = join(f.root, "worktrees", "AIDEV-777-cccccc");
+    const target = join(f.root, "worktrees", "implement", "AIDEV-777-cccccc");
     const canonicalKeyPath = process.platform === "win32" ? target.toLowerCase() : target;
     const key = createHash("sha256").update(canonicalKeyPath).digest("hex").slice(0, 24);
     const commonDir = git(f.control, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -223,13 +285,14 @@ test("lease reservation failure rolls back only the invocation-owned worktree", 
         repo: f.control,
         profile: "profiles/test.json",
         workItem: "AIDEV-777",
+        purpose: "implement",
         fetch: false,
         suffixSource: () => "cccccc",
       }),
       (error) => error.code === "lease_conflict",
     );
     assert.equal(await lstat(target).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error)), false);
-    assert.equal(git(f.control, "branch", "--list", "automation/aidev-777-delivery-cccccc"), "");
+    assert.equal(git(f.control, "branch", "--list", "automation/aidev-777-implement-cccccc"), "");
     assert.equal(await readFile(leasePath, "utf8"), "pre-existing reservation\n");
   } finally {
     await rm(f.root, { recursive: true, force: true });
@@ -244,6 +307,7 @@ test("delivery worktree provisioning rejects a base without the approved profile
       "--repo", f.control,
       "--profile", "profiles/test.json",
       "--work-item", "AIDEV-777",
+      "--purpose", "implement",
       "--base", f.missingProfileSha,
       "--no-fetch",
     ], { cwd: f.control, allowFailure: true });
@@ -282,6 +346,48 @@ test("cleanup atomically retains a branch changed after merge validation", async
   }
 });
 
+test("cleanup remains compatible with leases created before purpose metadata", async () => {
+  const f = await fixture();
+  try {
+    const prepared = prepare(f.control);
+    const commonDir = git(f.control, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    const leasePath = join(commonDir, "pi-delivery-leases", `${prepared.leaseId}.json`);
+    const legacyLease = JSON.parse(await readFile(leasePath, "utf8"));
+    delete legacyLease.purpose;
+    await writeFile(leasePath, `${JSON.stringify(legacyLease)}\n`);
+
+    const cleaned = JSON.parse(cleanup(f.control, prepared, ["--delete-branch"]).stdout);
+    assert.equal(cleaned.purpose, null);
+    assert.equal(cleaned.branchDeleted, true);
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("delivery purpose root rejects a pre-existing directory symlink", async () => {
+  const f = await fixture();
+  try {
+    const root = join(f.root, "worktrees");
+    const outside = join(f.root, "outside-purpose");
+    await mkdir(root);
+    await mkdir(outside);
+    await symlink(outside, join(root, "implement"), process.platform === "win32" ? "junction" : "dir");
+
+    const result = invoke([
+      "prepare",
+      "--repo", f.control,
+      "--profile", "profiles/test.json",
+      "--work-item", "AIDEV-777",
+      "--purpose", "implement",
+    ], { cwd: f.control, allowFailure: true });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /delivery-worktree:worktree_root_invalid:/);
+    assert.equal(git(f.control, "for-each-ref", "--format=%(refname:short)", "refs/heads/automation"), "");
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
 test("delivery profile rejects an absolute worktree root", async () => {
   const f = await fixture();
   try {
@@ -297,6 +403,7 @@ test("delivery profile rejects an absolute worktree root", async () => {
       "--repo", f.control,
       "--profile", "profiles/test.json",
       "--work-item", "AIDEV-777",
+      "--purpose", "implement",
     ], { cwd: f.control, allowFailure: true });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /delivery-worktree:profile_invalid:/);

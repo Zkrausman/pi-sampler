@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const FORMAT_VERSION = 1;
 const DEFAULT_PROFILE = "profiles/pi-sampler.json";
 const MAX_ATTEMPTS = 32;
+const WORKTREE_PURPOSES = new Set(["plan", "implement"]);
 
 export class DeliveryWorktreeError extends Error {
   constructor(code, message) {
@@ -75,6 +76,7 @@ function parseArgs(argv) {
       "--work-item": "workItem",
       "--base": "base",
       "--slug": "slug",
+      "--purpose": "purpose",
       "--worktree": "worktree",
       "--lease": "lease",
     }[key];
@@ -117,7 +119,8 @@ function validateProfile(profile, workItem) {
   return profile;
 }
 
-function slugify(value = "delivery") {
+function slugify(value) {
+  if (value === undefined) return undefined;
   const slug = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48).replace(/-+$/g, "");
   if (!slug) fail("slug_invalid", "delivery slug is empty");
   return slug;
@@ -189,14 +192,21 @@ function resolveBase(repoRoot, delivery, explicitBase, shouldFetch) {
   return { baseSha, baseRef: `${delivery.remote}/${delivery.baseBranch}` };
 }
 
-async function worktreeRoot(repoRoot, configuredRoot) {
+async function worktreeRoot(repoRoot, configuredRoot, purpose) {
   const candidate = resolve(repoRoot, configuredRoot);
   await mkdir(candidate, { recursive: true });
   const info = await lstat(candidate);
   if (!info.isDirectory() || info.isSymbolicLink()) fail("worktree_root_invalid", "delivery worktree root must be a real directory");
   const canonical = await realpath(candidate);
   if (pathInside(repoRoot, canonical)) fail("worktree_root_invalid", "delivery worktree root must be outside the repository");
-  return canonical;
+
+  const purposeCandidate = join(canonical, purpose);
+  await mkdir(purposeCandidate, { recursive: true });
+  const purposeInfo = await lstat(purposeCandidate);
+  if (!purposeInfo.isDirectory() || purposeInfo.isSymbolicLink()) fail("worktree_root_invalid", "delivery purpose root must be a real directory");
+  const canonicalPurpose = await realpath(purposeCandidate);
+  if (!pathInside(canonical, canonicalPurpose)) fail("worktree_root_invalid", "delivery purpose root must remain inside the configured worktree root");
+  return canonicalPurpose;
 }
 
 async function commonGitDirectory(repoRoot) {
@@ -255,7 +265,9 @@ async function rollbackPrepared(repoRoot, worktreePath, branch, leasePath, baseS
 
 export async function prepareDeliveryWorktree(options) {
   if (typeof options.workItem !== "string" || options.workItem.length > 64 || !/^[A-Za-z0-9-]+$/.test(options.workItem)) fail("work_item_invalid", "--work-item is required and must be a bounded identifier");
+  if (!WORKTREE_PURPOSES.has(options.purpose)) fail("purpose_invalid", "--purpose must be plan or implement");
   const workItem = options.workItem.toUpperCase();
+  const purpose = options.purpose;
   const { checkoutRoot, repositoryRoot: repoRoot } = await repositoryContext(options.repo);
   const profilePath = await profileLocation(checkoutRoot, options.profile);
   const checkoutHead = git(checkoutRoot, ["rev-parse", "--verify", "HEAD^{commit}"]).stdout;
@@ -268,12 +280,13 @@ export async function prepareDeliveryWorktree(options) {
   if (JSON.stringify(baseProfile.delivery) !== JSON.stringify(initialDelivery)) fail("profile_drift", "delivery configuration differs between the checkout and selected base");
 
   const delivery = baseProfile.delivery;
-  const root = await worktreeRoot(repoRoot, delivery.worktreeRoot);
   const slug = slugify(options.slug);
   const specificationRoot = normalizeGitPath(baseProfile.governance.paths.specification, "governance.paths.specification");
   const planPath = `${specificationRoot}/${workItem}-implementation-plan.md`;
   const hasPlan = treePathExists(repoRoot, baseSha, planPath);
-  const branchStem = `${delivery.branchPrefix}/${workItem.toLowerCase()}-${slug}`;
+  if (purpose === "implement" && !hasPlan) fail("plan_missing", `implementation base ${baseSha} does not contain ${planPath}`);
+  const root = await worktreeRoot(repoRoot, delivery.worktreeRoot, purpose);
+  const branchStem = `${delivery.branchPrefix}/${workItem.toLowerCase()}-${purpose}${slug ? `-${slug}` : ""}`;
 
   let branch;
   let target;
@@ -307,6 +320,7 @@ export async function prepareDeliveryWorktree(options) {
     const reservation = await reserveLease(repoRoot, {
       projectId: baseProfile.projectId,
       workItem,
+      purpose,
       repositoryRoot: repoRoot,
       worktreePath: canonicalTarget,
       branch,
@@ -323,6 +337,7 @@ export async function prepareDeliveryWorktree(options) {
       version: FORMAT_VERSION,
       projectId: baseProfile.projectId,
       workItem,
+      purpose,
       repositoryRoot: repoRoot,
       worktreePath: canonicalTarget,
       branch,
@@ -359,6 +374,7 @@ export async function cleanupDeliveryWorktree(options) {
   const leasePath = join(commonDir, "pi-delivery-leases", `${pathKey(canonicalTarget)}.json`);
   const lease = parseProfile(await readFile(leasePath, "utf8").catch(() => fail("lease_missing", "delivery worktree lease does not exist")));
   if (lease.format !== "pi-sampler.delivery-worktree-lease" || lease.version !== FORMAT_VERSION || !equalToken(lease.token, options.lease)) fail("lease_invalid", "delivery worktree lease is invalid");
+  if (lease.purpose !== undefined && !WORKTREE_PURPOSES.has(lease.purpose)) fail("lease_invalid", "delivery worktree lease purpose is invalid");
   if (resolve(lease.repositoryRoot) !== resolve(repoRoot) || resolve(lease.worktreePath) !== resolve(canonicalTarget)) fail("lease_invalid", "delivery worktree lease identity does not match");
 
   const status = git(canonicalTarget, ["status", "--porcelain=v1", "--untracked-files=all"]).stdout;
@@ -395,6 +411,7 @@ export async function cleanupDeliveryWorktree(options) {
   return {
     format: "pi-sampler.delivery-worktree-cleanup",
     version: FORMAT_VERSION,
+    purpose: lease.purpose || null,
     worktreePath: canonicalTarget,
     branch,
     head,

@@ -85,20 +85,27 @@ and [`profiles/gelt-trading.example.json`](profiles/gelt-trading.example.json)
 are examples; [`profiles/pi-sampler.json`](profiles/pi-sampler.json) is the
 approved local profile for this repository.
 
-The project-delivery skill provisions a unique leased worktree automatically:
+The planning and project-delivery skills provision unique leased worktrees by
+purpose:
 
 ```powershell
-npm run delivery:worktree -- prepare --profile profiles/pi-sampler.json --work-item AIDEV-123
+npm run delivery:worktree -- prepare --purpose plan --profile profiles/pi-sampler.json --work-item AIDEV-123 --slug implementation-plan
+npm run delivery:worktree -- prepare --purpose implement --profile profiles/pi-sampler.json --work-item AIDEV-123
 ```
 
+Planning worktrees are created under `ai-workspaces/plan/`; implementation
+worktrees are created under `ai-workspaces/implement/`. Both retain random
+suffixes so retries and parallel experiments remain isolated. Implementation
+preparation fails unless the selected base already contains the approved plan.
+
 The command fetches the configured base branch, resolves an immutable commit,
-verifies that commit contains the profile, and emits JSON containing the unique
-worktree path, branch, base SHA, and lease token. When invoked from a linked
-worktree, checkout and profile validation use that invoking checkout rather than
-a potentially stale or dirty primary worktree. A coordinated experiment can
-pin all runs with `--base <SHA>` or `PI_DELIVERY_BASE_SHA`. Do not store the
-lease token in Git. Clean cancellation or a confirmed merge can release the
-worktree with the emitted token:
+verifies that commit contains the profile, and emits JSON containing the purpose,
+unique worktree path, branch, base SHA, and lease token. When invoked from a
+linked worktree, checkout and profile validation use that invoking checkout
+rather than a potentially stale or dirty primary worktree. A coordinated
+experiment can pin all runs with `--base <SHA>` or `PI_DELIVERY_BASE_SHA`. Do
+not store the lease token in Git. Clean cancellation or a confirmed merge can
+release the worktree with the emitted token:
 
 ```powershell
 npm run delivery:worktree -- cleanup --worktree <PATH> --lease <TOKEN> --delete-branch
