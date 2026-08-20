@@ -288,9 +288,31 @@ export class EpisodeEvolutionLedger {
     const records = this.#orderedRecords();
     return { records: records.slice(0, limit).map((entry) => structuredClone(entry)), truncated: records.length > limit };
   }
-  async readArtifact(reference) {
+  /**
+   * Stream durable records without constructing an unbounded result array.
+   * Registry facades use this boundary for rebuilds and cross-episode scans;
+   * the bounded in-memory ledger index remains the source of ordering.
+   */
+  async *streamRecords({ batchSize = this.limits.maxRebuildBatch } = {}) {
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > this.limits.maxRebuildBatch) throw new LedgerLimitError("maxRebuildBatch", batchSize, this.limits.maxRebuildBatch);
+    if (this.closed || this.closing || !this.usable) throw new LedgerError(this.usable ? "closed" : "reopen_required", "ledger is unavailable");
+    const episodes = [...this.episodes.keys()].sort((a, b) => safe(a).localeCompare(safe(b)));
+    for (const episodeId of episodes) {
+      // Admission appends records in sequence order and reconciliation loads
+      // them in the same deterministic order, so iteration needs no second
+      // unbounded per-episode array or sort buffer.
+      for (const entry of this.episodes.get(episodeId)?.records ?? []) yield structuredClone(entry);
+    }
+  }
+  async readArtifact(reference, { maxBytes = this.limits.maxArtifactBytes } = {}) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new LedgerError("query_invalid", "invalid artifact read bound");
+    this.#validateRef(reference);
+    if (reference.size > maxBytes) throw new LedgerLimitError("maxArtifactBytes", reference.size, maxBytes);
+    const path = this.#path("artifacts", reference.digest), info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) throw new LedgerError("artifact_unsafe_path", "artifact path is unsafe");
+    if (info.size > maxBytes) throw new LedgerLimitError("maxArtifactBytes", info.size, maxBytes);
     await this.#verifyRefs([reference]);
-    return new Uint8Array(await readFile(this.#path("artifacts", reference.digest)));
+    return new Uint8Array(await readFile(path));
   }
   async queryEvolutions({ outcome, ...o } = {}) {
     const checked = this.#query([], o), out = []; let bytes = 0;
