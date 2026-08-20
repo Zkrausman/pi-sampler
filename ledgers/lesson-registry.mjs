@@ -352,7 +352,7 @@ export class LessonRegistry {
     const record = {
       schema: { id: "https://pi-sampler.dev/contracts/ticket-episode/v1", version: "1.0.0" },
       project: { id: this.projectId },
-      repository: { id: this.repositoryId, revision: this.repositoryRevision },
+      repository: { id: this.repositoryId, revision: lesson.provenance.repositoryRevision },
       ticket: this.ticket,
       episode: { id: episodeId },
       attempt: { id: `lesson-attempt-${sha256(`${lesson.id}\u0000${lesson.version}`).slice(0, 48)}` },

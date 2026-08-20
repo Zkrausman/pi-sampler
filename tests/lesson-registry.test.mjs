@@ -30,6 +30,7 @@ test("LessonRegistry persists proposals and rebuilds version/state history", asy
   const candidate = lesson();
   const proposed = await registry.propose(candidate);
   assert.equal(proposed.status, "committed");
+  assert.equal(proposed.record.repository.revision, candidate.provenance.repositoryRevision);
   assert.equal(registry.get(candidate.id).state, "proposed");
   await registry.evaluate(candidate.id, { identity: "evaluation-1", score: 0.9 });
   assert.equal(registry.get(candidate.id).state, "evaluated");
