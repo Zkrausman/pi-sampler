@@ -166,7 +166,7 @@ export const LessonV1Schema = Type.Object({
     humanDecisions: Type.Array(HumanDecisionSchema, { minItems: 1, maxItems: DEFAULT_LESSON_LIMITS.maxHumanDecisions }),
     createdBy: identifier("Lesson creator identity"),
     createdAt: timestamp,
-    repositoryRevision: Type.Optional(revision),
+    repositoryRevision: revision,
   }, { additionalProperties: false }),
   evaluator: Type.Object({
     id: identifier("Evaluator identity"),

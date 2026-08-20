@@ -86,13 +86,11 @@ test("promotion detects contradictory overlapping behavior rather than choosing 
   assert.equal(registry.get(second.id).state, "evaluated");
 }));
 
-test("promotion rejects lessons without repository revision when current revision is configured", async () => withRegistry(async (registry) => {
+test("lessons require immutable repository provenance before admission", async () => withRegistry(async (registry) => {
   const candidate = lesson({ id: "lesson-missing-revision" });
   delete candidate.provenance.repositoryRevision;
-  await registry.propose(candidate);
-  await registry.evaluate(candidate.id, { identity: "evaluation-missing-revision" });
-  await assert.rejects(registry.promote(candidate.id), (error) => error.code === "evidence_stale");
-}, { currentRepositoryRevision: "b".repeat(40) }));
+  await assert.rejects(registry.propose(candidate), (error) => error.code === "lesson_invalid");
+}));
 
 test("catastrophic exceptions do not bypass stale repository evidence", async () => withRegistry(async (registry) => {
   const candidate = catastrophicLesson({ id: "lesson-stale-catastrophic" });
