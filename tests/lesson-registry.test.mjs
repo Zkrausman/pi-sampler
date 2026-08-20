@@ -249,6 +249,21 @@ test("bounded streams refuse an incomplete listRecords fallback", async () => {
   await assert.rejects(registry.rebuild({ batchSize: 1 }), (error) => error instanceof LessonRegistryError && error.code === "ledger_stream_truncated");
 });
 
+test("injected ledgers require and honor their matching admission capability", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lesson-registry-injected-"));
+  const capability = Object.freeze({});
+  const ledger = await EpisodeEvolutionLedger.open({ root, lessonAdmissionCapability: capability });
+  try {
+    await assert.rejects(LessonRegistry.open({ ledger }), (error) => error.code === "lesson_admission_capability_required");
+    const registry = await LessonRegistry.open({ ledger, admissionCapability: capability, now: () => fixedNow });
+    try {
+      const result = await registry.propose(lesson({ id: "lesson-injected-ledger" }));
+      const episode = await ledger.queryEpisode(result.record.episode.id);
+      assert.equal(episode.records[0].lessonAdmission.version, 1);
+    } finally { await registry.close(); }
+  } finally { await ledger.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("registry only depends on the ledger write direction", async () => {
   const root = await mkdtemp(join(tmpdir(), "lesson-registry-dependency-"));
   const ledger = await EpisodeEvolutionLedger.open({ root });

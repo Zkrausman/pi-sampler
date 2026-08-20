@@ -71,6 +71,7 @@ export class EpisodeEvolutionLedger {
     this.episodes = new Map(); this.eventIds = new Map(); this.identityOwners = new Map(); this.receiptBatchKey = undefined; this.storageBytes = 0; this.reservedStorageBytes = 0; this.pending = 0; this.queues = new Map(); this.closed = false; this.closing = false; this.usable = true;
   }
   async close() { if (this.closed) return; this.closing = true; await Promise.all([...this.queues.values()]); this.closed = true; await this.#releaseLock(); }
+  hasLessonAdmissionCapability(capability) { return capability !== undefined && capability === this.#lessonAdmissionCapability; }
   async #hit(b) { if (this.faultInjector && await this.faultInjector(b) === true) throw new InjectedFaultError(b); }
   #path(...p) { const x = resolve(this.root, ...p); if (!x.startsWith(`${this.root}${sep}`) && x !== this.root) throw new LedgerError("path_escape", "ledger path escaped root"); return x; }
   async #dir(path) { const s = await lstat(path); if (!s.isDirectory() || s.isSymbolicLink()) throw new LedgerError("unsafe_path", "managed ledger directory is unsafe", { path }); }

@@ -128,13 +128,17 @@ function safeLessonSummary(lesson, reason, conflict = false) {
 
 export class LessonRegistry {
   static async open(options = {}) {
-    const admissionCapability = Object.freeze({});
     let ledger = options.ledger;
+    let admissionCapability;
     let ownsLedger = false;
     if (!ledger) {
       if (typeof options.root !== "string" || options.root.length === 0) throw new LessonRegistryError("root_required", "lesson registry root is required");
+      admissionCapability = Object.freeze({});
       ledger = await EpisodeEvolutionLedger.open({ root: options.root, ...(options.ledgerOptions ?? {}), limits: options.ledgerLimits ?? options.ledgerOptions?.limits, lessonAdmissionCapability: admissionCapability });
       ownsLedger = true;
+    } else {
+      admissionCapability = options.admissionCapability;
+      if (typeof ledger.hasLessonAdmissionCapability !== "function" || !ledger.hasLessonAdmissionCapability(admissionCapability)) throw new LessonRegistryError("lesson_admission_capability_required", "an injected ledger requires its matching private lesson admission capability");
     }
     const registry = new LessonRegistry({ ...options, ledger, admissionCapability });
     try { await registry.rebuild(); return registry; }

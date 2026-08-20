@@ -123,8 +123,10 @@ The contract module does not import the registry or ledger. A registry event
 contains a classified `lesson` Ticket Episode record and one canonical JSON
 artifact. The ledger emits a registry-admission marker only through its private
 capability-gated lesson append path; generic ledger appends do not enter the
-registry event namespace. Rebuilding reads bounded pages or an async ledger
-stream, validates each artifact, and swaps the cache only after the complete stream succeeds.
+registry event namespace. When an already-open ledger is injected, the caller
+must provide the same private capability used to configure that ledger; otherwise
+`LessonRegistry.open` fails closed. Rebuilding reads bounded pages or an async
+ledger stream, validates each artifact, and swaps the cache only after the complete stream succeeds.
 Malformed lesson artifacts, conflicting content identities, missing pages, and
 truncated streams fail closed. Rebuild also requires the capability-bound registry
 admission marker, contiguous episode sequence, an initial unevaluated proposal,
