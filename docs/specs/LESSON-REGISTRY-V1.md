@@ -125,10 +125,11 @@ artifact. Lesson events use a protected `appendLesson` path. Their admission
 marker contains an Ed25519 signature over the immutable envelope binding, including the predecessor and receipt binding;
 the corresponding public key is durably bound in `manifest.json`, and the
 registry's private signing key is retained in the runtime-only
-`.lesson-registry-authority.json` file. `LessonRegistry.backup()` includes this
-private authority in its registry-owned backup; the generic ledger backup does
-not expose it. Generic ledger append APIs reject the lesson event namespace and
-cannot mint a marker by supplying an in-memory object. When an already-open ledger is injected, `LessonRegistry.open` binds a
+`.lesson-registry-authority.json` file. `LessonRegistry.backup()` writes this
+private authority to a registry-owned sidecar and `LessonRegistry.restore()`
+restores it; the generic ledger backup does not expose it. Generic ledger append
+APIs reject the lesson event namespace and cannot mint a marker by supplying an
+in-memory object. When an already-open ledger is injected, `LessonRegistry.open` binds a
 new authority only when the ledger has none, otherwise it requires the existing
 durable authority and reuses the matching private key. Rebuilding reads bounded
 pages or an async ledger stream, validates each artifact and signature, and

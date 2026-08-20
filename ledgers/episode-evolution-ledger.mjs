@@ -44,8 +44,7 @@ function backupFileParts(path) {
   const quarantine = parts[0] === "quarantine" && (parts.length === 2 || (parts.length > 2 && parts[1].endsWith(".material")));
   const batchAck = parts.length === 2 && parts[0] === ".receipt-batch-acks" && /^[0-9a-f-]{36}\.json$/.test(parts[1]);
   const batchKey = parts.length === 2 && parts[0] === ".staging" && parts[1] === ".receipt-batch-key";
-  const lessonAuthority = path === ".lesson-registry-authority.json";
-  if (path !== "ledger-manifest.json" && !lessonAuthority && !commit && !artifact && !quarantine && !batchAck && !batchKey) throw new LedgerError("backup_invalid", "backup file path is unsafe", { path });
+  if (path !== "ledger-manifest.json" && !commit && !artifact && !quarantine && !batchAck && !batchKey) throw new LedgerError("backup_invalid", "backup file path is unsafe", { path });
   return parts;
 }
 function backupDescriptor(file) {

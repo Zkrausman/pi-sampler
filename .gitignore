@@ -17,6 +17,7 @@ coverage/
 
 # Runtime lesson-registry private authority must never enter source control.
 .lesson-registry-authority.json
+*.lesson-registry-authority.json
 
 # LLM Wiki runtime state, immutable source packets, and sensitive artifacts stay local.
 .llm-wiki/raw/

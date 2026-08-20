@@ -1,5 +1,5 @@
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID, sign } from "node:crypto";
-import { lstat, open, readFile, rename, unlink } from "node:fs/promises";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
+import { lstat, open, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { TextDecoder, TextEncoder } from "node:util";
 import { EpisodeEvolutionLedger, lessonAdmissionAuthorityId, lessonAdmissionBindingDigest, verifyLessonAdmission } from "./episode-evolution-ledger.mjs";
@@ -145,14 +145,14 @@ function generateAuthority() {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519", { publicKeyEncoding: { type: "spki", format: "der" }, privateKeyEncoding: { type: "pkcs8", format: "der" } });
   return parseAuthority({ format: 1, algorithm: "ed25519", publicKey: publicKey.toString("base64"), privateKey: privateKey.toString("base64") });
 }
-async function readAuthority(root) {
-  const path = join(resolve(root), LESSON_AUTHORITY_FILE);
+async function readAuthorityPath(path) {
   let info;
   try { info = await lstat(path); } catch (error) { if (error.code === "ENOENT") return { path, authority: undefined }; throw error; }
   if (!info.isFile() || info.isSymbolicLink() || info.size > 16 * 1024) throw new LessonRegistryError("lesson_admission_authority_invalid", "lesson registry authority file is unsafe");
   let payload; try { payload = JSON.parse(await readFile(path, "utf8")); } catch { throw new LessonRegistryError("lesson_admission_authority_invalid", "lesson registry authority file is invalid"); }
   return { path, authority: parseAuthority(payload) };
 }
+async function readAuthority(root) { return readAuthorityPath(join(resolve(root), LESSON_AUTHORITY_FILE)); }
 async function writeAuthority(path, authority) {
   const body = canonicalJson(authorityPayload(authority));
   try {
@@ -165,7 +165,7 @@ async function writeAuthority(path, authority) {
     } catch (error) { if (!['EINVAL', 'EPERM', 'EISDIR'].includes(error.code)) throw error; }
   } catch (error) {
     if (error.code !== "EEXIST") throw new LessonRegistryError("lesson_admission_authority_invalid", "lesson registry authority could not be persisted");
-    const existing = await readAuthority(resolve(path, ".."));
+    const existing = await readAuthorityPath(path);
     if (!existing.authority || existing.authority.publicKey !== authority.publicKey || existing.authority.privateKey.export({ type: "pkcs8", format: "der" }).toString("base64") !== authority.privateKey.export({ type: "pkcs8", format: "der" }).toString("base64")) throw new LessonRegistryError("lesson_admission_authority_conflict", "lesson registry authority was replaced");
   }
 }
@@ -174,15 +174,6 @@ async function authorityForRoot(root, durablePublicKey) {
   const authority = loaded.authority ?? generateAuthority();
   if (durablePublicKey !== undefined && durablePublicKey !== authority.publicKey) throw new LessonRegistryError("lesson_admission_authority_conflict", "registry authority does not match the durable ledger authority");
   return { ...loaded, authority, created: loaded.authority === undefined };
-}
-async function replaceJson(path, value) {
-  const temporary = `${path}.${randomUUID()}.tmp`, body = canonicalJson(value);
-  try {
-    const handle = await open(temporary, "wx", 0o600);
-    try { await handle.writeFile(body); await handle.sync(); }
-    finally { await handle.close(); }
-    await rename(temporary, path);
-  } finally { await unlink(temporary).catch(() => {}); }
 }
 function signedLessonAdmission(authority, envelope) {
   const binding = lessonAdmissionBindingDigest(envelope);
@@ -218,6 +209,23 @@ export class LessonRegistry {
       return registry;
     } catch (error) { if (ownsLedger) await ledger.close().catch(() => {}); throw error; }
   }
+  static async restore({ backupPath, root, registryAuthorityPath, ledgerLimits, trustedAuthorityIds, verifyAttestation, ...options } = {}) {
+    if (typeof backupPath !== "string" || typeof root !== "string") throw new LessonRegistryError("restore_invalid", "backupPath and root are required");
+    const source = await readAuthorityPath(registryAuthorityPath ?? `${resolve(backupPath)}.${LESSON_AUTHORITY_FILE}`);
+    if (!source.authority) throw new LessonRegistryError("lesson_admission_authority_required", "registry restore requires its private authority sidecar");
+    let ledger;
+    try {
+      ledger = await EpisodeEvolutionLedger.restore({ backupPath, root, limits: ledgerLimits, trustedAuthorityIds, verifyAttestation });
+      await writeAuthority(join(resolve(root), LESSON_AUTHORITY_FILE), source.authority);
+      await ledger.close();
+      ledger = undefined;
+      return LessonRegistry.open({ root, ...options });
+    } catch (error) {
+      await ledger?.close().catch(() => {});
+      if (error instanceof LessonRegistryError) throw error;
+      throw new LessonRegistryError("restore_failed", "lesson registry restore failed closed", { causeCode: compactErrorCode(error) });
+    }
+  }
 
   #ledger;
   #latest = new Map();
@@ -252,18 +260,11 @@ export class LessonRegistry {
     this.#assertOpen();
     if (!this.#admissionAuthority || typeof this.#ledger.backup !== "function") throw new LessonRegistryError("backup_unavailable", "lesson registry backup requires a durable ledger backup API");
     try {
-      const result = await this.#ledger.backup(options), archive = resolve(result.path), authorityPath = join(archive, LESSON_AUTHORITY_FILE);
+      const result = await this.#ledger.backup(options), archive = resolve(result.path), authorityPath = `${archive}.${LESSON_AUTHORITY_FILE}`;
       const authorityBody = canonicalJson(authorityPayload(this.#admissionAuthority)), authorityBytes = Buffer.byteLength(authorityBody);
       if (Number.isSafeInteger(options.maxBytes) && result.bytes + authorityBytes > options.maxBytes) throw new LessonRegistryError("backup_limit_exceeded", "registry authority would exceed the requested backup byte bound");
       await writeAuthority(authorityPath, this.#admissionAuthority);
-      const manifestPath = join(archive, "backup-manifest.json"), manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-      if (manifest.format !== "episode-evolution-ledger-backup" || manifest.version !== 1 || !Array.isArray(manifest.files)) throw new Error("backup_manifest_invalid");
-      const authorityDescriptor = { path: LESSON_AUTHORITY_FILE, size: authorityBytes, digest: sha256(authorityBody) };
-      const files = manifest.files.filter((file) => file.path !== LESSON_AUTHORITY_FILE);
-      files.push(authorityDescriptor);
-      const anchor = sha256(canonicalJson(files));
-      await replaceJson(manifestPath, { ...manifest, anchor, files });
-      return { ...result, anchor, files: files.length, bytes: result.bytes + authorityBytes };
+      return { ...result, registryAuthorityPath: authorityPath, bytes: result.bytes + authorityBytes };
     } catch (error) {
       if (error instanceof LessonRegistryError) throw error;
       throw new LessonRegistryError("backup_failed", "lesson registry backup failed closed", { causeCode: compactErrorCode(error) });

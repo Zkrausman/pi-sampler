@@ -312,19 +312,18 @@ test("registry-owned backups preserve the private authority for restore", async 
   const root = await mkdtemp(join(tmpdir(), "lesson-registry-backup-"));
   const restoredRoot = await mkdtemp(join(tmpdir(), "lesson-registry-restored-"));
   let registry;
-  let restoredLedger;
+  let reopened;
   try {
     registry = await LessonRegistry.open({ root, now: () => fixedNow });
     await registry.propose(lesson({ id: "lesson-backup-restore" }));
     const backup = await registry.backup();
+    assert.equal(typeof backup.registryAuthorityPath, "string");
     await registry.close();
-    restoredLedger = await EpisodeEvolutionLedger.restore({ backupPath: backup.path, root: restoredRoot });
-    const reopened = await LessonRegistry.open({ ledger: restoredLedger, now: () => fixedNow });
-    try { assert.equal(reopened.get("lesson-backup-restore").state, "proposed"); }
-    finally { await reopened.close(); restoredLedger = undefined; }
+    reopened = await LessonRegistry.restore({ backupPath: backup.path, registryAuthorityPath: backup.registryAuthorityPath, root: restoredRoot, now: () => fixedNow });
+    assert.equal(reopened.get("lesson-backup-restore").state, "proposed");
   } finally {
     await registry?.close();
-    await restoredLedger?.close();
+    await reopened?.close();
     await rm(root, { recursive: true, force: true });
     await rm(restoredRoot, { recursive: true, force: true });
   }
