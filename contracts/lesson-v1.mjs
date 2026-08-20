@@ -260,7 +260,9 @@ function semanticException(exception, lesson, errors) {
   if (!exception.reason || typeof exception.reason !== "string" || exception.reason.length > 4096) errors.push(issue("catastrophic_exception_reason_invalid", "catastrophic safety exception requires a bounded reason", "/catastrophicSafetyException/reason"));
   if (!exception.approvedBy || typeof exception.approvedBy !== "string" || !identifierPattern.test(exception.approvedBy)) errors.push(issue("catastrophic_exception_approval_missing", "catastrophic safety exception requires an approving human identity", "/catastrophicSafetyException/approvedBy"));
   const scopeKind = typeof exception.scope === "string" ? exception.scope : exception.scope?.kind;
+  const scopeTarget = exception.scope?.target;
   if (scopeKind !== "avoid") errors.push(issue("catastrophic_exception_scope_invalid", "catastrophic safety exception scope must be a narrow avoid prohibition", "/catastrophicSafetyException/scope"));
+  if (typeof scopeTarget !== "string" || scopeTarget !== lesson?.behavior?.target) errors.push(issue("catastrophic_exception_target_mismatch", "catastrophic safety exception target must exactly bind the avoided behavior target", "/catastrophicSafetyException/scope/target"));
   if (exception.approvedAt !== undefined && !canonicalTimestamp(exception.approvedAt)) errors.push(issue("timestamp_not_canonical", "approvedAt must be a canonical UTC RFC 3339 timestamp", "/catastrophicSafetyException/approvedAt"));
   if (exception.expiresAt !== undefined && !canonicalTimestamp(exception.expiresAt)) errors.push(issue("timestamp_not_canonical", "expiresAt must be a canonical UTC RFC 3339 timestamp", "/catastrophicSafetyException/expiresAt"));
   const { episodes, tickets, events } = evidenceIdentitySets(lesson ?? {});
