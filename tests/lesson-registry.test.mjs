@@ -63,6 +63,34 @@ test("concurrent proposals serialize version/content admission before persistenc
   } finally { await reopened.close(); }
 }));
 
+test("transitions reject evaluated lessons that were never admitted", async () => withRegistry(async (registry) => {
+  const unadmitted = lesson({
+    id: "lesson-unadmitted-evaluated",
+    state: "evaluated",
+    evaluation: { identity: "evaluation-unadmitted", evaluatedAt: "2026-08-17T00:00:00.000Z", score: 0.9 },
+    stateHistory: [{ from: "proposed", to: "evaluated", changedAt: "2026-08-17T00:00:00.000Z", actorId: "lesson-evaluator" }],
+  });
+  await assert.rejects(registry.promote(unadmitted), (error) => error.code === "lesson_not_found");
+  assert.equal(registry.get(unadmitted.id), undefined);
+}));
+
+test("immutable transition conflicts fail before append and reopen cleanly", async () => withRegistry(async (registry, root) => {
+  const candidate = lesson({ id: "lesson-transition-conflict" });
+  await registry.propose(candidate);
+  const changed = lesson({
+    id: candidate.id,
+    behavior: { kind: "avoid", description: "changed immutable content", action: "request-review", target: "changed-target" },
+  });
+  await assert.rejects(registry.evaluate(changed, { identity: "evaluation-conflict" }), (error) => error instanceof LessonRegistryConflictError && error.code === "lesson_version_conflict");
+  assert.equal(registry.get(candidate.id).state, "proposed");
+  await registry.close();
+  const reopened = await LessonRegistry.open({ root, now: () => fixedNow });
+  try {
+    assert.equal(reopened.get(candidate.id).state, "proposed");
+    assert.equal(reopened.get(candidate.id).contentDigest, candidate.contentDigest);
+  } finally { await reopened.close(); }
+}));
+
 test("normal promotion requires multiple tickets and preserves a clean cache on rejection", async () => withRegistry(async (registry) => {
   const candidate = singleTicketLesson();
   await registry.propose(candidate);

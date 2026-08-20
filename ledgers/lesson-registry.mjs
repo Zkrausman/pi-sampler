@@ -296,8 +296,9 @@ export class LessonRegistry {
     }
     if (!input || typeof input !== "object" || typeof input.id !== "string") throw new LessonRegistryError("lesson_not_found", "lesson identity is required");
     const current = this.#latest.get(input.id);
-    if (current && (input.version === undefined || current.version === input.version) && current.contentDigest === input.contentDigest) return clone(current);
-    return this.#prepare(input);
+    if (!current || input.version !== current.version || (version !== undefined && current.version !== version)) throw new LessonRegistryError("lesson_not_found", "lesson is not present in the registry", { lessonId: input.id });
+    if (input.contentDigest !== current.contentDigest) throw new LessonRegistryConflictError("lesson_version_conflict", "transition must use the admitted lesson content identity", { lessonId: input.id, version: input.version });
+    return clone(current);
   }
 
   get(id, version) {
@@ -391,6 +392,11 @@ export class LessonRegistry {
   }
 
   async #persistAndRememberExclusive(lesson, admission) {
+    // Every durable path must reject an immutable version/content conflict
+    // before publication. Transition callers are resolved from the admitted
+    // cache, but this remains a defense-in-depth check for future paths.
+    const existing = this.#versions.get(lessonKey(lesson));
+    if (existing && existing.contentDigest !== lesson.contentDigest) throw new LessonRegistryConflictError("lesson_version_conflict", "lesson version is already bound to different content", { lessonId: lesson.id, version: lesson.version });
     // Proposal identity and version checks belong inside the serialized
     // admission section. Checking the cache before queueing lets concurrent
     // proposals publish conflicting durable content before the loser notices.
