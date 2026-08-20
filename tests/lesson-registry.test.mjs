@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { LessonRegistry, LessonRegistryError, LessonRegistryPromotionError } from "../ledgers/lesson-registry.mjs";
+import { LessonRegistry, LessonRegistryConflictError, LessonRegistryError, LessonRegistryPromotionError } from "../ledgers/lesson-registry.mjs";
 import { EpisodeEvolutionLedger } from "../ledgers/episode-evolution-ledger.mjs";
 import { catastrophicLesson, lesson, singleTicketLesson } from "./helpers/lesson-conformance.mjs";
 
@@ -41,6 +41,23 @@ test("LessonRegistry persists proposals and rebuilds version/state history", asy
     assert.equal(restored.state, "evaluated");
     assert.equal(restored.contentDigest, candidate.contentDigest);
     assert.equal(restored.stateHistory.length, 1);
+  } finally { await reopened.close(); }
+}));
+
+test("concurrent proposals serialize version/content admission before persistence", async () => withRegistry(async (registry, root) => {
+  const first = lesson({ id: "lesson-concurrent" });
+  const second = lesson({ id: "lesson-concurrent", behavior: { kind: "avoid", description: "use an independent safe action", action: "request-review", target: "concurrent-target" } });
+  const results = await Promise.allSettled([registry.propose(first), registry.propose(second)]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  const rejected = results.find((result) => result.status === "rejected");
+  assert.ok(rejected?.reason instanceof LessonRegistryConflictError);
+  const stored = registry.get("lesson-concurrent");
+  assert.ok(stored);
+  assert.equal(registry.list().lessons.length, 1);
+  await registry.close();
+  const reopened = await LessonRegistry.open({ root, now: () => fixedNow });
+  try {
+    assert.equal(reopened.get("lesson-concurrent").contentDigest, stored.contentDigest);
   } finally { await reopened.close(); }
 }));
 

@@ -384,13 +384,27 @@ export class LessonRegistry {
     }
   }
 
-  #persistAndRemember(lesson) {
-    const run = this.#admissions.catch(() => {}).then(() => this.#persistAndRememberExclusive(lesson));
+  #persistAndRemember(lesson, admission = "transition") {
+    const run = this.#admissions.catch(() => {}).then(() => this.#persistAndRememberExclusive(lesson, admission));
     this.#admissions = run.then(() => {}, () => {});
     return run;
   }
 
-  async #persistAndRememberExclusive(lesson) {
+  async #persistAndRememberExclusive(lesson, admission) {
+    // Proposal identity and version checks belong inside the serialized
+    // admission section. Checking the cache before queueing lets concurrent
+    // proposals publish conflicting durable content before the loser notices.
+    if (admission === "proposal") {
+      const existing = this.#versions.get(lessonKey(lesson));
+      if (existing) {
+        if (existing.contentDigest !== lesson.contentDigest) throw new LessonRegistryConflictError("lesson_version_conflict", "lesson version is already bound to different content", { lessonId: lesson.id, version: lesson.version });
+        const current = this.#latest.get(lesson.id);
+        if (current?.version === lesson.version) return { status: "idempotent", lesson: clone(current) };
+        throw new LessonRegistryConflictError("lesson_version_conflict", "lesson version is already present", { lessonId: lesson.id, version: lesson.version });
+      }
+      const highest = [...this.#versions.keys()].filter((key) => key.startsWith(`${lesson.id}\u0000`)).map((key) => Number(key.split("\u0000").at(-1))).filter(Number.isSafeInteger);
+      if (highest.length && lesson.version <= Math.max(...highest)) throw new LessonRegistryConflictError("lesson_version_order", "new lesson content must increase its version", { lessonId: lesson.id, version: lesson.version });
+    }
     // Preflight before the first durable write. A cache-limit rejection must
     // never leave a lesson event that rebuild cannot represent.
     this.#checkCacheAdmission(lesson);
@@ -415,16 +429,7 @@ export class LessonRegistry {
   async propose(input) {
     this.#assertOpen();
     const lesson = this.#prepare(input, "proposed");
-    const existing = this.#versions.get(lessonKey(lesson));
-    if (existing) {
-      if (existing.contentDigest !== lesson.contentDigest) throw new LessonRegistryConflictError("lesson_version_conflict", "lesson version is already bound to different content", { lessonId: lesson.id, version: lesson.version });
-      const current = this.#latest.get(lesson.id);
-      if (current?.version === lesson.version) return { status: "idempotent", lesson: clone(current) };
-      throw new LessonRegistryConflictError("lesson_version_conflict", "lesson version is already present", { lessonId: lesson.id, version: lesson.version });
-    }
-    const highest = [...this.#versions.keys()].filter((key) => key.startsWith(`${lesson.id}\u0000`)).map((key) => Number(key.split("\u0000").at(-1))).filter(Number.isSafeInteger);
-    if (highest.length && lesson.version <= Math.max(...highest)) throw new LessonRegistryConflictError("lesson_version_order", "new lesson content must increase its version", { lessonId: lesson.id, version: lesson.version });
-    return this.#persistAndRemember(lesson);
+    return this.#persistAndRemember(lesson, "proposal");
   }
   proposeLesson(input) { return this.propose(input); }
 
