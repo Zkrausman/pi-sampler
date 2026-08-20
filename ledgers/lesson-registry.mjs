@@ -214,9 +214,10 @@ export class LessonRegistry {
   async #decodeEntry(entry) {
     if (!entry || typeof entry !== "object") return undefined;
     const record = entry.record;
-    if (record?.event?.kind !== "lesson" && entry.event?.kind !== "lesson" && entry.lesson === undefined) return undefined;
-    if (entry.lesson && typeof entry.lesson === "object") return clone(entry.lesson);
-    if (record?.lesson && typeof record.lesson === "object") return clone(record.lesson);
+    // Only a canonical Ticket Episode lesson event can enter the registry.
+    // Inline payload shortcuts are deliberately not accepted: the artifact,
+    // its content address, and the event identity must bind one another.
+    if (record?.event?.kind !== "lesson") return undefined;
     const refs = Array.isArray(entry.artifacts) ? entry.artifacts : [];
     const reference = refs.find((candidate) => typeof candidate?.identity === "string" && candidate.identity.startsWith("lesson-v1-"));
     if (!reference || typeof this.#ledger.readArtifact !== "function") throw new LessonRegistryError("lesson_artifact_missing", "durable lesson event has no readable lesson artifact");
@@ -224,11 +225,16 @@ export class LessonRegistry {
     try { bytes = await this.#ledger.readArtifact(reference); }
     catch { throw new LessonRegistryError("lesson_artifact_unreadable", "durable lesson artifact could not be read"); }
     if (!(bytes instanceof Uint8Array) && !Buffer.isBuffer(bytes)) throw new LessonRegistryError("lesson_artifact_invalid", "durable lesson artifact is not byte data");
+    let parsed;
     try {
-      const parsed = JSON.parse(decoder.decode(bytes));
+      parsed = JSON.parse(decoder.decode(bytes));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
-      return parsed;
     } catch { throw new LessonRegistryError("lesson_artifact_invalid", "durable lesson artifact is not canonical JSON"); }
+    if (typeof parsed.id !== "string" || !Number.isSafeInteger(parsed.version) || typeof parsed.contentDigest !== "string") throw new LessonRegistryError("lesson_artifact_invalid", "durable lesson artifact lacks a bounded immutable identity");
+    const canonicalBytes = encoder.encode(canonicalJson(parsed));
+    if (!Number.isSafeInteger(reference.size) || reference.size !== bytes.byteLength || typeof reference.digest !== "string" || sha256(bytes) !== reference.digest || !Buffer.from(canonicalBytes).equals(Buffer.from(bytes))) throw new LessonRegistryError("lesson_artifact_integrity_failed", "durable lesson artifact content address or canonical bytes do not match");
+    if (reference.identity !== artifactIdentity(parsed) || record.event.id !== eventIdentity(parsed) || record.episode?.id !== episodeIdentity(parsed)) throw new LessonRegistryError("lesson_artifact_binding_invalid", "durable lesson artifact is not bound to its lesson event identity");
+    return parsed;
   }
 
   #remember(lesson, maps = { latest: this.#latest, versions: this.#versions, sequences: this.#sequences }) {
