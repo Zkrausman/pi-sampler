@@ -50,8 +50,6 @@ export class LessonRegistryError extends Error {
     super(message);
     this.name = "LessonRegistryError";
     this.code = code;
-    // Details are deliberately restricted to codes, identities, and bounded
-    // counts. Raw lesson payloads and ledger errors never cross this facade.
     this.details = Object.fromEntries(Object.entries(details).filter(([key, value]) => {
       if (["error", "cause", "lesson", "payload", "record", "packet"].includes(key)) return false;
       return ["string", "number", "boolean"].includes(typeof value) || (Array.isArray(value) && value.length <= 32 && value.every((item) => typeof item === "string"));
@@ -110,9 +108,6 @@ function applicabilityOverlap(left, right) {
     if (a.operator === "exists" && b.operator === "not_exists") return { overlaps: false, compared };
     if (b.operator === "exists" && a.operator === "not_exists") return { overlaps: false, compared };
   }
-  // No contradictory bounds means the conditions have a possible common
-  // assignment. Unknown predicates intentionally overlap rather than silently
-  // selecting a winner.
   return { overlaps: true, compared };
 }
 function behaviorConflict(left, right) {
@@ -204,8 +199,6 @@ export class LessonRegistry {
     candidate.schema ??= { id: LESSON_V1_SCHEMA_ID, version: LESSON_V1_SCHEMA_VERSION };
     if (expectedState !== undefined) candidate.state = expectedState;
     const normalized = normalizeLessonV1(candidate, { now: this.#time() });
-    // normalizeLessonV1's digest is calculated before and after lifecycle
-    // defaults, but repeat it here so callers cannot smuggle a stale identity.
     normalized.contentDigest = lessonContentDigest(normalized);
     const result = validateLessonV1(normalized, { limits: { maxConditions: this.limits.maxConditionCount, maxLessonBytes: this.limits.maxLessonBytes }, now: Date.parse(this.#time()) });
     if (!result.ok) throw new LessonRegistryValidationError(result.errors);
@@ -247,9 +240,6 @@ export class LessonRegistry {
   async #decodeEntry(entry) {
     if (!entry || typeof entry !== "object") return undefined;
     const record = entry.record;
-    // Only a canonical Ticket Episode lesson event can enter the registry.
-    // Inline payload shortcuts are deliberately not accepted: the artifact,
-    // its content address, and the event identity must bind one another.
     if (record?.event?.kind !== "lesson") return undefined;
     const refs = Array.isArray(entry.artifacts) ? entry.artifacts : [];
     const reference = refs.find((candidate) => typeof candidate?.identity === "string" && candidate.identity.startsWith("lesson-v1-"));
