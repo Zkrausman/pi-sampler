@@ -34,3 +34,5 @@ coverage/
 # Acceptance and benchmark packets are local evidence until a separate policy approves publication.
 /artifacts/benchmark/
 /artifacts/delivery/
+# Final Terra receipts, lifecycle records, and complete frozen inputs are local-only.
+/artifacts/final-review/

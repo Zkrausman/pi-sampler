@@ -34,6 +34,9 @@ function digest(cwd, base, head, version = 2) {
 function marker({ base, head, packetSha256, outcome = "clean" }) {
   return `<!-- pi-sampler-adversarial-review-attestation:v2 ${JSON.stringify({ format: "pi-sampler.adversarial-review-attestation", version: 2, base, head, outcome, packetSha256 })} -->`;
 }
+function markerV3({ base, head, packetSha256, outcome = "clean", ...provenance }) {
+  return `<!-- pi-sampler-adversarial-review-attestation:v3 ${JSON.stringify({ format: "pi-sampler.adversarial-review-attestation", version: 3, base, head, outcome, packetSha256, acceptanceMatrixSha256: provenance.acceptanceMatrixSha256 ?? "a".repeat(64), verificationEvidenceSha256: provenance.verificationEvidenceSha256 ?? "b".repeat(64), reviewerModelId: provenance.reviewerModelId ?? "openai/gpt-5.6", reviewProfileVersion: provenance.reviewProfileVersion ?? "terra-final-v1", receiptSha256: provenance.receiptSha256 ?? "c".repeat(64) })} -->`;
+}
 function invoke(cwd, { base, head, branch, body }) {
   return spawnSync(process.execPath, [validator], {
     cwd,
@@ -84,6 +87,19 @@ test("adversarial review gate is isolated from ordinary validation and executes 
   assert.doesNotMatch(job, /\bgh api\b|reviews\?per_page|npm run validate:adversarial-review/);
 });
 
+test("pre-push marker validation uses bounded argv and fail-closed PR lookup", async () => {
+  const hook = (await readFile(join(root, "scripts", "hooks", "pre-push.mjs"), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(hook, /execFileSync/);
+  assert.doesNotMatch(hook, /execSync|`gh pr view|origin\\\/\\$\{base/);
+  assert.match(hook, /gh.*pr.*list/);
+  assert.match(hook, /explicitlyVerifiedNoPr/);
+  assert.match(hook, /refusing to skip attestation validation/);
+  assert.match(hook, /pre-push ref input could not be read/);
+  assert.match(hook, /current Git branch could not be inspected/);
+  assert.match(hook, /parts\.length !== 4/);
+  assert.match(hook, /remoteDeletion/);
+});
+
 test("solo maintainer attestation accepts a privacy-safe clean marker on the exact packet", async () => {
   const fixture = await repository();
   try {
@@ -102,6 +118,52 @@ test("historical v2 attestation remains bound to frozen v2 bytes", async () => {
     const result = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body: marker({ ...fixture, packetSha256: v3Digest }) });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /packet digest/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 final-review attestation binds the complete v3 packet and bounded provenance", async () => {
+  const fixture = await repository();
+  try {
+    const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head, 3);
+    const body = markerV3({ ...fixture, packetSha256 });
+    const result = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Final review attestation validated/);
+    assert.doesNotMatch(body, /session|transcript|finding|path|token|cost/i);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v2 remains legacy evidence and cannot satisfy the v3 final-review requirement", async () => {
+  const fixture = await repository();
+  try {
+    const body = marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head) });
+    const result = spawnSync(process.execPath, [validator, "--require-v3"], {
+      cwd: fixture.cwd,
+      encoding: "utf8",
+      env: { ...process.env, ADVERSARIAL_REVIEW_BASE_SHA: fixture.base, ADVERSARIAL_REVIEW_HEAD_SHA: fixture.head, ADVERSARIAL_REVIEW_HEAD_REF: ticketBranch, ADVERSARIAL_REVIEW_PR_BODY: body },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /legacy packet-consistency evidence|v3 final-review gate/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 rejects extra provenance, stale digests, and non-clean outcomes", async () => {
+  const fixture = await repository();
+  try {
+    const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head, 3);
+    const valid = markerV3({ ...fixture, packetSha256 });
+    const cases = [
+      [valid.replace('"outcome":"clean"', '"sessionId":"secret","outcome":"clean"'), /unsupported or missing fields/],
+      [valid.replace('"outcome":"clean"', '"outcome":"clean","outcome":"clean"'), /duplicate object key/],
+      [markerV3({ ...fixture, packetSha256: "0".repeat(64) }), /packet digest/],
+      [markerV3({ ...fixture, packetSha256, outcome: "blocked" }), /outcome must be clean/],
+    ];
+    for (const [body, expected] of cases) {
+      const result = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body: `${body}` });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, expected);
+      assert.doesNotMatch(result.stderr, /secret/);
+    }
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 

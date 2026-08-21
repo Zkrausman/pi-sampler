@@ -1,0 +1,21 @@
+{
+  "schema_version": "acceptance-manifest/v1",
+  "ticket_id": "AIDEV-159",
+  "repository": "Zkrausman/pi-sampler",
+  "plan_path": "docs/techPlans/AIDEV-159-implementation-plan.md",
+  "plan_sha256": "2199dfbac16645a4c9db739c34b03b6681a5adb1851de7de0f4fe5d7fcdb5333",
+  "base_sha": "92b538cefd1d50d3d109f36cdbe14e7c747d51f2",
+  "rows": [
+    {"id": "A159-T01", "title": "Fresh final child input boundary", "acceptance_class": "ordinary", "requirement": "The one fresh final child receives only complete exact packet, acceptance matrix, verification evidence, and the versioned read-only review profile."},
+    {"id": "A159-T02", "title": "Blocker revokes clean state", "acceptance_class": "authority", "requirement": "A blocker or high result creates no clean receipt and revokes any current clean state."},
+    {"id": "A159-T03", "title": "Complete same-child correction rebinding", "acceptance_class": "ordinary", "requirement": "Every correction resumes the same child against a newly frozen complete input set bound to the new exact head."},
+    {"id": "A159-T04", "title": "Correction and failure cap", "acceptance_class": "concurrency", "requirement": "At most two resumes are accepted; a third correction, child loss, timeout, provider failure, or malformed receipt remains blocked."},
+    {"id": "A159-T05", "title": "Same-head blocker revocation", "acceptance_class": "authority", "requirement": "A later authenticated Terra blocker revokes a clean receipt even when the exact HEAD is unchanged."},
+    {"id": "A159-T06", "title": "Exact lineage and input binding", "acceptance_class": "ordinary", "requirement": "Wrong child lineage, model, profile, repository, PR, base/head, packet, matrix, evidence, nonce, or revoked receipt fails closed."},
+    {"id": "A159-T07", "title": "Minimal public provenance", "acceptance_class": "resource-bounded", "requirement": "Published v3 markers reject identity, session/run, transcript, finding text, path, usage, token, latency, and cost material."},
+    {"id": "A159-T08", "title": "Bounded caller provenance", "acceptance_class": "ordinary", "requirement": "Model and profile fields are bounded maintainer-attested caller claims and are not external proof of model execution."},
+    {"id": "A159-T09", "title": "V2 legacy downgrade protection", "acceptance_class": "authority", "requirement": "Historical v2 markers remain frozen packet-consistency evidence and cannot satisfy the v3 final-review gate."},
+    {"id": "A159-T10", "title": "Trusted bootstrap workflow", "acceptance_class": "ordinary", "requirement": "The trusted workflow validates v3 from immutable base code with read-only permissions, bounded inputs, and no candidate dependency execution."},
+    {"id": "A159-T11", "title": "Activation after bootstrap", "acceptance_class": "requirement", "requirement": "A bootstrap PR is not required to enforce its own new validator; v3 activation succeeds only after the validator is present on the trusted base."}
+  ]
+}
