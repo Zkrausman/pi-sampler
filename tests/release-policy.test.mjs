@@ -41,6 +41,10 @@ test("PR validation preserves repository, Changeset, and DCO gates", async () =>
   assert.match(workflow, /CHANGESET_BASE_REF: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
   assert.match(workflow, /CHANGESET_HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
   assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n          fetch-depth: 0/);
+  const testJob = workflow.split("  changesets:\n", 1)[0];
+  assert.match(testJob, /actions\/checkout@[^\n]+\n        with:\n          fetch-depth: 0/);
+  assert.match(testJob, /AIDEV_165_REGRESSION_BASE: aee0f2e6244aedc85fd1fc8620af317aeeb8f284/);
+  assert.match(testJob, /run: git cat-file -e "\$\{AIDEV_165_REGRESSION_BASE\}\^\{commit\}"/);
   assert.match(workflow, /npm run validate:changesets -- --base "\$CHANGESET_BASE_REF" --head "\$CHANGESET_HEAD_REF"/);
   assert.match(workflow, /dco:\n    if: github\.event_name == 'pull_request'/);
   assert.match(workflow, /DCO_BASE_REF: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
