@@ -22,12 +22,20 @@ function fail(code, message) {
   throw new DeliveryWorktreeError(code, message);
 }
 
+function gitEnvironment() {
+  const environment = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  for (const name of Object.keys(environment)) {
+    if (/^GIT_(?:DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|COMMON_DIR|CONFIG(?:_|$)|TRACE(?:\d*|2)(?:_|$)|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|OPTIONAL_LOCKS)$/i.test(name)) delete environment[name];
+  }
+  return environment;
+}
+
 function git(cwd, args, { allowFailure = false } = {}) {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
     windowsHide: true,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: gitEnvironment(),
   });
   if (result.error) fail("git_unavailable", `git could not start: ${result.error.message}`);
   if (result.status !== 0 && !allowFailure) {
@@ -94,6 +102,28 @@ function normalizeGitPath(value, field) {
   return normalized;
 }
 
+function validateReviewConfiguration(review) {
+  if (review === undefined) fail("profile_invalid", "delivery.review configuration is required");
+  if (!review || typeof review !== "object" || Array.isArray(review)) fail("profile_invalid", "delivery.review must be an object");
+  for (const [field, value] of [["workspaceRoot", review.workspaceRoot], ["quarantineRoot", review.quarantineRoot]]) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 240 || value.includes("\0") || isAbsolute(value) || /^[A-Za-z]:/.test(value)) fail("profile_invalid", `delivery.review.${field} must be a bounded repository-relative path`);
+  }
+  if (review.remotePolicy !== "none") fail("profile_invalid", "delivery.review.remotePolicy must be none");
+  if (!Number.isSafeInteger(review.quarantineRetentionSeconds) || review.quarantineRetentionSeconds < 0 || review.quarantineRetentionSeconds > 31_536_000) fail("profile_invalid", "delivery.review.quarantineRetentionSeconds is invalid");
+  const limits = review.limits;
+  if (!limits || typeof limits !== "object" || Array.isArray(limits)) fail("profile_invalid", "delivery.review.limits is required");
+  for (const [field, minimum, maximum] of [
+    ["maxWorkspaces", 1, 256],
+    ["maxWorkspaceBytes", 1_048_576, Number.MAX_SAFE_INTEGER],
+    ["maxQuarantineBytes", 1_048_576, Number.MAX_SAFE_INTEGER],
+    ["maxUntrackedEntries", 1, 100_000],
+    ["maxUntrackedBytes", 0, Number.MAX_SAFE_INTEGER],
+  ]) {
+    if (!Number.isSafeInteger(limits[field]) || limits[field] < minimum || limits[field] > maximum) fail("profile_invalid", `delivery.review.limits.${field} is invalid`);
+  }
+  return review;
+}
+
 function validateDelivery(delivery) {
   if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) fail("profile_invalid", "delivery configuration is required");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(delivery.remote)) fail("profile_invalid", "delivery.remote is invalid");
@@ -101,6 +131,7 @@ function validateDelivery(delivery) {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(delivery.branchPrefix)) fail("profile_invalid", "delivery.branchPrefix is invalid");
   if (!Number.isSafeInteger(delivery.suffixLength) || delivery.suffixLength < 4 || delivery.suffixLength > 12) fail("profile_invalid", "delivery.suffixLength must be between 4 and 12");
   if (typeof delivery.worktreeRoot !== "string" || delivery.worktreeRoot.length === 0 || delivery.worktreeRoot.length > 240 || delivery.worktreeRoot.includes("\0") || isAbsolute(delivery.worktreeRoot)) fail("profile_invalid", "delivery.worktreeRoot must be a bounded repository-relative path");
+  validateReviewConfiguration(delivery.review);
   return delivery;
 }
 
@@ -113,7 +144,7 @@ function validateProfile(profile, workItem) {
   } catch {
     fail("profile_invalid", "work item pattern is invalid");
   }
-  if (!pattern.test(workItem)) fail("work_item_invalid", `${workItem} does not match the project profile`);
+  if (workItem !== undefined && !pattern.test(workItem)) fail("work_item_invalid", `${workItem} does not match the project profile`);
   validateDelivery(profile.delivery);
   if (!profile.governance?.paths || typeof profile.governance.paths.specification !== "string") fail("profile_invalid", "governance specification path is required");
   return profile;
@@ -418,6 +449,19 @@ export async function cleanupDeliveryWorktree(options) {
     branchDeleted: options.deleteBranch,
   };
 }
+
+export {
+  commonGitDirectory,
+  normalizeGitPath,
+  parseProfile,
+  pathInside,
+  pathKey,
+  profileLocation,
+  repositoryContext,
+  validateDelivery,
+  validateProfile,
+  validateReviewConfiguration,
+};
 
 async function main() {
   const { command, options } = parseArgs(process.argv.slice(2));

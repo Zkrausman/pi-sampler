@@ -24,7 +24,7 @@ Use a project profile for repository source, work-item identifiers, automatic wo
 - Keep the recorded repository root, delivery worktree path, branch, expected `HEAD`, lease ID, and lease token as the run identity. Never commit the lease token.
 - Before every source mutation and before final verification, re-check that identity and inspect status. Track the paths changed by this run. If the branch, `HEAD`, worktree, lease, or an unowned path changes unexpectedly, stop immediately and report a concurrent-writer conflict; do not switch back, copy mixed files, or continue.
 - After an explicitly authorized commit, update the expected `HEAD` to that exact commit. Otherwise the base `HEAD` must remain unchanged.
-- Independent reviewers use a distinct clean worktree and identity. Bind review and verification to an exact commit when one exists; otherwise provide an explicit patch or snapshot and label it uncommitted.
+- Independent reviewers use a distinct managed review clone and opaque run identity. Bind review and verification to an exact commit (the base/head pair) when one exists; otherwise provide an explicit patch or snapshot and label it uncommitted. Do not hand a reviewer a linked implementation worktree or configure reviewer Git author identity.
 
 ## Delivery
 
@@ -37,6 +37,6 @@ Use a project profile for repository source, work-item identifiers, automatic wo
    - Say **implemented on branch** only when the branch contains the reviewed implementation commit.
    - For authorized commits, report the exact commit and verify a clean worktree.
    - Without commit authorization, say **prepared as uncommitted changes** and report the worktree path, base `HEAD`, and complete owned-path inventory. Do not imply that the branch ref contains the changes.
-7. Retain the leased worktree while unmerged work is awaiting review. On explicit cancellation, or after confirming the delivery commit is merged into the configured base, run `npm run delivery:worktree -- cleanup --worktree <PATH> --lease <TOKEN> --delete-branch`. Cleanup fails closed for dirty worktrees, invalid leases, changed identities, and unmerged commits.
+7. Hand off the exact implementation base SHA and candidate head SHA to the independent reviewer; the reviewer provisions its own managed review workspace and must not mutate this implementation checkout. Retain the leased implementation worktree while unmerged work is awaiting review. On explicit cancellation, or after confirming the delivery commit is merged into the configured base, run `npm run delivery:worktree -- cleanup --worktree <PATH> --lease <TOKEN> --delete-branch`. Cleanup fails closed for dirty worktrees, invalid leases, changed identities, and unmerged commits.
 
 The generic mechanism is fail-closed: unavailable profiles, provisioning failures, dirty or shared delivery worktrees, missing leases, ownership conflicts, unexpected identity changes, verification failures, missing evidence, or unavailable independent review are blockers rather than permission to invent a replacement or continue in mixed state.

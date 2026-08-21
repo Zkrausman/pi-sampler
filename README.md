@@ -116,6 +116,32 @@ commits. Validate a consumer profile against the schema with the consumer's JSON
 Schema validator; repository changes to the schema or examples are covered by
 `npm test`.
 
+### Managed review workspaces
+
+Independent reviews use disposable isolated clones rather than linked Git
+worktrees. The clone has separate config and object storage, is detached at the
+exact candidate commit, uses `--no-hardlinks` without alternates/reference/shared
+clone modes, has no publication remote or reviewer Git identity, and retains a
+clone-local disabled hook directory:
+
+```powershell
+node scripts/review-workspace.mjs prepare --profile profiles/pi-sampler.json --base <EXACT-APPROVED-BASE-SHA> --head <EXACT-CANDIDATE-SHA>
+node scripts/review-workspace.mjs inspect --base <EXACT-APPROVED-BASE-SHA> --workspace <PATH> --lease <TOKEN>
+node scripts/review-workspace.mjs quarantine --base <EXACT-APPROVED-BASE-SHA> --workspace <PATH> --lease <TOKEN>
+node scripts/review-workspace.mjs clean --base <EXACT-APPROVED-BASE-SHA> --quarantine <PATH> --lease <TOKEN> --confirm
+```
+
+The emitted path, exact head, and lease token are the review identity. Inspection
+fails closed for changed tracked files, unexpected untracked or ignored content,
+nested repositories, locks, symlinks or reparse points, case aliases, changed
+Git config, branches, remotes, hooks, or provenance. Quarantine is retained for
+the profile-configured period; deletion is a separate explicit operation. Review
+workspaces must not be used to mutate the candidate, set `user.name` or
+`user.email`, push, merge, or change tracker state. See the [PR #150 remediation
+runbook](docs/runbooks/pr-150-review-workspace-remediation.md) for historical
+resources; it is a dry-run and confirmation-gated procedure, not automatic
+cleanup.
+
 ## Optional governance module
 
 [`governance/`](governance/) is a nested Go module containing independent

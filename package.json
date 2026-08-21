@@ -27,7 +27,8 @@
     "validate:lesson-schema": "node scripts/export-lesson-v1-schema.mjs --check",
     "prepare": "npx simple-git-hooks",
     "merge-train": "node scripts/merge-train.mjs",
-    "delivery:worktree": "node scripts/delivery-worktree.mjs"
+    "delivery:worktree": "node scripts/delivery-worktree.mjs",
+    "review:workspace": "node scripts/review-workspace.mjs"
   },
   "engines": {
     "node": ">=24"
