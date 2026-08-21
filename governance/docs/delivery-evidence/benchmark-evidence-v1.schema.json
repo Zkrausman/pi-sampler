@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-sampler.dev/delivery-evidence/benchmark-evidence-v1.schema.json",
+  "title": "Lesson registry benchmark evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "ticket_id", "repository", "base_sha", "head_sha", "class", "workload_digest", "event_count", "warmup_events", "repetitions", "timeout_ms", "started_at", "completed_at", "event_complete", "slope_estimator", "runs", "summary", "environment", "outcome"],
+  "properties": {
+    "schema_version": {"const": "benchmark-evidence/v1"},
+    "ticket_id": {"type": "string", "pattern": "^[A-Z][A-Z0-9]+-[1-9][0-9]*$", "maxLength": 64},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$"},
+    "base_sha": {"type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"},
+    "head_sha": {"type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"},
+    "class": {"type": "string", "enum": ["local-10m", "ci-regression"]},
+    "workload_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "event_count": {"type": "integer", "minimum": 1, "maximum": 10000000},
+    "warmup_events": {"type": "integer", "minimum": 0, "maximum": 1000000},
+    "repetitions": {"type": "integer", "minimum": 1, "maximum": 32},
+    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 1800000},
+    "started_at": {"type": "string", "format": "date-time", "maxLength": 64},
+    "completed_at": {"type": "string", "format": "date-time", "maxLength": 64},
+    "event_complete": {"type": "boolean"},
+    "slope_estimator": {"const": "theil-sen"},
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repetition", "event_count", "completed_events", "duration_ms", "peak_rss_bytes", "rss_samples", "slope_bytes_per_event", "variance"],
+        "properties": {
+          "repetition": {"type": "integer", "minimum": 1, "maximum": 32},
+          "event_count": {"type": "integer", "minimum": 1, "maximum": 10000000},
+          "completed_events": {"type": "integer", "minimum": 0, "maximum": 10000000},
+          "duration_ms": {"type": "number", "exclusiveMinimum": 0, "maximum": 1800000},
+          "peak_rss_bytes": {"type": "integer", "minimum": 1, "maximum": 1099511627776},
+          "rss_samples": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 1024,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["events", "rss_bytes"],
+              "properties": {
+                "events": {"type": "integer", "minimum": 0, "maximum": 10000000},
+                "rss_bytes": {"type": "integer", "minimum": 1, "maximum": 1099511627776}
+              }
+            }
+          },
+          "slope_bytes_per_event": {"type": "number", "minimum": -1099511627776, "maximum": 1099511627776},
+          "variance": {"type": "number", "minimum": 0, "maximum": 1208925819614629174706176}
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["duration_ms", "peak_rss_bytes", "slope_bytes_per_event", "variance", "completed_events"],
+      "properties": {
+        "duration_ms": {"type": "number", "exclusiveMinimum": 0, "maximum": 1800000},
+        "peak_rss_bytes": {"type": "integer", "minimum": 1, "maximum": 1099511627776},
+        "slope_bytes_per_event": {"type": "number", "minimum": -1099511627776, "maximum": 1099511627776},
+        "variance": {"type": "number", "minimum": 0, "maximum": 1208925819614629174706176},
+        "completed_events": {"type": "integer", "minimum": 0, "maximum": 10000000}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "hardware_class", "cpu_count", "memory_bytes"],
+      "properties": {
+        "runtime": {"type": "string", "minLength": 1, "maxLength": 128},
+        "hardware_class": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"},
+        "cpu_count": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "memory_bytes": {"type": "integer", "minimum": 1, "maximum": 1099511627776}
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_duration_ms", "max_peak_rss_bytes", "max_slope_bytes_per_event", "max_variance"],
+      "properties": {
+        "max_duration_ms": {"type": "number", "exclusiveMinimum": 0, "maximum": 1800000},
+        "max_peak_rss_bytes": {"type": "integer", "minimum": 1, "maximum": 1099511627776},
+        "max_slope_bytes_per_event": {"type": "number", "minimum": -1099511627776, "maximum": 1099511627776},
+        "max_variance": {"type": "number", "minimum": 0, "maximum": 1208925819614629174706176}
+      }
+    },
+    "outcome": {"type": "string", "enum": ["baseline", "passed", "failed"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"class": {"const": "local-10m"}}}, "then": {"properties": {"event_count": {"const": 10000000}}}},
+    {"if": {"properties": {"class": {"const": "ci-regression"}}}, "then": {"properties": {"event_count": {"const": 10000}}}}
+  ]
+}

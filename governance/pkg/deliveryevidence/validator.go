@@ -5,7 +5,6 @@ package deliveryevidence
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -124,9 +123,7 @@ func ValidateFileAtCommit(manifestPath, repositoryRoot, expectedCommit string) e
 		return fmt.Errorf("read manifest: %w", err)
 	}
 	var manifest Manifest
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&manifest); err != nil {
+	if err := decodeStrictJSON(data, &manifest); err != nil {
 		return fmt.Errorf("decode manifest: %w", err)
 	}
 	if err := Validate(manifest, repositoryRoot); err != nil {

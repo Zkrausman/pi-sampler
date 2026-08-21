@@ -26,6 +26,14 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run validate:delivery-schemas
+      # CI intentionally exercises only the smaller fixed regression class;
+      # the local 10M baseline is never run by this workflow. Protected event
+      # SHAs are injected; the runner never emits a zero or guessed binding.
+      - run: npm run benchmark:lesson-registry:ci
+        env:
+          AIDEV_BENCHMARK_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          AIDEV_BENCHMARK_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       - run: npm test
       - run: npm run build
       - run: npm run validate:compliance

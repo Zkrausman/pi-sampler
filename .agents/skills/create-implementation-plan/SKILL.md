@@ -37,10 +37,15 @@ The agent **must** strictly adhere to the following execution constraints:
 *   **Constraint 1: You are the Lead Architect.** 
     *   Do **not** write the final implementation code. 
     *   Your role is strictly to design the architecture and define the execution steps.
-*   **Constraint 2: Module Governance.** 
+*   **Constraint 2: Module Governance.**
     *   All proposed changes must strictly comply with the `governance/` Go module policies.
-*   **Constraint 3: Test Case Definition.** 
+*   **Constraint 3: Explicit merge authority.**
+    *   Planning and implementation may prepare evidence and a review handoff only. `do not merge` is sticky; wording such as `Ready to merge`, refresh/rebase, push, auto-merge, or admin merge never authorizes a merge. Only the exact user action `Merge PR #N` authorizes that individual merge.
+*   **Constraint 4: Test Case Definition.**
     *   Define exact test cases required to validate the feature.
+    *   Give every acceptance scenario a stable, ASCII, ticket-scoped ID such as `A123-T01`; IDs must not depend on Markdown table position and must not be reused or silently deleted.
+    *   The plan must produce a sibling `docs/techPlans/[TICKET-ID]-acceptance-manifest-v1.json` (or an explicitly named local handoff artifact) whose rows bind those IDs to the plan digest and immutable base. The final acceptance matrix must map every row exactly once to `observed`, `waived`, or `blocked`.
+    *   Mark benchmark, external-evidence, and durable-requirement rows with their own acceptance class; ordinary unit tests cannot satisfy them.
     *   Example: `go test -race <boundaries>` must be explicitly specified for the affected components.
 
 ## 4. The Output Template & Handoff (Tech Planning Standard)
@@ -100,4 +105,5 @@ The content of the file **must** use the rigid, copy-pasteable Markdown template
 *   **Validation Scenarios**:
     *   [ ] Scenario A (Success case)
     *   [ ] Scenario B (Edge case handling)
+    *   [ ] Every stable acceptance ID is covered exactly once by the final acceptance matrix or an explicit external waiver/blocker.
 ```

@@ -8,4 +8,5 @@ okf_version: "0.2"
 
 - [changes/](changes/)
 - [decisions/](decisions/)
+- [requirements/](requirements/)
 - [sources/](sources/)
