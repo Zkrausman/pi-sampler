@@ -47,4 +47,39 @@ test("project-profile schema and examples preserve consumer-owned configuration 
   assertProfile(example);
   assertProfile(gelt);
   assertProfile(piSampler);
+
+  const reviewSchema = schema.properties.delivery.properties.review;
+  const limitsSchema = reviewSchema.properties.limits;
+  assert.equal(schema.properties.delivery.required.includes("review"), false);
+  assert.equal(reviewSchema.additionalProperties, false);
+  assert.deepEqual(reviewSchema.required, ["workspaceRoot", "quarantineRoot", "remotePolicy", "quarantineRetentionSeconds", "limits"]);
+  assert.equal(limitsSchema.additionalProperties, false);
+  assert.deepEqual(limitsSchema.required, ["maxWorkspaces", "maxWorkspaceBytes", "maxQuarantineBytes", "maxUntrackedEntries", "maxUntrackedBytes"]);
+  assert.deepEqual(piSampler.delivery.review, {
+    workspaceRoot: "../ai-workspaces/review",
+    quarantineRoot: "../ai-workspaces/review-quarantine",
+    remotePolicy: "none",
+    quarantineRetentionSeconds: 86400,
+    limits: {
+      maxWorkspaces: 16,
+      maxWorkspaceBytes: 2147483648,
+      maxQuarantineBytes: 2147483648,
+      maxUntrackedEntries: 512,
+      maxUntrackedBytes: 536870912,
+    },
+  });
+  assert.equal(example.delivery.review, undefined);
+  assert.equal(gelt.delivery.review, undefined);
+  assert.equal(reviewSchema.properties.quarantineRetentionSeconds.minimum, 0);
+  assert.equal(reviewSchema.properties.quarantineRetentionSeconds.maximum, 31536000);
+  assert.equal(limitsSchema.properties.maxWorkspaces.minimum, 1);
+  assert.equal(limitsSchema.properties.maxWorkspaces.maximum, 256);
+  assert.equal(limitsSchema.properties.maxWorkspaceBytes.minimum, 1048576);
+  assert.equal(limitsSchema.properties.maxWorkspaceBytes.maximum, 8589934592);
+  assert.equal(limitsSchema.properties.maxQuarantineBytes.minimum, 1048576);
+  assert.equal(limitsSchema.properties.maxQuarantineBytes.maximum, 8589934592);
+  assert.equal(limitsSchema.properties.maxUntrackedEntries.minimum, 1);
+  assert.equal(limitsSchema.properties.maxUntrackedEntries.maximum, 100000);
+  assert.equal(limitsSchema.properties.maxUntrackedBytes.minimum, 0);
+  assert.equal(limitsSchema.properties.maxUntrackedBytes.maximum, 2147483648);
 });

@@ -24,7 +24,30 @@
         "baseBranch": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^(?!-).+"},
         "worktreeRoot": {"type": "string", "minLength": 1, "maxLength": 240, "pattern": "^(?![A-Za-z]:)(?![/\\\\]).+"},
         "branchPrefix": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
-        "suffixLength": {"type": "integer", "minimum": 4, "maximum": 12}
+        "suffixLength": {"type": "integer", "minimum": 4, "maximum": 12},
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workspaceRoot", "quarantineRoot", "remotePolicy", "quarantineRetentionSeconds", "limits"],
+          "properties": {
+            "workspaceRoot": {"type": "string", "minLength": 1, "maxLength": 240},
+            "quarantineRoot": {"type": "string", "minLength": 1, "maxLength": 240},
+            "remotePolicy": {"type": "string", "enum": ["none"]},
+            "quarantineRetentionSeconds": {"type": "integer", "minimum": 0, "maximum": 31536000},
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["maxWorkspaces", "maxWorkspaceBytes", "maxQuarantineBytes", "maxUntrackedEntries", "maxUntrackedBytes"],
+              "properties": {
+                "maxWorkspaces": {"type": "integer", "minimum": 1, "maximum": 256},
+                "maxWorkspaceBytes": {"type": "integer", "minimum": 1048576, "maximum": 8589934592},
+                "maxQuarantineBytes": {"type": "integer", "minimum": 1048576, "maximum": 8589934592},
+                "maxUntrackedEntries": {"type": "integer", "minimum": 1, "maximum": 100000},
+                "maxUntrackedBytes": {"type": "integer", "minimum": 0, "maximum": 2147483648}
+              }
+            }
+          }
+        }
       }
     },
     "verification": {
