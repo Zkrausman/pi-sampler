@@ -10,11 +10,13 @@ This directory contains two related, offline contracts:
   acceptance. A manifest is the immutable list of stable plan rows. A matrix
   must cover every row exactly once as `observed`, `waived`, or `blocked`.
 
-The acceptance validator binds the plan bytes, plan digest, repository, immutable
-base, candidate head, manifest digest, and pull request identity. Row IDs are
-ASCII, normalized, ticket-scoped values such as `A158-T01`; Markdown table
-position is never an identity. Unknown, duplicate, confusable, deleted, or
-plan-digest-mismatched rows fail closed.
+The acceptance validator binds the canonical implementation-plan bytes, plan
+digest, repository, immutable base, candidate head, manifest digest, and pull
+request identity. Canonical plan bytes normalize CRLF and lone CR line endings
+to LF before hashing, so the digest is independent of checkout settings. Row
+IDs are ASCII, normalized, ticket-scoped values such as `A158-T01`; Markdown
+table position is never an identity. Unknown, duplicate, confusable, deleted,
+or plan-digest-mismatched rows fail closed.
 
 Observed evidence is bounded and must name its class-specific verifier, exact
 command, tool version, environment class, zero exit status, timestamps, and

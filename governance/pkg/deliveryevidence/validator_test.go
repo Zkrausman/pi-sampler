@@ -428,6 +428,44 @@ func TestAcceptanceManifestAndMatrixBindEveryStableRow(t *testing.T) {
 	}
 }
 
+func TestAcceptanceManifestPlanDigestIsNewlineInvariant(t *testing.T) {
+	rootLF, manifestLF, _, base, _ := acceptanceFixture(t)
+	if err := ValidateAcceptanceManifestFile(manifestLF, rootLF, "Zkrausman/pi-sampler", base); err != nil {
+		t.Fatalf("LF plan should validate: %v", err)
+	}
+
+	rootCRLF, manifestCRLF, _, crlfBase, _ := acceptanceFixture(t)
+	planPath := filepath.Join(rootCRLF, "docs", "techPlans", "AIDEV-999-implementation-plan.md")
+	planBytes, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crlfPlan := strings.ReplaceAll(string(planBytes), "\n", "\r\n")
+	if err := os.WriteFile(planPath, []byte(crlfPlan), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAcceptanceManifestFile(manifestCRLF, rootCRLF, "Zkrausman/pi-sampler", crlfBase); err != nil {
+		t.Fatalf("CRLF plan should validate with the same digest: %v", err)
+	}
+
+	mutatedRoot, mutatedManifest, _, mutatedBase, _ := acceptanceFixture(t)
+	mutatedPlanPath := filepath.Join(mutatedRoot, "docs", "techPlans", "AIDEV-999-implementation-plan.md")
+	mutatedPlanBytes, err := os.ReadFile(mutatedPlanPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutatedPlan := strings.Replace(string(mutatedPlanBytes), "A999-T01 ordinary", "A999-T01 changed", 1)
+	if mutatedPlan == string(mutatedPlanBytes) || strings.Count(mutatedPlan, "\n") != strings.Count(string(mutatedPlanBytes), "\n") {
+		t.Fatal("ordinary plan mutation did not preserve LF line endings")
+	}
+	if err := os.WriteFile(mutatedPlanPath, []byte(mutatedPlan), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAcceptanceManifestFile(mutatedManifest, mutatedRoot, "Zkrausman/pi-sampler", mutatedBase); err == nil || !strings.Contains(err.Error(), "plan_sha256") {
+		t.Fatalf("ordinary plan-content mutation was accepted: %v", err)
+	}
+}
+
 func TestPublishedSchemasRejectInvalidManifestMatrixBenchmarkAndWaiver(t *testing.T) {
 	t.Run("manifest", func(t *testing.T) {
 		root, manifestPath, _, base, _ := acceptanceFixture(t)

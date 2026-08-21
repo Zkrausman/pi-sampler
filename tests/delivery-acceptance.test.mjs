@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -18,19 +19,73 @@ const schemaPaths = [
   "governance/docs/delivery-evidence/waiver-v1.schema.json",
 ];
 
+function lineEndingSignature(value) {
+  return value.match(/\r\n|\r|\n/g) ?? [];
+}
+
+async function copyManifestValidationFixture(targetRoot) {
+  await Promise.all([
+    mkdir(join(targetRoot, "docs", "techPlans"), { recursive: true }),
+    mkdir(join(targetRoot, "governance", "docs", "delivery-evidence"), { recursive: true }),
+  ]);
+  await Promise.all([
+    cp(join(root, "docs/techPlans/AIDEV-158-implementation-plan.md"), join(targetRoot, "docs/techPlans/AIDEV-158-implementation-plan.md")),
+    cp(join(root, "docs/techPlans/AIDEV-158-acceptance-manifest-v1.json"), join(targetRoot, "docs/techPlans/AIDEV-158-acceptance-manifest-v1.json")),
+    ...schemaPaths.map((schemaPath) => cp(join(root, schemaPath), join(targetRoot, schemaPath))),
+  ]);
+}
+
 test("approved rows have a strict sibling acceptance manifest", async () => {
   const [plan, manifest, requirement] = await Promise.all([
     text("docs/techPlans/AIDEV-158-implementation-plan.md"),
     json("docs/techPlans/AIDEV-158-acceptance-manifest-v1.json"),
     text(".llm-wiki/wiki/requirements/AIDEV-133-flat-memory-rebuild.md"),
   ]);
-  const digest = createHash("sha256").update(plan).digest("hex");
+  const canonicalPlan = plan.replace(/\r\n?/g, "\n");
+  const digest = createHash("sha256").update(canonicalPlan).digest("hex");
   assert.equal(manifest.schema_version, "acceptance-manifest/v1");
   assert.equal(manifest.plan_sha256, digest);
   assert.equal(new Set(manifest.rows.map((row) => row.id)).size, manifest.rows.length);
   assert.match(requirement, /^status: blocked$/m);
   const planIds = [...plan.matchAll(/\bA158-T\d{2,4}\b/g)].map((match) => match[0]);
   assert.deepEqual(manifest.rows.map((row) => row.id), planIds);
+});
+
+test("plan digest is newline-independent", async () => {
+  const plan = await text("docs/techPlans/AIDEV-158-implementation-plan.md");
+  const canonical = plan.replace(/\r\n?/g, "\n");
+  const digest = createHash("sha256").update(canonical).digest("hex");
+  const crlf = canonical.replace(/\n/g, "\r\n");
+  const crlfDigest = createHash("sha256").update(crlf.replace(/\r\n?/g, "\n")).digest("hex");
+  assert.equal(crlfDigest, digest);
+});
+
+test("manifest digest rejects ordinary content changes with preserved line endings", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "aidev158-manifest-negative-"));
+  try {
+    await copyManifestValidationFixture(fixtureRoot);
+    const planPath = join(fixtureRoot, "docs", "techPlans", "AIDEV-158-implementation-plan.md");
+    const original = await readFile(planPath, "utf8");
+    const mutated = original.replace(
+      "The user—not repository code—is the merge authority.",
+      "The user—not repository code—is the merge authority for this manifest.",
+    );
+    assert.notEqual(mutated, original);
+    assert.deepEqual(lineEndingSignature(mutated), lineEndingSignature(original));
+    await writeFile(planPath, mutated);
+
+    const result = spawnSync(process.execPath, [
+      join(root, "scripts/validate-delivery-evidence.mjs"),
+      "--mode", "manifest",
+      "--acceptance-manifest", join(fixtureRoot, "docs", "techPlans", "AIDEV-158-acceptance-manifest-v1.json"),
+      "--repo-root", fixtureRoot,
+      "--expected-repository", "Zkrausman/pi-sampler",
+      "--expected-base", "407b31cce5c6f418ad7cdae15ce91c94b09b60a7",
+    ], { cwd: root, encoding: "utf8", windowsHide: true });
+    assert.notEqual(result.status, 0, "ordinary plan-content mutation was accepted");
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test("delivery evidence schemas reject additional fields and expose all contracts", async () => {

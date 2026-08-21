@@ -440,6 +440,16 @@ func fileSHA256(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// canonicalPlanSHA256 hashes the plan's specified canonical newline form. Git
+// stores the plan with LF bytes, while a Windows checkout may materialize CRLF;
+// normalizing both CRLF and lone CR to LF keeps the manifest digest immutable
+// across checkout settings without trusting working-tree line endings.
+func canonicalPlanSHA256(data []byte) string {
+	canonical := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	canonical = bytes.ReplaceAll(canonical, []byte("\r"), []byte("\n"))
+	return fileSHA256(canonical)
+}
+
 func validateAcceptanceClass(value string) bool {
 	switch value {
 	case "ordinary", "authority", "waiver", "requirement", "benchmark-local-10m", "benchmark-ci-regression", "resource-bounded", "concurrency":
@@ -491,8 +501,8 @@ func validateAcceptanceManifest(manifest AcceptanceManifest, repositoryRoot, exp
 	if err != nil {
 		return "", nil, err
 	}
-	if got := fileSHA256(planBytes); got != manifest.PlanSHA256 {
-		return "", nil, fmt.Errorf("plan_sha256 does not match the immutable plan bytes")
+	if got := canonicalPlanSHA256(planBytes); got != manifest.PlanSHA256 {
+		return "", nil, fmt.Errorf("plan_sha256 does not match the canonical implementation plan bytes")
 	}
 	if len(manifest.Rows) == 0 || len(manifest.Rows) > maxAcceptanceRows {
 		return "", nil, fmt.Errorf("acceptance manifest rows are outside their bound")

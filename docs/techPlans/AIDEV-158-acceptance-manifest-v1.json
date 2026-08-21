@@ -4,7 +4,7 @@
   "repository": "Zkrausman/pi-sampler",
   "plan_path": "docs/techPlans/AIDEV-158-implementation-plan.md",
   "plan_sha256": "82477d57fa1413d2829a2da626ef7a179078710845c6f243e34a5b042adad95f",
-  "base_sha": "bc4a2446e992414c1e5d62d0635330216f2d4c8d",
+  "base_sha": "407b31cce5c6f418ad7cdae15ce91c94b09b60a7",
   "rows": [
     {"id": "A158-T01", "title": "Repository authority capability audit", "acceptance_class": "authority", "requirement": "No repository script or workflow can mint a clean marker, force-push, merge, or transition Linear."},
     {"id": "A158-T02", "title": "Sticky merge prohibition", "acceptance_class": "authority", "requirement": "Readiness, refresh, push, and auto-merge language never overrides a prior do-not-merge instruction."},
