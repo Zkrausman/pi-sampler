@@ -31,3 +31,6 @@ coverage/
 .llm-wiki/**/*.key
 .llm-wiki/wiki/log.md
 /artifacts/tool-output/
+# Acceptance and benchmark packets are local evidence until a separate policy approves publication.
+/artifacts/benchmark/
+/artifacts/delivery/

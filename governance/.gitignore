@@ -65,6 +65,8 @@ cloud-telemetry-backup/
 !/.pi/policy.json
 !/docs/wiki-governance/
 !/docs/wiki-governance/*.json
+!/docs/delivery-evidence/
+!/docs/delivery-evidence/*.json
 !/docs/planning-rubric/
 !/docs/planning-rubric/**
 !/evidence/
@@ -76,4 +78,3 @@ cloud-telemetry-backup/
 # CI workflows that execute the machine-enforced collaboration checks.
 !/.github/workflows/wiki-governance.yml
 !/.github/workflows/delivery-evidence.yml
-!/.github/workflows/linear-reconciler.yml

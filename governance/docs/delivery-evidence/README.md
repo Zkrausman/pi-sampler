@@ -1,9 +1,53 @@
-# Delivery evidence contract v1
+# Delivery evidence contracts
 
-`delivery-evidence/v1` is a committed JSON manifest validated by `go run ./cmd/delivery-evidence-validator -manifest <path> -repo-root . -expected-commit <delivery-sha>`. The validator is deterministic and offline: it reads only the manifest and its repository-contained `okf_path`; it does not access credentials, network services, broker code, or generated wiki metadata.
+This directory contains two related, offline contracts:
 
-A manifest binds a ticket, repository OKF artifact, PR identity, delivery commit, immutable source packet IDs, canonical wiki page IDs, observation IDs, command evidence, review evidence, and merge evidence. `-expected-commit` is mandatory and is the immutable delivery commit selected by CI from protected PR metadata; a mismatch is rejected. The evidence commit that adds or updates the manifest is necessarily a later Git commit, because a file cannot contain the hash of the commit that contains that same file. CI validates the selected delivery commit, not the evidence-recording commit. Command output is represented only by a SHA-256 digest. `environment_only` is permitted only for a command that exited zero but emitted a failure marker, and must carry the marker plus a human-readable classification reason.
+- `delivery-evidence/v1` is the historical PR delivery manifest. Run it with
+  `go run ./cmd/delivery-evidence-validator -mode delivery -manifest <path>
+  -repo-root . -expected-commit <delivery-sha>`.
+- `acceptance-manifest/v1`, `acceptance-matrix/v1`,
+  `benchmark-evidence/v1`, and `delivery-waiver/v1` implement approved-plan
+  acceptance. A manifest is the immutable list of stable plan rows. A matrix
+  must cover every row exactly once as `observed`, `waived`, or `blocked`.
 
-Allowed lifecycle states are deliberately fail-closed: `review_ready` requires a draft/unmerged PR and `self_review_complete`; `published` requires a non-draft/unmerged PR and independent `approved`; `merged` additionally requires matching merged commit evidence. IDs, duplicate entries, OKF frontmatter, and paths escaping the supplied repository root are rejected.
+The acceptance validator binds the plan bytes, plan digest, repository, immutable
+base, candidate head, manifest digest, and pull request identity. Row IDs are
+ASCII, normalized, ticket-scoped values such as `A158-T01`; Markdown table
+position is never an identity. Unknown, duplicate, confusable, deleted, or
+plan-digest-mismatched rows fail closed.
 
-`schema-v1.json` is a structural interchange schema, not the complete authority for paths or cross-field lifecycle/result rules. The Go validator is authoritative for those fail-closed semantic checks. See `examples/valid.json` and `fixtures/invalid/` for versioned examples.
+Observed evidence is bounded and must name its class-specific verifier, exact
+command, tool version, environment class, zero exit status, timestamps, and
+artifact SHA-256 digests. Benchmark rows additionally reference a complete
+`benchmark-evidence/v1` artifact. The local class is exactly 10,000,000 events;
+the CI regression is intentionally smaller but uses the same robust Theil-Sen
+RSS-slope, variance, completeness, timeout, and environment measurements. A
+baseline is measurement only. The repository benchmark runner and production
+validator reject `passed` evaluations and candidate-authored thresholds; a future
+pass requires a separately reviewed, protected external threshold-approval
+contract before the schema or policy is widened. Both declared benchmark
+commands require immutable base/head bindings; CI injects protected event SHAs,
+and local execution resolves the current immutable Git range. Zero-SHA defaults
+are rejected.
+
+A waiver is not a claim. It is a signed, scoped, expiring, replay-resistant
+external authorization. The operator's Ed25519 private key is consumer-owned
+and must remain outside the repository, agent sessions, and subagent
+environment. Trusted configuration contains only public verification keys and
+revocation references. The validator requires an external trust configuration
+and external single-use replay state; missing configuration, candidate-local
+keys, unsigned JSON, stale/replayed/expired/revoked signatures, or wrong
+repository/PR/row/plan/base/head bindings remain blocked. Repository and agent
+code intentionally contains no waiver signing capability.
+
+These validators are evidence gates, not merge authorities. They never contact
+GitHub or Linear, mutate PR bodies, push or force-push branches, enable
+auto-merge, merge a PR, or transition a tracker. `do not merge` remains sticky
+until the user explicitly says exactly `Merge PR #N`; readiness, refresh,
+rebase, push, auto-merge, and admin-merge language are separate authorities
+and do not override it.
+
+The first local 10M run records a bounded baseline only. Full benchmark output,
+raw samples, environment inventory, replay state, waivers, and command output
+remain local evidence artifacts unless a later reviewed policy explicitly
+approves a redacted publication.
