@@ -3,7 +3,7 @@
  * Fail-closed validation for the privacy-safe adversarial-review PR marker.
  * The marker carries only commit-bound metadata; review reports stay local.
  */
-import { generateReviewPacket, reviewPacketSha256 } from "./generate-review-packet.mjs";
+import { generateReviewPacketV2, reviewPacketSha256V2 } from "./generate-review-packet.mjs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
@@ -75,11 +75,13 @@ export async function validateAdversarialReviewAttestation({ base, head, branch,
     return { required: false, attested: false };
   }
 
-  const packet = await generateReviewPacket({ base, head });
-  // generateReviewPacket resolves commits and verifies base ancestry. Requiring
+  // v2 markers are historical packet-consistency evidence. Keep their digest
+  // input frozen even though new packet generation defaults to v3.
+  const packet = await generateReviewPacketV2({ base, head });
+  // generateReviewPacketV2 resolves commits and verifies base ancestry. Requiring
   // exact equality prevents abbreviated, stale, replacement, or ref-derived claims.
   if (packet.base !== base || packet.head !== head) fail("base or head did not resolve exactly to the supplied commit SHA");
-  const digest = reviewPacketSha256(packet);
+  const digest = reviewPacketSha256V2(packet);
   validateSchema(marker, { base: packet.base, head: packet.head, packetSha256: digest });
   return { required, attested: true, base: packet.base, head: packet.head, packetSha256: digest };
 }

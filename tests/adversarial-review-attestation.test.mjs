@@ -27,8 +27,8 @@ async function repository() {
   git(cwd, "add", "tracked.txt"); git(cwd, "commit", "--quiet", "-m", "head");
   return { cwd, base, head: git(cwd, "rev-parse", "HEAD") };
 }
-function digest(cwd, base, head) {
-  const packet = execFileSync(process.execPath, [packetGenerator, "--base", base, "--head", head], { cwd, encoding: "utf8" });
+function digest(cwd, base, head, version = 2) {
+  const packet = execFileSync(process.execPath, [packetGenerator, "--version", String(version), "--base", base, "--head", head], { cwd, encoding: "utf8" });
   return createHash("sha256").update(packet, "utf8").digest("hex");
 }
 function marker({ base, head, packetSha256, outcome = "clean" }) {
@@ -92,6 +92,16 @@ test("solo maintainer attestation accepts a privacy-safe clean marker on the exa
     const result = invoke(fixture.cwd, input);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /attestation validated/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("historical v2 attestation remains bound to frozen v2 bytes", async () => {
+  const fixture = await repository();
+  try {
+    const v3Digest = digest(fixture.cwd, fixture.base, fixture.head, 3);
+    const result = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body: marker({ ...fixture, packetSha256: v3Digest }) });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /packet digest/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 

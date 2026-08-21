@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,7 +9,22 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const generator = join(root, "scripts", "generate-review-packet.mjs");
-const { generateReviewPacket, safeChangedPath, serializeReviewPacket } = await import(pathToFileURL(generator).href);
+const {
+  generateReviewPacketV2,
+  generateReviewPacketV3,
+  reconstructV3Hunk,
+  safeChangedPath,
+  serializeReviewPacketV2,
+  serializeReviewPacketV3,
+} = await import(pathToFileURL(generator).href);
+const packetValidator = join(root, "scripts", "validate-review-packet.mjs");
+const {
+  assertValidReviewPacketSchema,
+  scopedReviewPacketV3Schema,
+  validateReviewPacket,
+  validateReviewPacketAgainstGit,
+  validateReviewPacketStructure,
+} = await import(pathToFileURL(packetValidator).href);
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -34,11 +49,22 @@ async function repository() {
 }
 
 function invoke(cwd, ...args) {
-  return execFileSync(process.execPath, [generator, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync(process.execPath, [generator, "--version", "2", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+function invokeV3(cwd, ...args) {
+  return execFileSync(process.execPath, [generator, "--version", "3", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
 function invokeWithEnvironment(cwd, environment, ...args) {
   return execFileSync(process.execPath, [generator, ...args], { cwd, env: environment, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+function validateCli(cwd, packet, ...args) {
+  return spawnSync(process.execPath, [packetValidator, ...args], { cwd, input: packet, encoding: "utf8" });
+}
+function refreshLineDigest(line) {
+  const value = line.segments.join("");
+  line.byteLength = Buffer.byteLength(value, "utf8");
+  line.sha256 = createHash("sha256").update(Buffer.from(value, "utf8")).digest("hex");
 }
 
 async function committedRange(cwd, files) {
@@ -108,7 +134,7 @@ test("review packet is deterministic, bounded, stdout-only, and contains complet
     assert.doesNotMatch(first, /untracked-secret|must never appear/);
     assert.ok(packet.patches.every((patch) => packet.changedFiles.some((file) => file.path === patch.path)));
     assert.ok(packet.patches.every((patch) => patch.hunks.length <= 64 && patch.hunks.every((hunk) => Buffer.byteLength(hunk) <= 64 * 1024)));
-    assert.equal(Buffer.byteLength(first, "utf8"), Buffer.byteLength(serializeReviewPacket(packet), "utf8"));
+    assert.equal(Buffer.byteLength(first, "utf8"), Buffer.byteLength(serializeReviewPacketV2(packet), "utf8"));
     assert.equal(packet.incomplete, false);
     assert.deepEqual(packet.omittedHunks, []);
     assert.deepEqual(packet.byteTruncatedHunks, []);
@@ -124,7 +150,7 @@ test("review packet applies no-replace-objects to every Git invocation and disab
     const commands = [];
     const previous = process.cwd();
     process.chdir(fixture.cwd);
-    try { await generateReviewPacket({ base: fixture.base, head: fixture.head }, { onGitCommand: (args) => commands.push(args) }); } finally { process.chdir(previous); }
+    try { await generateReviewPacketV2({ base: fixture.base, head: fixture.head }, { onGitCommand: (args) => commands.push(args) }); } finally { process.chdir(previous); }
     assert.ok(commands.length > 0);
     assert.ok(commands.every((args) => args.includes("--no-replace-objects")));
     assert.ok(commands.every((args) => args.includes("--no-pager") && args.includes("trace2.eventTarget=") && args.includes("trace2.normalTarget=") && args.includes("trace2.perfTarget=") && args.includes("core.hooksPath=/dev/null")));
@@ -347,7 +373,7 @@ test("review packet rejects the removed filesystem-output contract", async () =>
   try {
     assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", fixture.head, "--output", ".review/packet.json"), /review-packet: expected supported option/);
     const previous = process.cwd(); process.chdir(fixture.cwd);
-    try { await assert.rejects(generateReviewPacket({ base: fixture.base, head: fixture.head, output: ".review/packet.json" }), /filesystem output is unsupported/); } finally { process.chdir(previous); }
+    try { await assert.rejects(generateReviewPacketV3({ base: fixture.base, head: fixture.head, output: ".review/packet.json" }), /filesystem output is unsupported/); } finally { process.chdir(previous); }
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
@@ -381,6 +407,152 @@ test("review packet enforces file and validation-payload bounds", async () => {
     assert.throws(() => invoke(fixture.cwd, "--base", fixture.head, "--head", git(fixture.cwd, "rev-parse", "HEAD")), /changed-file list exceeds bounds/);
     assert.throws(() => invoke(fixture.cwd, "--base", fixture.base, "--head", fixture.head, "--validation", "x".repeat(4097)), /validation is missing, unsafe, or exceeds its bound/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 packet is the default and keeps a representative multiline hunk line-readable", async () => {
+  const fixture = await repository();
+  try {
+    const source = Array.from({ length: 500 }, (_, index) => `export const readable${index} = "${"x".repeat(95)}";`).join("\n") + "\n";
+    const range = await committedRange(fixture.cwd, {
+      base: { "baseline.txt": "base\n" },
+      head: { "baseline.txt": "base\n", "line-readable.mjs": source },
+    });
+    const output = execFileSync(process.execPath, [generator, "--base", range.base, "--head", range.head], { cwd: fixture.cwd, encoding: "utf8" });
+    const packet = JSON.parse(output);
+    assert.equal(packet.format, "pi-sampler.scoped-review-packet.v3");
+    const result = validateReviewPacketStructure(output);
+    assert.equal(result.ok, true, result.errors?.join("; "));
+    const hunk = packet.patches.find(({ path }) => path === "line-readable.mjs").hunks[0];
+    assert.ok(Buffer.byteLength(reconstructV3Hunk(hunk), "utf8") > 55 * 1024);
+    assert.ok(hunk.logicalLines.every((line) => line.segments.length <= 64));
+    assert.ok(Math.max(...output.trimEnd().split("\n").map((line) => Buffer.byteLength(line, "utf8"))) <= 4 * 1024);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 validation requires trusted Git binding or digest and rejects forged ranges", async () => {
+  const fixture = await repository();
+  try {
+    const output = invokeV3(fixture.cwd, "--base", fixture.base, "--head", fixture.head);
+    const gitBound = validateCli(fixture.cwd, output, "--base", fixture.base, "--head", fixture.head);
+    assert.equal(gitBound.status, 0, gitBound.stderr);
+    const digest = createHash("sha256").update(output, "utf8").digest("hex");
+    const digestBound = validateCli(fixture.cwd, output, "--digest", digest);
+    assert.equal(digestBound.status, 0, digestBound.stderr);
+    assert.equal(validateReviewPacket(JSON.parse(output)).ok, false, "unbound structural validation must not be acceptance");
+
+    const nonexistent = validateCli(fixture.cwd, output, "--base", "0".repeat(40), "--head", fixture.head);
+    assert.notEqual(nonexistent.status, 0, "nonexistent expected commits must fail");
+    const reversed = validateCli(fixture.cwd, output, "--base", fixture.head, "--head", fixture.base);
+    assert.notEqual(reversed.status, 0, "non-ancestor expected refs must fail");
+
+    const forged = JSON.parse(output);
+    const line = forged.patches.flatMap(({ hunks }) => hunks).flatMap(({ logicalLines }) => logicalLines).find((candidate) => candidate.segments.join("").startsWith("+"));
+    assert.ok(line, "fixture must contain an addition");
+    const characters = [...line.segments.join("")];
+    const characterIndex = characters.findIndex((character, index) => index > 0 && /[A-Za-z]/.test(character));
+    characters[characterIndex] = characters[characterIndex] === "x" ? "y" : "x";
+    line.segments = [characters.join("")];
+    refreshLineDigest(line);
+    const forgedResult = validateCli(fixture.cwd, serializeReviewPacketV3(forged), "--base", fixture.base, "--head", fixture.head);
+    assert.notEqual(forgedResult.status, 0, "recounted Git hunks must fail trusted validation");
+    assert.match(forgedResult.stderr, /Git-derived v3 packet/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 logical-line reconstruction is exact and hostile edits fail closed", async () => {
+  const fixture = await repository();
+  try {
+    const source = `${"🧪".repeat(11_000)}\n`;
+    const range = await committedRange(fixture.cwd, { base: { "before.txt": "before\n" }, head: { "before.txt": "before\n", "utf8.txt": source } });
+    const previous = process.cwd();
+    let packet;
+    try { process.chdir(fixture.cwd); packet = await generateReviewPacketV3({ base: range.base, head: range.head }); } finally { process.chdir(previous); }
+    const original = validateReviewPacketStructure(packet);
+    assert.equal(original.ok, true, original.errors?.join("; "));
+    const hunk = packet.patches.find(({ path }) => path === "utf8.txt").hunks[0];
+    assert.equal(reconstructV3Hunk(hunk).includes("🧪"), true);
+    assert.ok(hunk.logicalLines.some((line) => line.segments.length > 1), "multibyte line should use bounded transport segments");
+
+    const tamper = (change) => {
+      const candidate = structuredClone(packet);
+      change(candidate.patches[0].hunks[0].logicalLines[0]);
+      return validateReviewPacketStructure(candidate);
+    };
+    assert.equal(tamper((line) => { line.segments[0] = `-${line.segments[0].slice(1)}`; }).ok, false, "segment content tampering must fail");
+    assert.equal(tamper((line) => { line.byteLength += 1; }).ok, false, "byte length tampering must fail");
+    assert.equal(tamper((line) => { line.sha256 = "0".repeat(64); }).ok, false, "digest tampering must fail");
+    const serialized = serializeReviewPacketV3(packet);
+    assert.equal(validateReviewPacketStructure(serialized.replace('"format": "pi-sampler.scoped-review-packet.v3",', '"format": "pi-sampler.scoped-review-packet.v3",\n  "format": "pi-sampler.scoped-review-packet.v3",')).ok, false, "duplicate keys must fail");
+    assert.equal(validateReviewPacketStructure(`${serialized} `).ok, false, "noncanonical trailing bytes must fail");
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 segment boundaries are canonical even when alternate metadata is recomputed", async () => {
+  const fixture = await repository();
+  try {
+    const source = `${"🧪".repeat(11_000)}\n`;
+    const range = await committedRange(fixture.cwd, { base: { "before.txt": "before\n" }, head: { "before.txt": "before\n", "utf8.txt": source } });
+    const packet = await generateReviewPacketV3({ base: range.base, head: range.head }, { cwd: fixture.cwd });
+    const locate = (candidate) => candidate.patches.flatMap(({ hunks }) => hunks).flatMap(({ logicalLines }) => logicalLines).find((line) => line.segments.length > 2);
+    assert.ok(locate(packet), "fixture must contain a multi-segment logical line");
+    for (const kind of ["split", "merge", "reorder"]) {
+      const candidate = structuredClone(packet);
+      const line = locate(candidate);
+      if (kind === "split") {
+        const characters = [...line.segments[0]];
+        const cut = Math.max(1, Math.floor(characters.length / 2));
+        line.segments.splice(0, 1, characters.slice(0, cut).join(""), characters.slice(cut).join(""));
+      } else if (kind === "merge") {
+        line.segments.splice(0, 2, `${line.segments[0]}${line.segments[1]}`);
+      } else {
+        [line.segments[0], line.segments[1]] = [line.segments[1], line.segments[0]];
+      }
+      refreshLineDigest(line);
+      if (kind !== "reorder") assert.equal(validateReviewPacketStructure(candidate).ok, false, `${kind} segmentation must fail canonical validation`);
+      assert.equal((await validateReviewPacketAgainstGit(candidate, { base: range.base, head: range.head, cwd: fixture.cwd })).ok, false, `${kind} segmentation must fail trusted validation`);
+    }
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 rejects rename admission and segment bombs", async () => {
+  const fixture = await repository();
+  try {
+    await writeFile(join(fixture.cwd, "rename-source.txt"), "rename me\n");
+    git(fixture.cwd, "add", "rename-source.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "rename base");
+    const base = git(fixture.cwd, "rev-parse", "HEAD");
+    git(fixture.cwd, "mv", "rename-source.txt", "rename-target.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "rename head");
+    const head = git(fixture.cwd, "rev-parse", "HEAD");
+    assert.throws(() => invokeV3(fixture.cwd, "--base", base, "--head", head), /renames|copies/);
+
+    await writeFile(join(fixture.cwd, "unchanged-copy-source.txt"), "unchanged copy source\n");
+    git(fixture.cwd, "add", "unchanged-copy-source.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "copy source");
+    const copyBase = git(fixture.cwd, "rev-parse", "HEAD");
+    await writeFile(join(fixture.cwd, "unchanged-copy-target.txt"), "unchanged copy source\n");
+    git(fixture.cwd, "add", "unchanged-copy-target.txt"); git(fixture.cwd, "commit", "--quiet", "-m", "copy target");
+    const copyHead = git(fixture.cwd, "rev-parse", "HEAD");
+    assert.throws(() => invokeV3(fixture.cwd, "--base", copyBase, "--head", copyHead), /renames|copies/, "unchanged-source copies must be rejected");
+
+    const candidate = {
+      format: "pi-sampler.scoped-review-packet.v3", base: "0".repeat(40), head: "1".repeat(40),
+      changedFiles: [{ path: "safe.txt", status: "A" }], diffStat: "", patches: [{ path: "safe.txt", hunks: [{ header: "@@ -0,0 +1,1 @@", logicalLines: [{ segments: Array.from({ length: 65 }, () => "+x"), byteLength: 130, sha256: "0".repeat(64) }] }] }],
+      incomplete: false, omittedHunks: [], byteTruncatedHunks: [], immutableMaterial: [],
+    };
+    assert.equal(validateReviewPacketStructure(candidate).ok, false);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 schema validation checks the complete contract", async () => {
+  const schema = scopedReviewPacketV3Schema();
+  assert.doesNotThrow(() => assertValidReviewPacketSchema(schema));
+  for (const fixture of [
+    {},
+    { $id: schema.$id, type: "object", additionalProperties: false },
+    (() => { const value = structuredClone(schema); delete value.$defs.logicalLine; return value; })(),
+    (() => { const value = structuredClone(schema); value.properties.changedFiles.maxItems = 1; return value; })(),
+    (() => { const value = structuredClone(schema); value.$defs.changedFile.properties.status.enum = ["A", "C", "D", "M"]; return value; })(),
+  ]) assert.throws(() => assertValidReviewPacketSchema(fixture), /full canonical contract/);
+  const command = spawnSync(process.execPath, [packetValidator, "--schema"], { cwd: root, encoding: "utf8" });
+  assert.equal(command.status, 0, command.stderr);
 });
 
 test("scoped reviewer template requires complete packet-generated hunk evidence", async () => {

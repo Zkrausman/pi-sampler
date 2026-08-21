@@ -2,9 +2,11 @@ import { validatePackageEntry } from "./package-lock-entry.mjs";
 import { PACKAGE_LOCK_LIMITS, packageName, plainObject, version } from "./package-lock-validation.mjs";
 
 const PACKAGE_LOCK_TOP_LEVEL_KEYS = Object.freeze(["lockfileVersion", "name", "packages", "requires", "version"]);
+export const OVERSIZED_PACKAGE_LOCKFILE_BYTES = 512 * 1024;
 
 /** Validate the only oversized endpoint exception without producing packet material. */
 export function validateOversizedPackageLockfile(content) {
+  if (typeof content !== "string" || Buffer.byteLength(content, "utf8") > OVERSIZED_PACKAGE_LOCKFILE_BYTES) throw new Error("package-lock.json exceeds its v3 endpoint admission bound");
   let lockfile;
   try { lockfile = JSON.parse(content); } catch { throw new Error("package-lock.json is not supported canonical npm lockfile JSON"); }
   if (!plainObject(lockfile) || Object.keys(lockfile).sort().join(",") !== PACKAGE_LOCK_TOP_LEVEL_KEYS.join(",")
