@@ -7,7 +7,20 @@
     "baseBranch": "main",
     "worktreeRoot": "../ai-workspaces",
     "branchPrefix": "zkrausman",
-    "suffixLength": 6
+    "suffixLength": 6,
+    "review": {
+      "workspaceRoot": "../ai-workspaces/review",
+      "quarantineRoot": "../ai-workspaces/review-quarantine",
+      "remotePolicy": "none",
+      "quarantineRetentionSeconds": 86400,
+      "limits": {
+        "maxWorkspaces": 16,
+        "maxWorkspaceBytes": 2147483648,
+        "maxQuarantineBytes": 2147483648,
+        "maxUntrackedEntries": 512,
+        "maxUntrackedBytes": 536870912
+      }
+    }
   },
   "verification": {
     "commands": [

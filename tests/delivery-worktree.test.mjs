@@ -53,6 +53,19 @@ async function fixture() {
       worktreeRoot: "../worktrees",
       branchPrefix: "automation",
       suffixLength: 6,
+      review: {
+        workspaceRoot: "../review-workspaces/review",
+        quarantineRoot: "../review-workspaces/quarantine",
+        remotePolicy: "none",
+        quarantineRetentionSeconds: 0,
+        limits: {
+          maxWorkspaces: 16,
+          maxWorkspaceBytes: 2 * 1024 * 1024 * 1024,
+          maxQuarantineBytes: 2 * 1024 * 1024 * 1024,
+          maxUntrackedEntries: 512,
+          maxUntrackedBytes: 512 * 1024 * 1024,
+        },
+      },
     },
     verification: { commands: [{ command: "npm", args: ["test"] }] },
     governance: {
