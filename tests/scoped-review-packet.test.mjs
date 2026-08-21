@@ -429,6 +429,16 @@ test("v3 packet is the default and keeps a representative multiline hunk line-re
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
+test("review packet rejects intermediate-length commit IDs", async () => {
+  const fixture = await repository();
+  try {
+    for (const length of [41, 63]) {
+      assert.throws(() => invokeV3(fixture.cwd, "--base", "a".repeat(length), "--head", fixture.head));
+      assert.throws(() => invokeV3(fixture.cwd, "--base", fixture.base, "--head", "b".repeat(length)));
+    }
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
 test("v3 validation requires trusted Git binding or digest and rejects forged ranges", async () => {
   const fixture = await repository();
   try {
