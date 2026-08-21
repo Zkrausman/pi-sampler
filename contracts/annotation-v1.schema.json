@@ -1,0 +1,290 @@
+{
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "type",
+    "target",
+    "author",
+    "createdAt",
+    "sensitivity",
+    "rationale",
+    "evidenceClass",
+    "revision",
+    "contentDigest"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "const": "https://pi-sampler.dev/contracts/annotation/v1"
+        },
+        "version": {
+          "type": "string",
+          "const": "1.0.0"
+        }
+      },
+      "additionalProperties": false
+    },
+    "id": {
+      "type": "string",
+      "title": "Annotation identity",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+    },
+    "type": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "helped"
+        },
+        {
+          "type": "string",
+          "const": "hurt"
+        },
+        {
+          "type": "string",
+          "const": "incorrect"
+        },
+        {
+          "type": "string",
+          "const": "important-context"
+        },
+        {
+          "type": "string",
+          "const": "caused-rework"
+        },
+        {
+          "type": "string",
+          "const": "repeat"
+        },
+        {
+          "type": "string",
+          "const": "avoid"
+        },
+        {
+          "type": "string",
+          "const": "value-assessment"
+        },
+        {
+          "type": "string",
+          "const": "freeform"
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "event"
+            },
+            {
+              "type": "string",
+              "const": "range"
+            },
+            {
+              "type": "string",
+              "const": "decision"
+            },
+            {
+              "type": "string",
+              "const": "artifact"
+            },
+            {
+              "type": "string",
+              "const": "outcome"
+            },
+            {
+              "type": "string",
+              "const": "retrospective_claim"
+            },
+            {
+              "type": "string",
+              "const": "lesson"
+            },
+            {
+              "type": "string",
+              "const": "experiment"
+            }
+          ]
+        },
+        "id": {
+          "type": "string",
+          "title": "Annotation target identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "author": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Human annotation author identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "human"
+        }
+      },
+      "additionalProperties": false
+    },
+    "createdAt": {
+      "type": "string",
+      "title": "Canonical UTC RFC 3339 timestamp",
+      "format": "date-time"
+    },
+    "sensitivity": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "public"
+        },
+        {
+          "type": "string",
+          "const": "internal"
+        },
+        {
+          "type": "string",
+          "const": "confidential"
+        },
+        {
+          "type": "string",
+          "const": "restricted"
+        }
+      ]
+    },
+    "rationale": {
+      "type": "string",
+      "title": "Annotation rationale",
+      "minLength": 1,
+      "maxLength": 16384
+    },
+    "evidenceClass": {
+      "type": "string",
+      "const": "human_annotation"
+    },
+    "revision": {
+      "type": "object",
+      "required": [
+        "id",
+        "number"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Annotation revision identity",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "title": "Parent annotation revision identity",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parentDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "title": "Lowercase SHA-256 digest",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "contentDigest": {
+      "type": "string",
+      "title": "Lowercase SHA-256 digest",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "content": {
+      "type": "string",
+      "title": "Annotation content",
+      "minLength": 1,
+      "maxLength": 32768
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "string",
+          "title": "Annotation scalar value",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "tombstone": {
+      "type": "boolean"
+    },
+    "tombstoneReason": {
+      "type": "string",
+      "title": "Tombstone reason",
+      "minLength": 1,
+      "maxLength": 16384
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-sampler.dev/contracts/annotation/v1",
+  "title": "Portable human Annotation v1",
+  "additionalProperties": false
+}
