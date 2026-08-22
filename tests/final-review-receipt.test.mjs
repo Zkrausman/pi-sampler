@@ -199,8 +199,14 @@ test("a v3 marker validates exact packet bytes and rejects a v2 downgrade when r
     git("config", "user.name", "Final review test");
     await writeFile(join(cwd, "tracked.txt"), "base\n");
     await mkdir(join(cwd, "scripts"));
+    await mkdir(join(cwd, "profiles"));
+    await writeFile(join(cwd, "profiles", "pi-sampler.json"), `${JSON.stringify({
+      repository: { source: "Zkrausman/pi-sampler" },
+      delivery: { branchPrefix: "zkrausman" },
+      workItem: { idPattern: "^AIDEV-[0-9]+$" },
+    })}\n`);
     await writeFile(join(cwd, "scripts", "validate-adversarial-review-attestation.mjs"), "export const legacyTrustedValidator = true;\n");
-    git("add", "tracked.txt", "scripts/validate-adversarial-review-attestation.mjs"); git("commit", "--quiet", "-m", "base");
+    git("add", "tracked.txt", "profiles/pi-sampler.json", "scripts/validate-adversarial-review-attestation.mjs"); git("commit", "--quiet", "-m", "base");
     await writeFile(join(cwd, "scripts", "validate-adversarial-review-attestation.mjs"), `export const TRUSTED_V3_ATTESTATION_ACTIVATION = ${JSON.stringify(TRUSTED_V3_ATTESTATION_ACTIVATION)};\n`);
     git("add", "scripts/validate-adversarial-review-attestation.mjs"); git("commit", "--quiet", "-m", "activate v3");
     const exactBase = git("rev-parse", "HEAD");

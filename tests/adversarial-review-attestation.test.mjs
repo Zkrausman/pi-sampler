@@ -27,7 +27,9 @@ async function repository() {
   git(cwd, "config", "user.name", "Attestation Test");
   await writeFile(join(cwd, "tracked.txt"), "base\n");
   await mkdir(join(cwd, "scripts"));
+  await mkdir(join(cwd, "profiles"));
   await mkdir(join(cwd, ".github"));
+  await copyFile(join(root, "profiles", "pi-sampler.json"), join(cwd, "profiles", "pi-sampler.json"));
   const legacyValidator = [
     'const MARKER_PREFIX = "pi-sampler-adversarial-review-attestation";',
     'const V2_TAG = `<!-- ${MARKER_PREFIX}:v2`;',
@@ -55,7 +57,7 @@ async function repository() {
   ].join("\n");
   await writeFile(join(cwd, "scripts", "validate-adversarial-review-attestation.mjs"), legacyValidator);
   await writeFile(join(cwd, ".github", "pull_request_template.md"), `${legacyTemplate}\n`);
-  git(cwd, "add", "tracked.txt", "scripts/validate-adversarial-review-attestation.mjs", ".github/pull_request_template.md"); git(cwd, "commit", "--quiet", "-m", "base");
+  git(cwd, "add", "tracked.txt", "profiles/pi-sampler.json", "scripts/validate-adversarial-review-attestation.mjs", ".github/pull_request_template.md"); git(cwd, "commit", "--quiet", "-m", "base");
   const base = git(cwd, "rev-parse", "HEAD");
   await writeFile(join(cwd, "tracked.txt"), "head\n");
   git(cwd, "add", "tracked.txt"); git(cwd, "commit", "--quiet", "-m", "head");
@@ -89,17 +91,29 @@ async function alternateProfileRepository() {
   }
   const profile = JSON.parse(await readFile(join(root, "profiles", "pi-sampler.json"), "utf8"));
   profile.repository.source = "Alternate/consumer-repository";
+  profile.delivery.branchPrefix = "alternate";
+  profile.workItem.idPattern = "^TASK-[0-9]+$";
   await writeFile(join(cwd, "profiles", "pi-sampler.json"), `${JSON.stringify(profile, null, 2)}\n`);
   await writeFile(join(cwd, "candidate.txt"), "base\n");
   git(cwd, "add", ".");
   git(cwd, "commit", "--quiet", "-m", "alternate trusted consumer base");
   const base = git(cwd, "rev-parse", "HEAD");
   profile.repository.source = "Candidate/forged-repository";
+  profile.delivery.branchPrefix = "candidate";
+  profile.workItem.idPattern = "^OTHER-[0-9]+$";
   await writeFile(join(cwd, "profiles", "pi-sampler.json"), `${JSON.stringify(profile, null, 2)}\n`);
   await writeFile(join(cwd, "candidate.txt"), "head\n");
   git(cwd, "add", ".");
   git(cwd, "commit", "--quiet", "-m", "candidate profile drift");
-  return { cwd, base, head: git(cwd, "rev-parse", "HEAD"), trustedRepository: "Alternate/consumer-repository", candidateRepository: "Candidate/forged-repository" };
+  return {
+    cwd,
+    base,
+    head: git(cwd, "rev-parse", "HEAD"),
+    trustedRepository: "Alternate/consumer-repository",
+    candidateRepository: "Candidate/forged-repository",
+    trustedBranch: "alternate/task-159-implement-8bba52",
+    candidateBranch: "candidate/other-159-implement-8bba52",
+  };
 }
 function digest(cwd, base, head, version = 2) {
   const packet = execFileSync(process.execPath, [packetGenerator, "--version", String(version), "--base", base, "--head", head], { cwd, encoding: "utf8" });
@@ -133,6 +147,7 @@ async function fakeGithub(record) {
     directory,
     env: { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH ?? ""}`, FAKE_GH_RECORD: recordPath, ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}) },
     async update(nextRecord) { await writeFile(recordPath, JSON.stringify(nextRecord)); },
+    async record() { return JSON.parse(await readFile(recordPath, "utf8")); },
   };
 }
 function invoke(cwd, { base, head, branch, body }, extraEnvironment = {}) {
@@ -200,60 +215,80 @@ test("pre-push marker validation uses bounded argv and fail-closed PR lookup", a
   assert.match(hook, /parts\.length !== 4/);
   assert.match(hook, /remoteDeletion/);
   assert.match(hook, /--receipt/);
-  assert.doesNotMatch(hook, /--repository|Zkrausman\/pi-sampler/);
+  assert.match(hook, /currentBranchRef/);
+  assert.doesNotMatch(hook, /TICKET_BRANCH|zkrausman\/aidev-|Zkrausman\/pi-sampler/);
+  assert.doesNotMatch(hook, /--repository|ADVERSARIAL_REVIEW_REPOSITORY/);
   assert.match(hook, /--pull-request/);
   assert.doesNotMatch(hook, /ADVERSARIAL_REVIEW_REQUIRE_V3|--require-v3/);
-  assert.match(validatorSource, /trustedBaseConsumerRepository/);
+  assert.match(validatorSource, /trustedBaseProfile/);
+  assert.match(validatorSource, /branchPrefix/);
+  assert.match(validatorSource, /workItemPattern/);
+  assert.doesNotMatch(validatorSource, /TICKET_BRANCH|zkrausman\/aidev-|Zkrausman\/pi-sampler/);
   assert.doesNotMatch(validatorSource, /--repository|ADVERSARIAL_REVIEW_REPOSITORY/);
 });
 
-test("the real pre-push path rejects a revoked same-head v3 receipt from attached or detached workspaces", async () => {
-  const hook = join(root, "scripts", "hooks", "pre-push.mjs");
-  const receiptPath = join(root, "artifacts", "final-review", "receipt.json");
-  let fakeGithubCommand;
-  const previousReceipt = await readFile(receiptPath).catch(() => null);
-  try {
-    const exactHead = git(root, "rev-parse", "HEAD");
-    // The ref line is the hook's authoritative candidate input, so this test
-    // remains valid when the managed review workspace has a detached HEAD.
-    const branch = ticketBranch;
-    const packetSha256 = digest(root, exactHead, exactHead, 3);
-    const clean = createFinalReviewReceipt({
-      repository: "Zkrausman/pi-sampler", pullRequest: "160", base: exactHead, head: exactHead,
-      packetSha256, acceptanceMatrixSha256: "a".repeat(64), verificationEvidenceSha256: "b".repeat(64),
-      reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
-    });
-    const marker = createFinalReviewAttestation(clean, {
-      repository: clean.repository, pullRequest: clean.pullRequest, base: exactHead, head: exactHead,
-      packetSha256, acceptanceMatrixSha256: clean.acceptanceMatrixSha256, verificationEvidenceSha256: clean.verificationEvidenceSha256,
-    });
-    await mkdir(join(root, "artifacts", "final-review"), { recursive: true });
-    await writeFile(receiptPath, `${JSON.stringify(clean)}\n`);
-    fakeGithubCommand = await fakeGithub({ number: 160, baseRefOid: exactHead, headRefName: branch, body: marker });
-    const input = `refs/heads/${branch} ${exactHead} refs/heads/main ${"0".repeat(40)}\n`;
-    const runHook = () => spawnSync(process.execPath, [hook], {
-      cwd: root, encoding: "utf8", input, env: fakeGithubCommand.env,
-    });
-    const accepted = runHook();
-    assert.equal(accepted.status, 0, accepted.stderr);
-    const revoked = revokeFinalReviewReceipt(clean, { reason: "same-head blocker", source: "terra-parent", recordedAt: "2026-08-22T00:01:00.000Z" });
-    await writeFile(receiptPath, `${JSON.stringify(revoked)}\n`);
-    const rejected = runHook();
-    assert.notEqual(rejected.status, 0, `${rejected.stdout}\n${rejected.stderr}`);
-    assert.match(`${rejected.stdout}\n${rejected.stderr}`, /pre-push.*validation failed|current clean|non-revoked receipt/);
-  } finally {
-    if (previousReceipt === null) await rm(receiptPath, { force: true });
-    else await writeFile(receiptPath, previousReceipt);
-    if (fakeGithubCommand) await rm(fakeGithubCommand.directory, { recursive: true, force: true });
-  }
-});
-
-test("pre-push binds receipt validation to the immutable trusted profile, not candidate profile bytes", async () => {
+test("the real pre-push attached-HEAD path accepts clean then rejects same-head revocation", async () => {
   const fixture = await alternateProfileRepository();
   const hook = join(root, "scripts", "hooks", "pre-push.mjs");
   const receiptPath = join(fixture.cwd, "artifacts", "final-review", "receipt.json");
   let fakeGithubCommand;
   try {
+    git(fixture.cwd, "checkout", "--quiet", "-b", fixture.trustedBranch);
+    const symbolicRef = spawnSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: fixture.cwd, encoding: "utf8" });
+    assert.equal(symbolicRef.status, 0, symbolicRef.stderr);
+    assert.equal(symbolicRef.stdout.trim(), fixture.trustedBranch);
+    assert.equal(git(fixture.cwd, "branch", "--show-current"), fixture.trustedBranch);
+
+    const exactHead = git(fixture.cwd, "rev-parse", "HEAD");
+    assert.equal(exactHead, fixture.head);
+    const packetSha256 = digest(fixture.cwd, fixture.base, exactHead, 3);
+    const clean = createFinalReviewReceipt({
+      repository: fixture.trustedRepository, pullRequest: "160", base: fixture.base, head: exactHead,
+      packetSha256, acceptanceMatrixSha256: "a".repeat(64), verificationEvidenceSha256: "b".repeat(64),
+      reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
+    });
+    const marker = createFinalReviewAttestation(clean, {
+      repository: clean.repository, pullRequest: clean.pullRequest, base: fixture.base, head: exactHead,
+      packetSha256, acceptanceMatrixSha256: clean.acceptanceMatrixSha256, verificationEvidenceSha256: clean.verificationEvidenceSha256,
+    });
+    const markerBytes = marker;
+    await mkdir(join(fixture.cwd, "artifacts", "final-review"), { recursive: true });
+    await writeFile(receiptPath, `${JSON.stringify(clean)}\n`);
+    fakeGithubCommand = await fakeGithub({ number: 160, baseRefOid: fixture.base, headRefName: fixture.trustedBranch, body: marker });
+    const runAttachedHook = () => spawnSync(process.execPath, [hook], {
+      cwd: fixture.cwd, encoding: "utf8", input: "", env: fakeGithubCommand.env,
+    });
+    const accepted = runAttachedHook();
+    assert.equal(accepted.status, 0, `${accepted.stdout}\n${accepted.stderr}`);
+
+    const revoked = revokeFinalReviewReceipt(clean, { reason: "same-head blocker", source: "terra-parent", recordedAt: "2026-08-22T00:01:00.000Z" });
+    assert.equal(revoked.base, clean.base);
+    assert.equal(revoked.head, clean.head);
+    const published = await fakeGithubCommand.record();
+    assert.equal(published.baseRefOid, clean.base);
+    assert.equal(published.headRefName, fixture.trustedBranch);
+    assert.equal(published.body, markerBytes);
+    await writeFile(receiptPath, `${JSON.stringify(revoked)}\n`);
+    const rejected = runAttachedHook();
+    assert.notEqual(rejected.status, 0, `${rejected.stdout}\n${rejected.stderr}`);
+    assert.match(`${rejected.stdout}\n${rejected.stderr}`, /pre-push.*validation failed|current clean|non-revoked receipt/);
+  } finally {
+    if (fakeGithubCommand) await rm(fakeGithubCommand.directory, { recursive: true, force: true });
+    await rm(fixture.cwd, { recursive: true, force: true });
+  }
+});
+
+test("detached four-field pre-push enforces alternate trusted policy despite candidate drift", async () => {
+  const fixture = await alternateProfileRepository();
+  const hook = join(root, "scripts", "hooks", "pre-push.mjs");
+  const receiptPath = join(fixture.cwd, "artifacts", "final-review", "receipt.json");
+  let fakeGithubCommand;
+  try {
+    git(fixture.cwd, "checkout", "--quiet", "--detach", fixture.head);
+    const symbolicRef = spawnSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: fixture.cwd, encoding: "utf8" });
+    assert.notEqual(symbolicRef.status, 0);
+    assert.equal(git(fixture.cwd, "branch", "--show-current"), "");
+
     const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head, 3);
     const review = (repository) => {
       const receipt = createFinalReviewReceipt({
@@ -266,18 +301,41 @@ test("pre-push binds receipt validation to the immutable trusted profile, not ca
         packetSha256, acceptanceMatrixSha256: receipt.acceptanceMatrixSha256, verificationEvidenceSha256: receipt.verificationEvidenceSha256,
       }) };
     };
+    const unmarked = invoke(fixture.cwd, {
+      base: fixture.base, head: fixture.head, branch: fixture.trustedBranch, body: "No review marker.",
+    }, {
+      ADVERSARIAL_REVIEW_BRANCH_PREFIX: fixture.candidateBranch.split("/", 1)[0],
+      ADVERSARIAL_REVIEW_WORK_ITEM_PATTERN: "^OTHER-[0-9]+$",
+      ADVERSARIAL_REVIEW_REMOTE_BRANCH: fixture.candidateBranch,
+    });
+    assert.notEqual(unmarked.status, 0, unmarked.stdout);
+    assert.match(unmarked.stderr, /v3 final-review attestation is required/);
+
     await mkdir(join(fixture.cwd, "artifacts", "final-review"), { recursive: true });
     const trusted = review(fixture.trustedRepository);
+    const markerBytes = trusted.marker;
     await writeFile(receiptPath, `${JSON.stringify(trusted.receipt)}\n`);
-    fakeGithubCommand = await fakeGithub({ number: 160, baseRefOid: fixture.base, headRefName: ticketBranch, body: trusted.marker });
-    const input = `refs/heads/${ticketBranch} ${fixture.head} refs/heads/main ${"0".repeat(40)}\n`;
+    fakeGithubCommand = await fakeGithub({ number: 160, baseRefOid: fixture.base, headRefName: fixture.trustedBranch, body: markerBytes });
+    const input = `refs/heads/${fixture.trustedBranch} ${fixture.head} refs/heads/${fixture.candidateBranch} ${"0".repeat(40)}\n`;
     const runHook = () => spawnSync(process.execPath, [hook], { cwd: fixture.cwd, encoding: "utf8", input, env: fakeGithubCommand.env });
     const accepted = runHook();
     assert.equal(accepted.status, 0, `${accepted.stdout}\n${accepted.stderr}`);
 
+    const revoked = revokeFinalReviewReceipt(trusted.receipt, { reason: "same-head blocker", source: "terra-parent", recordedAt: "2026-08-22T00:01:00.000Z" });
+    assert.equal(revoked.base, trusted.receipt.base);
+    assert.equal(revoked.head, trusted.receipt.head);
+    const published = await fakeGithubCommand.record();
+    assert.equal(published.baseRefOid, trusted.receipt.base);
+    assert.equal(published.headRefName, fixture.trustedBranch);
+    assert.equal(published.body, markerBytes);
+    await writeFile(receiptPath, `${JSON.stringify(revoked)}\n`);
+    const revokedResult = runHook();
+    assert.notEqual(revokedResult.status, 0, `${revokedResult.stdout}\n${revokedResult.stderr}`);
+    assert.match(`${revokedResult.stdout}\n${revokedResult.stderr}`, /pre-push.*validation failed|current clean|non-revoked receipt/);
+
     const candidate = review(fixture.candidateRepository);
     await writeFile(receiptPath, `${JSON.stringify(candidate.receipt)}\n`);
-    await fakeGithubCommand.update({ number: 160, baseRefOid: fixture.base, headRefName: ticketBranch, body: candidate.marker });
+    await fakeGithubCommand.update({ number: 160, baseRefOid: fixture.base, headRefName: fixture.trustedBranch, body: candidate.marker });
     const rejected = runHook();
     assert.notEqual(rejected.status, 0, `${rejected.stdout}\n${rejected.stderr}`);
     assert.match(`${rejected.stdout}\n${rejected.stderr}`, /repository|validation failed/);
@@ -458,7 +516,7 @@ test("adversarial review attestation fails closed for malformed, multiple, stale
       ["stale digest", markerV3({ ...fixture, packetSha256: "0".repeat(64) }), /packet digest/],
       ["stale base", markerV3({ ...fixture, base: "0".repeat(40), packetSha256 }), /trusted base validator|base or head does not match/],
       ["unresolved outcome", markerV3({ ...fixture, packetSha256, outcome: "blocker" }), /outcome must be clean/],
-      ["private body is not printed", "private-example $(do-not-execute)", /required for an AIDEV ticket branch/],
+      ["private body is not printed", "private-example $(do-not-execute)", /required for a trusted ticket branch/],
       ["oversized body", "x".repeat(24 * 1024 + 1), /body is missing, unsafe, or exceeds its bound/],
     ];
     for (const [name, body, expected] of cases) {

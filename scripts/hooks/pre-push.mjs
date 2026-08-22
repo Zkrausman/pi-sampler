@@ -10,7 +10,7 @@ import process from "node:process";
 const MAX_STDIN_BYTES = 64 * 1024;
 const MAX_GH_OUTPUT_BYTES = 64 * 1024;
 const MAX_BODY_BYTES = 24 * 1024;
-const TICKET_BRANCH = /^zkrausman\/aidev-[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_BRANCH_BYTES = 256;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const LOCAL_FINAL_REVIEW_RECEIPT = "artifacts/final-review/receipt.json";
 
@@ -28,7 +28,7 @@ function safeExec(file, args, options = {}) {
     env: options.env,
   });
 }
-function pushedTicketRefs() {
+function pushedRefs() {
   let stdin;
   try { stdin = fs.readFileSync(0); } catch { throw new Error("pre-push ref input could not be read"); }
   if (stdin.length > MAX_STDIN_BYTES) throw new Error("pre-push input exceeds its fixed bound");
@@ -45,15 +45,14 @@ function pushedTicketRefs() {
     const remoteDeletion = /^0{40}$|^0{64}$/.test(remoteSha);
     if (!localRef || !remoteRef.startsWith("refs/") || (!SHA.test(localSha) && !localDeletion) || (!SHA.test(remoteSha) && !remoteDeletion)) throw new Error("pre-push input contains an invalid ref or SHA");
     if (!localRef.startsWith("refs/heads/")) continue;
-    const branch = localRef.slice("refs/heads/".length);
-    if (!TICKET_BRANCH.test(branch)) continue;
+    const branch = bounded(localRef.slice("refs/heads/".length), "branch", MAX_BRANCH_BYTES);
     // A zero object is a branch deletion; it has no candidate to attest.
     if (localDeletion) continue;
     refs.push({ branch, head: localSha });
   }
   return refs;
 }
-function currentTicketRef() {
+function currentBranchRef() {
   let branch;
   try {
     branch = safeExec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { maxBuffer: 512 }).trim();
@@ -69,9 +68,8 @@ function currentTicketRef() {
   } catch {
     throw new Error("current Git HEAD could not be inspected");
   }
-  if (!TICKET_BRANCH.test(branch)) return [];
   if (!SHA.test(head)) throw new Error("current Git HEAD is not an exact commit SHA");
-  return [{ branch, head }];
+  return [{ branch: bounded(branch, "branch", MAX_BRANCH_BYTES), head }];
 }
 function explicitlyVerifiedNoPr(branch) {
   let text;
@@ -121,10 +119,10 @@ function validateMarker({ branch, head, base, body, pullRequest }) {
 }
 
 try {
-  const refs = pushedTicketRefs();
-  const candidates = refs.length ? refs : currentTicketRef();
+  const refs = pushedRefs();
+  const candidates = refs.length ? refs : currentBranchRef();
   for (const candidate of candidates) {
-    console.log(`[pre-push] Ticket branch detected (${candidate.branch}). Checking attestation...`);
+    console.log(`[pre-push] Checking attestation for branch (${candidate.branch})...`);
     const pr = prRecord(candidate.branch);
     if (!pr) {
       console.log("[pre-push] No PR found for this branch yet. Skipping attestation validation.");

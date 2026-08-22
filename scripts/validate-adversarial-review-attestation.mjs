@@ -17,7 +17,6 @@ const LIMITS = Object.freeze({
   argument: 4096, branch: 256, sha: 64, body: 24 * 1024, markerJson: 4096,
   modelId: 128, profileVersion: 64,
 });
-const TICKET_BRANCH = /^zkrausman\/aidev-[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const DIGEST = /^[0-9a-f]{64}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:+/\-]{0,127}$/;
@@ -27,7 +26,10 @@ export const TRUSTED_V3_ATTESTATION_ACTIVATION = "pi-sampler.adversarial-review-
 const TRUSTED_VALIDATOR_PATH = "scripts/validate-adversarial-review-attestation.mjs";
 const TRUSTED_PROFILE_PATH = "profiles/pi-sampler.json";
 const TRUSTED_PROFILE_MAX_BYTES = 128 * 1024;
+const TRUSTED_WORK_ITEM_PATTERN_MAX_BYTES = 1024;
 const REPOSITORY_SOURCE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const BRANCH_PREFIX = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const BRANCH_SUFFIX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TRUSTED_V3_ACTIVATION_LINE = `export const TRUSTED_V3_ATTESTATION_ACTIVATION = ${JSON.stringify(TRUSTED_V3_ATTESTATION_ACTIVATION)};`;
 const SAFE_ENVIRONMENT_NAMES = Object.freeze(process.platform === "win32"
   ? ["PATH", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA"]
@@ -129,7 +131,7 @@ function trustedBaseRequiresLegacyV2(source) {
   return trustedBaseUsesLegacyV2Marker(source)
     && /if\s*\(\s*!\s*marker\s*\)\s*\{[\s\S]{0,4096}?if\s*\(\s*required\s*\)\s*fail\s*\(/.test(source);
 }
-function trustedBaseConsumerRepository(base) {
+function trustedBaseProfile(base) {
   const exactBase = resolveExactCommit(base);
   let profileText;
   try {
@@ -144,14 +146,40 @@ function trustedBaseConsumerRepository(base) {
   try { profile = JSON.parse(profileText); } catch { fail("the exact trusted base consumer profile is not valid JSON"); }
   const repository = profile?.repository?.source;
   if (typeof repository !== "string" || !REPOSITORY_SOURCE.test(repository)) fail("the exact trusted base consumer profile has no valid repository source");
-  return repository;
+  const branchPrefix = profile?.delivery?.branchPrefix;
+  if (typeof branchPrefix !== "string" || !BRANCH_PREFIX.test(branchPrefix)) fail("the exact trusted base consumer profile has no valid branch prefix");
+  const workItemPatternSource = profile?.workItem?.idPattern;
+  if (typeof workItemPatternSource !== "string" || Buffer.byteLength(workItemPatternSource, "utf8") > TRUSTED_WORK_ITEM_PATTERN_MAX_BYTES || workItemPatternSource.includes("\0")) {
+    fail("the exact trusted base consumer profile has no valid work-item policy");
+  }
+  let workItemPattern;
+  try { workItemPattern = new RegExp(workItemPatternSource); } catch { fail("the exact trusted base consumer profile has no valid work-item policy"); }
+  return Object.freeze({ repository, branchPrefix, workItemPattern });
 }
+function trustedBaseConsumerRepository(profile) { return profile.repository; }
 function trustedBasePolicy(base) {
   const source = trustedBaseValidatorSource(base).replace(/\r\n/g, "\n");
+  const profile = trustedBaseProfile(base);
   return {
     v3: source.split("\n").some((line) => line.trim() === TRUSTED_V3_ACTIVATION_LINE),
     legacyV2Required: trustedBaseRequiresLegacyV2(source),
+    ...profile,
+    repository: trustedBaseConsumerRepository(profile),
   };
+}
+function trustedTicketBranch(branch, policy) {
+  if (!policy || typeof branch !== "string") return false;
+  const prefix = `${policy.branchPrefix}/`;
+  if (!branch.startsWith(prefix)) return false;
+  const suffix = branch.slice(prefix.length);
+  if (!BRANCH_SUFFIX.test(suffix)) return false;
+  const segments = suffix.split("-");
+  for (let end = 1; end < segments.length; end += 1) {
+    const workItem = segments.slice(0, end).join("-").toUpperCase();
+    policy.workItemPattern.lastIndex = 0;
+    if (policy.workItemPattern.test(workItem)) return true;
+  }
+  return false;
 }
 export function trustedBaseActivatesV3(base) { return trustedBasePolicy(base).v3; }
 function boundedString(value, label, maximum, { allowEmpty = false } = {}) {
@@ -190,7 +218,7 @@ function optionalInputValue(options, environment, key, environmentKey, maximum) 
   const value = options[key] ?? environment[environmentKey];
   return value === undefined ? undefined : boundedString(value, key, maximum);
 }
-export function isTicketBranch(branch) { return typeof branch === "string" && TICKET_BRANCH.test(branch); }
+export function isTicketBranch(branch, policy) { return trustedTicketBranch(branch, policy); }
 
 function parseStrictMarkerJson(text) {
   let index = 0;
@@ -297,7 +325,7 @@ function validateSchemaV3(attestation, { base, head, packetSha256 }) {
 }
 
 /** Validate the opaque local receipt against the exact public marker before push. */
-async function validateLocalFinalReviewMarker({ body, receiptPath, base, head, pullRequest }) {
+async function validateLocalFinalReviewMarker({ body, receiptPath, base, head, pullRequest, policy }) {
   if (!receiptPath) fail("a local final-review receipt is required to validate an activated v3 marker");
   let receipt;
   try {
@@ -308,7 +336,7 @@ async function validateLocalFinalReviewMarker({ body, receiptPath, base, head, p
   const result = validateFinalReviewAttestation(body, receipt, {
     base,
     head,
-    repository: trustedBaseConsumerRepository(base),
+    repository: policy.repository,
     ...(pullRequest === undefined ? {} : { pullRequest }),
   });
   if (!result.ok) fail(result.errors[0]);
@@ -328,10 +356,10 @@ export async function validateAdversarialReviewAttestation({ base, head, branch,
   const policy = trustedBasePolicy(base);
   const v3Active = policy.v3;
   const marker = parseMarkerJson(body);
-  const required = isTicketBranch(branch);
+  const required = isTicketBranch(branch, policy);
   if (!marker) {
-    if (required && v3Active) fail("a v3 final-review attestation is required for an AIDEV ticket branch");
-    if (required && policy.legacyV2Required) fail("a v2 adversarial-review attestation is required by the exact trusted base for an AIDEV ticket branch");
+    if (required && v3Active) fail("a v3 final-review attestation is required for a trusted ticket branch");
+    if (required && policy.legacyV2Required) fail("a v2 adversarial-review attestation is required by the exact trusted base for a trusted ticket branch");
     return { required, attested: false, finalReview: false, legacy: !v3Active, bootstrap: false, activation: v3Active ? "v3" : "legacy" };
   }
 
@@ -347,7 +375,7 @@ export async function validateAdversarialReviewAttestation({ base, head, branch,
   if (!v3Active) fail("a v3 final-review attestation is not accepted until the exact trusted base activates v3");
   // CI has only the opaque public digest; the local pre-push path supplies the
   // ignored receipt path and therefore also enforces revocation state.
-  if (receiptPath !== undefined) await validateLocalFinalReviewMarker({ body, receiptPath, base, head, pullRequest });
+  if (receiptPath !== undefined) await validateLocalFinalReviewMarker({ body, receiptPath, base, head, pullRequest, policy });
   const packet = await generateReviewPacketV3({ base, head });
   if (packet.base !== base || packet.head !== head) fail("base or head did not resolve exactly to the supplied commit SHA");
   const packetSha256 = reviewPacketSha256V3(packet);
