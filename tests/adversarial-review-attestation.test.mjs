@@ -32,6 +32,7 @@ async function repository() {
 }
 async function activatedRepository() {
   const fixture = await repository();
+  const legacyBase = fixture.base;
   const trustedValidator = `export const TRUSTED_V3_ATTESTATION_ACTIVATION = ${JSON.stringify(TRUSTED_V3_ATTESTATION_ACTIVATION)};\n`;
   await writeFile(join(fixture.cwd, "scripts", "validate-adversarial-review-attestation.mjs"), trustedValidator);
   git(fixture.cwd, "add", "scripts/validate-adversarial-review-attestation.mjs");
@@ -40,7 +41,7 @@ async function activatedRepository() {
   await writeFile(join(fixture.cwd, "tracked.txt"), "activated-head\n");
   git(fixture.cwd, "add", "tracked.txt");
   git(fixture.cwd, "commit", "--quiet", "-m", "activated head");
-  return { ...fixture, base, head: git(fixture.cwd, "rev-parse", "HEAD") };
+  return { ...fixture, legacyBase, base, head: git(fixture.cwd, "rev-parse", "HEAD") };
 }
 function digest(cwd, base, head, version = 2) {
   const packet = execFileSync(process.execPath, [packetGenerator, "--version", String(version), "--base", base, "--head", head], { cwd, encoding: "utf8" });
@@ -158,6 +159,32 @@ test("v2 remains legacy evidence and cannot satisfy the v3 final-review requirem
     const result = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /legacy packet-consistency evidence|v3 final-review gate/);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("trusted-base activation rejects tree, annotated-tag, ref, and short base inputs", async () => {
+  const fixture = await activatedRepository();
+  try {
+    git(fixture.cwd, "tag", "--annotate", "legacy-base-tag", "--message", "legacy base", fixture.legacyBase);
+    const tree = git(fixture.cwd, "rev-parse", `${fixture.legacyBase}^{tree}`);
+    const tagObject = git(fixture.cwd, "rev-parse", "refs/tags/legacy-base-tag^{tag}");
+    const invalidBases = [
+      ["tree object", tree, /exact commit object/],
+      ["annotated tag object", tagObject, /exact commit object/],
+      ["ref", "refs/tags/legacy-base-tag", /exact lowercase (?:commit SHA|40- or 64-character commit SHAs)/],
+      ["short SHA", fixture.legacyBase.slice(0, 12), /exact lowercase (?:commit SHA|40- or 64-character commit SHAs)/],
+    ];
+    for (const [name, base, expected] of invalidBases) {
+      const result = invoke(fixture.cwd, { ...fixture, base, branch: ticketBranch, body: "No review marker." });
+      assert.notEqual(result.status, 0, name);
+      assert.match(result.stderr, expected, name);
+    }
+    const valid = invoke(fixture.cwd, {
+      ...fixture,
+      branch: ticketBranch,
+      body: markerV3({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head, 3) }),
+    });
+    assert.equal(valid.status, 0, valid.stderr);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 

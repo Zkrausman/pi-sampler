@@ -55,9 +55,25 @@ function fixedGitEnvironment(source = process.env) {
   environment.GIT_TERMINAL_PROMPT = "0";
   return environment;
 }
-function trustedBaseValidatorSource(base) {
+function resolveExactCommit(base) {
+  if (!SHA.test(base)) fail("the supplied base must be an exact lowercase commit SHA");
   try {
-    return execFileSync("git", [...TRUSTED_GIT_OPTIONS, "cat-file", "blob", `${base}:${TRUSTED_VALIDATOR_PATH}`], {
+    const resolved = execFileSync("git", [...TRUSTED_GIT_OPTIONS, "rev-parse", "--verify", "--end-of-options", `${base}^{commit}`], {
+      cwd: process.cwd(), encoding: "utf8", shell: false, windowsHide: true, maxBuffer: 256, env: fixedGitEnvironment(),
+    }).trim();
+    const type = execFileSync("git", [...TRUSTED_GIT_OPTIONS, "cat-file", "-t", base], {
+      cwd: process.cwd(), encoding: "utf8", shell: false, windowsHide: true, maxBuffer: 256, env: fixedGitEnvironment(),
+    }).trim();
+    if (resolved !== base || type !== "commit") fail("the supplied base must be the exact commit object");
+    return base;
+  } catch {
+    fail("the supplied base must be the exact commit object");
+  }
+}
+function trustedBaseValidatorSource(base) {
+  const exactBase = resolveExactCommit(base);
+  try {
+    return execFileSync("git", [...TRUSTED_GIT_OPTIONS, "cat-file", "blob", `${exactBase}:${TRUSTED_VALIDATOR_PATH}`], {
       cwd: process.cwd(), encoding: "utf8", shell: false, windowsHide: true, maxBuffer: 128 * 1024, env: fixedGitEnvironment(),
     });
   } catch {
