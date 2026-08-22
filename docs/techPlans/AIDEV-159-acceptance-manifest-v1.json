@@ -3,7 +3,7 @@
   "ticket_id": "AIDEV-159",
   "repository": "Zkrausman/pi-sampler",
   "plan_path": "docs/techPlans/AIDEV-159-implementation-plan.md",
-  "plan_sha256": "2199dfbac16645a4c9db739c34b03b6681a5adb1851de7de0f4fe5d7fcdb5333",
+  "plan_sha256": "8fb13199568449e85e66eb35eb72e31e513c0cc8eef7168288d5831902e5ee92",
   "base_sha": "92b538cefd1d50d3d109f36cdbe14e7c747d51f2",
   "rows": [
     {"id": "A159-T01", "title": "Fresh final child input boundary", "acceptance_class": "ordinary", "requirement": "The one fresh final child receives only complete exact packet, acceptance matrix, verification evidence, and the versioned read-only review profile."},

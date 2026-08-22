@@ -39,6 +39,11 @@ three complete inputs:
 node scripts/final-review-receipt.mjs --receipt <local-receipt.json> --base <exact-base-sha> --head <exact-head-sha> --packet <packet-v3.json> --acceptance-matrix <matrix.json> --verification-evidence <verification.json> --emit-marker
 ```
 
+For an activated v3 base, the pre-push hook invokes the same authoritative
+receipt/marker validation path and requires the current ignored receipt at
+`artifacts/final-review/receipt.json`; a later revocation therefore rejects the
+push even when the public marker's base, head, and bytes are unchanged.
+
 The trusted `pull_request_target` job checks out and executes only the immutable PR base-branch validator, fetches the PR head as Git objects without checking it out, regenerates the v3 packet, and validates the minimal marker. CI can validate public digests and exact commit binding but cannot inspect the opaque local receipt or prove the claimed model execution. It fails for missing, malformed, multiple, stale, mismatched, downgraded, non-clean, or sensitive markers. The v2 marker remains frozen historical packet-consistency evidence and cannot satisfy the v3 final-review gate.
 
 **Bootstrap boundary:** the validator selects activation only by inspecting the exact trusted base's validator bytes; candidate workflow flags, environment variables, and CLI claims cannot select the rule. When that base does not contain the v3 activation declaration, the bootstrap PR uses only the trusted-base legacy behavior: no v3 receipt/marker is required, a v2 marker remains historical evidence, and a candidate-supplied v3 marker is rejected. Once v3 is present on the trusted base, every AIDEV ticket PR requires one exact, current v3 final-review marker; missing, malformed, stale, mismatched, downgraded, or sensitive evidence fails closed. A PR that first adds or changes this trusted validator/workflow therefore cannot enforce its own new v3 gate; activation begins only for later PRs whose trusted base contains the declaration.

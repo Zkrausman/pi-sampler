@@ -5,12 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  assertValidFinalReviewAttestation,
   createFinalReviewAttestation,
   createFinalReviewReceipt,
   finalReviewReceiptSha256,
   parseFinalReviewAttestation,
   resumeFinalReviewReceipt,
   revokeFinalReviewReceipt,
+  validateFinalReviewAttestation,
   validateFinalReviewReceipt,
 } from "../scripts/final-review-receipt.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -141,6 +143,23 @@ test("blocker output and later Terra findings revoke clean state even at unchang
   assert.equal(revoked.receiptSha256 === clean.receiptSha256, false);
   assert.equal(validateFinalReviewReceipt(revoked).ok, true);
   assert.equal(validateFinalReviewReceipt(revoked, { requireClean: true }).ok, false);
+  const cleanMarker = createFinalReviewAttestation(clean, {
+    repository: clean.repository, pullRequest: clean.pullRequest, base: clean.base, head: clean.head,
+    packetSha256: clean.packetSha256, acceptanceMatrixSha256: clean.acceptanceMatrixSha256,
+    verificationEvidenceSha256: clean.verificationEvidenceSha256,
+  });
+  assert.equal(validateFinalReviewAttestation(cleanMarker, clean, {
+    repository: clean.repository, pullRequest: clean.pullRequest, base: clean.base, head: clean.head,
+  }).ok, true);
+  const revokedMarkerValidation = validateFinalReviewAttestation(cleanMarker, revoked, {
+    repository: revoked.repository, pullRequest: revoked.pullRequest, base: revoked.base, head: revoked.head,
+  });
+  assert.equal(revokedMarkerValidation.ok, false);
+  assert.equal(validateFinalReviewReceipt(revoked, { attestation: cleanMarker }).ok, false);
+  assert.match(revokedMarkerValidation.errors[0], /current clean|non-revoked receipt/);
+  assert.throws(() => assertValidFinalReviewAttestation(cleanMarker, revoked, {
+    repository: revoked.repository, pullRequest: revoked.pullRequest, base: revoked.base, head: revoked.head,
+  }), /current clean|non-revoked receipt/);
   assert.throws(() => createFinalReviewAttestation(revoked, {
     repository: revoked.repository, pullRequest: revoked.pullRequest, base: revoked.base, head: revoked.head,
     packetSha256: revoked.packetSha256, acceptanceMatrixSha256: revoked.acceptanceMatrixSha256,

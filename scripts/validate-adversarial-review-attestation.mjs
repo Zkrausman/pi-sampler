@@ -9,6 +9,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { generateReviewPacketV2, generateReviewPacketV3, reviewPacketSha256V2, reviewPacketSha256V3 } from "./generate-review-packet.mjs";
+import { parseFinalReviewReceipt, readBoundedRegularFile, validateFinalReviewAttestation } from "./final-review-receipt.mjs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
@@ -80,10 +81,59 @@ function trustedBaseValidatorSource(base) {
     fail("the exact trusted base validator could not be inspected");
   }
 }
-export function trustedBaseActivatesV3(base) {
-  const source = trustedBaseValidatorSource(base).replace(/\r\n/g, "\n");
-  return source.split("\n").some((line) => line.trim() === TRUSTED_V3_ACTIVATION_LINE);
+function readTrustedStringExpression(source, start, substitutions = {}) {
+  const quote = source[start];
+  if (!['"', "'", "`"].includes(quote)) return null;
+  let value = "";
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === quote) return value;
+    if (character === "\\") {
+      const escaped = source[index + 1];
+      if (escaped === undefined) return null;
+      value += ({ b: "\\b", f: "\\f", n: "\\n", r: "\\r", t: "\\t", v: "\\v" }[escaped] ?? escaped);
+      index += 1;
+      continue;
+    }
+    if (quote === "`" && character === "$" && source[index + 1] === "{") {
+      const end = source.indexOf("}", index + 2);
+      if (end < 0) return null;
+      const expression = source.slice(index + 2, end).trim();
+      if (!Object.hasOwn(substitutions, expression) || typeof substitutions[expression] !== "string") return null;
+      value += substitutions[expression];
+      index = end;
+      continue;
+    }
+    if (quote !== "`" && (character === "\r" || character === "\n")) return null;
+    value += character;
+  }
+  return null;
 }
+function readTrustedStringConstant(source, name, substitutions = {}) {
+  const declaration = new RegExp(`(?:^|\\n)\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\s*=\\s*`, "g");
+  const match = declaration.exec(source);
+  return match ? readTrustedStringExpression(source, declaration.lastIndex, substitutions) : null;
+}
+function trustedBaseUsesLegacyV2Marker(source) {
+  const markerPrefix = readTrustedStringConstant(source, "MARKER_PREFIX");
+  if (markerPrefix !== null && markerPrefix !== MARKER_PREFIX) return false;
+  const substitutions = { MARKER_PREFIX: markerPrefix ?? MARKER_PREFIX };
+  const v2Tag = readTrustedStringConstant(source, "V2_TAG", substitutions);
+  const markerTag = readTrustedStringConstant(source, "MARKER_TAG", substitutions);
+  return v2Tag === V2_TAG || markerTag === V2_TAG;
+}
+function trustedBaseRequiresLegacyV2(source) {
+  return trustedBaseUsesLegacyV2Marker(source)
+    && /if\s*\(\s*!\s*marker\s*\)\s*\{[\s\S]{0,4096}?if\s*\(\s*required\s*\)\s*fail\s*\(/.test(source);
+}
+function trustedBasePolicy(base) {
+  const source = trustedBaseValidatorSource(base).replace(/\r\n/g, "\n");
+  return {
+    v3: source.split("\n").some((line) => line.trim() === TRUSTED_V3_ACTIVATION_LINE),
+    legacyV2Required: trustedBaseRequiresLegacyV2(source),
+  };
+}
+export function trustedBaseActivatesV3(base) { return trustedBasePolicy(base).v3; }
 function boundedString(value, label, maximum, { allowEmpty = false } = {}) {
   if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maximum || value.includes("\0") || (!allowEmpty && !value)) fail(`${label} is missing, unsafe, or exceeds its bound`);
   return value;
@@ -93,9 +143,10 @@ function exactDigest(value, label) {
   return value;
 }
 function singleOptionArguments(argv) {
-  if (argv.length > 8) fail("too many attestation validator arguments");
+  if (argv.length > 14) fail("too many attestation validator arguments");
   const names = new Map([
     ["--base", "base"], ["--head", "head"], ["--branch", "branch"], ["--body", "body"],
+    ["--receipt", "receiptPath"], ["--repository", "repository"], ["--pull-request", "pullRequest"],
   ]);
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -113,6 +164,11 @@ function inputValue(options, environment, key, environmentKey, maximum, allowEmp
   if (options[key] !== undefined && environment[environmentKey] !== undefined) fail(`${key} must be supplied by either CLI or environment, not both`);
   const value = options[key] ?? environment[environmentKey];
   return boundedString(value, key, maximum, { allowEmpty });
+}
+function optionalInputValue(options, environment, key, environmentKey, maximum) {
+  if (options[key] !== undefined && environment[environmentKey] !== undefined) fail(`${key} must be supplied by either CLI or environment, not both`);
+  const value = options[key] ?? environment[environmentKey];
+  return value === undefined ? undefined : boundedString(value, key, maximum);
 }
 export function isTicketBranch(branch) { return typeof branch === "string" && TICKET_BRANCH.test(branch); }
 
@@ -220,8 +276,26 @@ function validateSchemaV3(attestation, { base, head, packetSha256 }) {
   if (typeof attestation.reviewProfileVersion !== "string" || !PROFILE_VERSION.test(attestation.reviewProfileVersion) || Buffer.byteLength(attestation.reviewProfileVersion, "utf8") > LIMITS.profileVersion) fail("final-review profile version is missing or outside its bound");
 }
 
+/** Validate the opaque local receipt against the exact public marker before push. */
+async function validateLocalFinalReviewMarker({ body, receiptPath, base, head, repository, pullRequest }) {
+  if (!receiptPath) fail("a local final-review receipt is required to validate an activated v3 marker");
+  let receipt;
+  try {
+    receipt = parseFinalReviewReceipt((await readBoundedRegularFile(receiptPath)).toString("utf8"));
+  } catch {
+    fail("the local final-review receipt could not be read or parsed");
+  }
+  const result = validateFinalReviewAttestation(body, receipt, {
+    base,
+    head,
+    ...(repository === undefined ? {} : { repository }),
+    ...(pullRequest === undefined ? {} : { pullRequest }),
+  });
+  if (!result.ok) fail(result.errors[0]);
+}
+
 /** Validate a bounded PR body without emitting its contents. */
-export async function validateAdversarialReviewAttestation({ base, head, branch, body } = {}) {
+export async function validateAdversarialReviewAttestation({ base, head, branch, body, receiptPath, repository, pullRequest } = {}) {
   base = boundedString(base, "base", LIMITS.sha);
   head = boundedString(head, "head", LIMITS.sha);
   branch = boundedString(branch, "branch", LIMITS.branch);
@@ -231,12 +305,14 @@ export async function validateAdversarialReviewAttestation({ base, head, branch,
   // Activation is selected only by the exact trusted base's validator bytes.
   // Candidate workflow flags, environment variables, and CLI claims cannot
   // turn the v3 gate on or off.
-  const v3Active = trustedBaseActivatesV3(base);
+  const policy = trustedBasePolicy(base);
+  const v3Active = policy.v3;
   const marker = parseMarkerJson(body);
   const required = isTicketBranch(branch);
   if (!marker) {
     if (required && v3Active) fail("a v3 final-review attestation is required for an AIDEV ticket branch");
-    return { required, attested: false, finalReview: false, legacy: !v3Active, bootstrap: !v3Active, activation: v3Active ? "v3" : "legacy" };
+    if (required && policy.legacyV2Required) fail("a v2 adversarial-review attestation is required by the exact trusted base for an AIDEV ticket branch");
+    return { required, attested: false, finalReview: false, legacy: !v3Active, bootstrap: false, activation: v3Active ? "v3" : "legacy" };
   }
 
   if (marker.version === 2) {
@@ -249,6 +325,9 @@ export async function validateAdversarialReviewAttestation({ base, head, branch,
   }
 
   if (!v3Active) fail("a v3 final-review attestation is not accepted until the exact trusted base activates v3");
+  // CI has only the opaque public digest; the local pre-push path supplies the
+  // ignored receipt path and therefore also enforces revocation state.
+  if (receiptPath !== undefined) await validateLocalFinalReviewMarker({ body, receiptPath, base, head, repository, pullRequest });
   const packet = await generateReviewPacketV3({ base, head });
   if (packet.base !== base || packet.head !== head) fail("base or head did not resolve exactly to the supplied commit SHA");
   const packetSha256 = reviewPacketSha256V3(packet);
@@ -280,6 +359,9 @@ function cliInputs(argv = process.argv.slice(2), environment = process.env) {
     head: inputValue(options, environment, "head", "ADVERSARIAL_REVIEW_HEAD_SHA", LIMITS.sha),
     branch: inputValue(options, environment, "branch", "ADVERSARIAL_REVIEW_HEAD_REF", LIMITS.branch),
     body: inputValue(options, environment, "body", "ADVERSARIAL_REVIEW_PR_BODY", LIMITS.body, true),
+    receiptPath: optionalInputValue(options, environment, "receiptPath", "ADVERSARIAL_REVIEW_RECEIPT_PATH", LIMITS.argument),
+    repository: optionalInputValue(options, environment, "repository", "ADVERSARIAL_REVIEW_REPOSITORY", LIMITS.argument),
+    pullRequest: optionalInputValue(options, environment, "pullRequest", "ADVERSARIAL_REVIEW_PULL_REQUEST", LIMITS.argument),
   };
 }
 

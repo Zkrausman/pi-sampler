@@ -133,4 +133,11 @@ failure, malformed receipt, changed binding, or a third correction blocks.
 renders the only publishable artifact: the minimal v3 marker. Its canonical
 receipt digest binds the opaque local lineage/nonce and every complete pass,
 while the public marker exposes only exact base/head, packet/matrix/evidence
-digests, bounded model/profile caller claims, outcome, and receipt digest.
+digests, bounded model/profile caller claims, outcome, and receipt digest. The
+authoritative local path must also validate an existing marker against the
+current receipt with `validateFinalReviewAttestation`; this rejects an older
+same-base/head marker after the receipt is revoked. The pre-push hook invokes
+this authoritative path for the ignored
+`artifacts/final-review/receipt.json` before accepting an activated-v3 push. CI
+can validate the public receipt digest and packet bindings, but cannot observe
+opaque local revocation state.

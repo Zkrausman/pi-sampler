@@ -247,6 +247,22 @@ function validatePass(pass, expected, index) {
   return pass;
 }
 
+function assertMarkerMatchesReceipt(marker, receipt) {
+  const expected = {
+    base: receipt.base,
+    head: receipt.head,
+    packetSha256: receipt.packetSha256,
+    acceptanceMatrixSha256: receipt.acceptanceMatrixSha256,
+    verificationEvidenceSha256: receipt.verificationEvidenceSha256,
+    reviewerModelId: receipt.reviewerModelId,
+    reviewProfileVersion: receipt.reviewProfileVersion,
+    receiptSha256: receipt.receiptSha256,
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (marker[key] !== value) fail(`final-review attestation ${key} does not match the current non-revoked receipt`);
+  }
+}
+
 /** Validate structure, lifecycle invariants, digest, and optional exact inputs. */
 export function validateFinalReviewReceipt(receipt, options = {}) {
   const errors = [];
@@ -289,6 +305,12 @@ export function validateFinalReviewReceipt(receipt, options = {}) {
       if (receipt.outcome !== "blocked") fail("a revoked receipt cannot have a clean outcome");
     } else if (receipt.revocation.reason !== null || receipt.revocation.source !== null || receipt.revocation.recordedAt !== null) {
       fail("an active receipt cannot carry revocation details");
+    }
+    if (options.attestation !== undefined) {
+      const marker = parseFinalReviewAttestation(options.attestation);
+      if (!marker) fail("final-review attestation marker is missing");
+      if (receipt.revocation.revoked || receipt.outcome !== "clean" || latest.outcome !== "clean") fail("final-review attestation requires a current clean, non-revoked receipt");
+      assertMarkerMatchesReceipt(marker, receipt);
     }
     if (receipt.receiptSha256 !== finalReviewReceiptSha256(receipt)) fail("final-review receipt digest does not match its canonical binding");
     digest(receipt.receiptSha256, "receiptSha256");
@@ -439,10 +461,14 @@ export function createFinalReviewAttestation(receipt, options = {}) {
   if (Object.values(expected).some((value) => value === undefined)) fail("final-review marker rendering requires all exact frozen repository, PR, base/head, packet, acceptance-matrix, and verification-evidence bindings");
   const result = assertValidFinalReviewReceipt(receipt, { ...options, ...expected, requireClean: true });
   const marker = markerObject(result.receipt);
-  return `<!-- ${MARKER_PREFIX}:v3 ${JSON.stringify(marker)} -->`;
+  const rendered = `<!-- ${MARKER_PREFIX}:v3 ${JSON.stringify(marker)} -->`;
+  assertValidFinalReviewAttestation(rendered, result.receipt, { ...options, ...expected });
+  return rendered;
 }
 export const renderFinalReviewAttestation = createFinalReviewAttestation;
 export const finalReviewAttestationMarker = createFinalReviewAttestation;
+
+export function parseFinalReviewReceipt(text) { return parseStrictJson(text, "final-review receipt"); }
 
 export function parseFinalReviewAttestation(body) {
   boundedString(body, "body", 24 * 1024, undefined);
@@ -464,6 +490,32 @@ export function parseFinalReviewAttestation(body) {
   boundedString(marker.reviewerModelId, "marker.reviewerModelId", FINAL_REVIEW_RECEIPT_LIMITS.modelId, MODEL_ID);
   boundedString(marker.reviewProfileVersion, "marker.reviewProfileVersion", FINAL_REVIEW_RECEIPT_LIMITS.profileVersion, PROFILE_VERSION);
   return marker;
+}
+
+/**
+ * Validate a published marker against the current local receipt. CI can only
+ * validate public bindings; this local authoritative path also enforces that
+ * later revocation invalidates an earlier same-head marker.
+ */
+export function validateFinalReviewAttestation(body, receipt, options = {}) {
+  const errors = [];
+  try {
+    const marker = parseFinalReviewAttestation(body);
+    if (!marker) fail("final-review attestation marker is missing");
+    const current = validateFinalReviewReceipt(receipt, { ...options, requireClean: true, attestation: body });
+    if (!current.ok) fail(current.errors[0]);
+    return { ok: true, errors: [], marker, receipt: current.receipt, receiptSha256: current.receipt.receiptSha256 };
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : "final-review attestation validation failed");
+    return { ok: false, errors };
+  }
+}
+export const validateFinalReviewAttestationV1 = validateFinalReviewAttestation;
+
+export function assertValidFinalReviewAttestation(body, receipt, options = {}) {
+  const result = validateFinalReviewAttestation(body, receipt, options);
+  if (!result.ok) fail(result.errors[0]);
+  return result;
 }
 
 export async function readBoundedRegularFile(path, { maximum = FINAL_REVIEW_RECEIPT_LIMITS.inputBytes } = {}) {
@@ -517,7 +569,7 @@ async function main() {
       fail("--emit-marker requires exact --repository, --pull-request, --base, --head, --packet, --acceptance-matrix, and --verification-evidence inputs");
     }
     const bytes = await readBoundedRegularFile(options.receipt, { maximum: FINAL_REVIEW_RECEIPT_LIMITS.receiptBytes });
-    const receipt = parseStrictJson(bytes.toString("utf8"), "final-review receipt");
+    const receipt = parseFinalReviewReceipt(bytes.toString("utf8"));
     const expected = { repository: options.repository, pullRequest: options.pullRequest, base: options.base, head: options.head };
     if (options.packet) {
       expected.packetSha256 = (await assertValidReviewPacketAgainstGit(await readBoundedRegularFile(options.packet), { base: options.base, head: options.head })).packetSha256;
