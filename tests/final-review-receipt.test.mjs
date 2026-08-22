@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,6 +14,7 @@ import {
   validateFinalReviewReceipt,
 } from "../scripts/final-review-receipt.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
+import { TRUSTED_V3_ATTESTATION_ACTIVATION } from "../scripts/validate-adversarial-review-attestation.mjs";
 
 const base = "a".repeat(40);
 const head = "b".repeat(40);
@@ -178,7 +179,11 @@ test("a v3 marker validates exact packet bytes and rejects a v2 downgrade when r
     git("config", "user.email", "test@example.invalid");
     git("config", "user.name", "Final review test");
     await writeFile(join(cwd, "tracked.txt"), "base\n");
-    git("add", "tracked.txt"); git("commit", "--quiet", "-m", "base");
+    await mkdir(join(cwd, "scripts"));
+    await writeFile(join(cwd, "scripts", "validate-adversarial-review-attestation.mjs"), "export const legacyTrustedValidator = true;\n");
+    git("add", "tracked.txt", "scripts/validate-adversarial-review-attestation.mjs"); git("commit", "--quiet", "-m", "base");
+    await writeFile(join(cwd, "scripts", "validate-adversarial-review-attestation.mjs"), `export const TRUSTED_V3_ATTESTATION_ACTIVATION = ${JSON.stringify(TRUSTED_V3_ATTESTATION_ACTIVATION)};\n`);
+    git("add", "scripts/validate-adversarial-review-attestation.mjs"); git("commit", "--quiet", "-m", "activate v3");
     const exactBase = git("rev-parse", "HEAD");
     await writeFile(join(cwd, "tracked.txt"), "head\n");
     git("add", "tracked.txt"); git("commit", "--quiet", "-m", "head");
@@ -195,9 +200,9 @@ test("a v3 marker validates exact packet bytes and rejects a v2 downgrade when r
     const run = (body, extra = []) => spawnSync(process.execPath, [validator, "--base", exactBase, "--head", exactHead, "--branch", "zkrausman/aidev-159-final-gate", ...extra], {
       cwd, encoding: "utf8", input: undefined, env: { ...process.env, ADVERSARIAL_REVIEW_PR_BODY: body },
     });
-    assert.equal(run(marker, ["--require-v3"]).status, 0);
+    assert.equal(run(marker).status, 0);
     const v2 = marker.replace(":v3", ":v2").replace(/,"acceptanceMatrixSha256"[^}]+/, "");
-    assert.notEqual(run(v2, ["--require-v3"]).status, 0);
+    assert.notEqual(run(v2).status, 0);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

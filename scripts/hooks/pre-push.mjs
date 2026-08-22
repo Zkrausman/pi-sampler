@@ -111,7 +111,8 @@ function validateMarker({ branch, head, base, body }) {
   for (const key of ["ADVERSARIAL_REVIEW_BASE_SHA", "ADVERSARIAL_REVIEW_HEAD_SHA", "ADVERSARIAL_REVIEW_HEAD_REF", "ADVERSARIAL_REVIEW_PR_BODY"]) delete env[key];
   env.ADVERSARIAL_REVIEW_PR_BODY = body;
   const args = ["scripts/validate-adversarial-review-attestation.mjs", "--base", base, "--head", head, "--branch", branch];
-  if (process.env.ADVERSARIAL_REVIEW_REQUIRE_V3 === "true") args.push("--require-v3");
+  // Activation is selected only by the validator bytes at the exact trusted
+  // base; this hook must not provide a candidate-controlled override.
   safeExec(process.execPath, args, { env, stdio: "inherit" });
 }
 

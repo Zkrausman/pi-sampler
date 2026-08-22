@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const validator = join(root, "scripts", "validate-adversarial-review-attestation.mjs");
 const packetGenerator = join(root, "scripts", "generate-review-packet.mjs");
+const { TRUSTED_V3_ATTESTATION_ACTIVATION } = await import(pathToFileURL(validator).href);
 const ticketBranch = "zkrausman/aidev-109-make-adversarial-review-gate-solo-maintainer-compatible";
 
 function git(cwd, ...args) {
@@ -21,11 +22,25 @@ async function repository() {
   git(cwd, "config", "user.email", "test@example.invalid");
   git(cwd, "config", "user.name", "Attestation Test");
   await writeFile(join(cwd, "tracked.txt"), "base\n");
-  git(cwd, "add", "tracked.txt"); git(cwd, "commit", "--quiet", "-m", "base");
+  await mkdir(join(cwd, "scripts"));
+  await writeFile(join(cwd, "scripts", "validate-adversarial-review-attestation.mjs"), "export const legacyTrustedValidator = true;\n");
+  git(cwd, "add", "tracked.txt", "scripts/validate-adversarial-review-attestation.mjs"); git(cwd, "commit", "--quiet", "-m", "base");
   const base = git(cwd, "rev-parse", "HEAD");
   await writeFile(join(cwd, "tracked.txt"), "head\n");
   git(cwd, "add", "tracked.txt"); git(cwd, "commit", "--quiet", "-m", "head");
   return { cwd, base, head: git(cwd, "rev-parse", "HEAD") };
+}
+async function activatedRepository() {
+  const fixture = await repository();
+  const trustedValidator = `export const TRUSTED_V3_ATTESTATION_ACTIVATION = ${JSON.stringify(TRUSTED_V3_ATTESTATION_ACTIVATION)};\n`;
+  await writeFile(join(fixture.cwd, "scripts", "validate-adversarial-review-attestation.mjs"), trustedValidator);
+  git(fixture.cwd, "add", "scripts/validate-adversarial-review-attestation.mjs");
+  git(fixture.cwd, "commit", "--quiet", "-m", "activate v3 on trusted base");
+  const base = git(fixture.cwd, "rev-parse", "HEAD");
+  await writeFile(join(fixture.cwd, "tracked.txt"), "activated-head\n");
+  git(fixture.cwd, "add", "tracked.txt");
+  git(fixture.cwd, "commit", "--quiet", "-m", "activated head");
+  return { ...fixture, base, head: git(fixture.cwd, "rev-parse", "HEAD") };
 }
 function digest(cwd, base, head, version = 2) {
   const packet = execFileSync(process.execPath, [packetGenerator, "--version", String(version), "--base", base, "--head", head], { cwd, encoding: "utf8" });
@@ -37,12 +52,13 @@ function marker({ base, head, packetSha256, outcome = "clean" }) {
 function markerV3({ base, head, packetSha256, outcome = "clean", ...provenance }) {
   return `<!-- pi-sampler-adversarial-review-attestation:v3 ${JSON.stringify({ format: "pi-sampler.adversarial-review-attestation", version: 3, base, head, outcome, packetSha256, acceptanceMatrixSha256: provenance.acceptanceMatrixSha256 ?? "a".repeat(64), verificationEvidenceSha256: provenance.verificationEvidenceSha256 ?? "b".repeat(64), reviewerModelId: provenance.reviewerModelId ?? "openai/gpt-5.6", reviewProfileVersion: provenance.reviewProfileVersion ?? "terra-final-v1", receiptSha256: provenance.receiptSha256 ?? "c".repeat(64) })} -->`;
 }
-function invoke(cwd, { base, head, branch, body }) {
+function invoke(cwd, { base, head, branch, body }, extraEnvironment = {}) {
   return spawnSync(process.execPath, [validator], {
     cwd,
     encoding: "utf8",
     env: {
       ...process.env,
+      ...extraEnvironment,
       ADVERSARIAL_REVIEW_BASE_SHA: base,
       ADVERSARIAL_REVIEW_HEAD_SHA: head,
       ADVERSARIAL_REVIEW_HEAD_REF: branch,
@@ -84,6 +100,7 @@ test("adversarial review gate is isolated from ordinary validation and executes 
   assert.match(job, /git fetch --no-tags origin "\$ADVERSARIAL_REVIEW_HEAD_SHA"/);
   assert.match(job, /git cat-file -e "\$ADVERSARIAL_REVIEW_HEAD_SHA\^\{commit\}"/);
   assert.match(job, /node scripts\/validate-adversarial-review-attestation\.mjs/);
+  assert.doesNotMatch(job, /--require-v3|ADVERSARIAL_REVIEW_REQUIRE_V3/);
   assert.doesNotMatch(job, /\bgh api\b|reviews\?per_page|npm run validate:adversarial-review/);
 });
 
@@ -98,6 +115,7 @@ test("pre-push marker validation uses bounded argv and fail-closed PR lookup", a
   assert.match(hook, /current Git branch could not be inspected/);
   assert.match(hook, /parts\.length !== 4/);
   assert.match(hook, /remoteDeletion/);
+  assert.doesNotMatch(hook, /ADVERSARIAL_REVIEW_REQUIRE_V3|--require-v3/);
 });
 
 test("solo maintainer attestation accepts a privacy-safe clean marker on the exact packet", async () => {
@@ -122,7 +140,7 @@ test("historical v2 attestation remains bound to frozen v2 bytes", async () => {
 });
 
 test("v3 final-review attestation binds the complete v3 packet and bounded provenance", async () => {
-  const fixture = await repository();
+  const fixture = await activatedRepository();
   try {
     const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head, 3);
     const body = markerV3({ ...fixture, packetSha256 });
@@ -133,22 +151,18 @@ test("v3 final-review attestation binds the complete v3 packet and bounded prove
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
-test("v2 remains legacy evidence and cannot satisfy the v3 final-review requirement", async () => {
-  const fixture = await repository();
+test("v2 remains legacy evidence and cannot satisfy the v3 final-review requirement after trusted-base activation", async () => {
+  const fixture = await activatedRepository();
   try {
     const body = marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head) });
-    const result = spawnSync(process.execPath, [validator, "--require-v3"], {
-      cwd: fixture.cwd,
-      encoding: "utf8",
-      env: { ...process.env, ADVERSARIAL_REVIEW_BASE_SHA: fixture.base, ADVERSARIAL_REVIEW_HEAD_SHA: fixture.head, ADVERSARIAL_REVIEW_HEAD_REF: ticketBranch, ADVERSARIAL_REVIEW_PR_BODY: body },
-    });
+    const result = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /legacy packet-consistency evidence|v3 final-review gate/);
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
 test("v3 rejects extra provenance, stale digests, and non-clean outcomes", async () => {
-  const fixture = await repository();
+  const fixture = await activatedRepository();
   try {
     const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head, 3);
     const valid = markerV3({ ...fixture, packetSha256 });
@@ -167,30 +181,55 @@ test("v3 rejects extra provenance, stale digests, and non-clean outcomes", async
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
-test("adversarial review attestation permits no marker only for strict non-ticket branches", async () => {
-  const fixture = await repository();
+test("bootstrap uses trusted legacy behavior and post-activation requires v3", async () => {
+  const bootstrap = await repository();
+  const activated = await activatedRepository();
   try {
-    const nonTicket = invoke(fixture.cwd, { ...fixture, branch: "maintenance/update-ci", body: "No review marker." });
-    assert.equal(nonTicket.status, 0, nonTicket.stderr);
-    const ticket = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body: "No review marker." });
-    assert.notEqual(ticket.status, 0);
-    assert.match(ticket.stderr, /required for an AIDEV ticket branch/);
-    const nearMiss = invoke(fixture.cwd, { ...fixture, branch: "zkrausman/AIDEV-109-example", body: "" });
-    assert.equal(nearMiss.status, 0, nearMiss.stderr);
-  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+    const bootstrapTicket = invoke(bootstrap.cwd, { ...bootstrap, branch: ticketBranch, body: "No review marker." });
+    assert.equal(bootstrapTicket.status, 0, bootstrapTicket.stderr);
+    assert.match(bootstrapTicket.stdout, /No v3 final-review attestation required before trusted-base activation/);
+    const bootstrapV3 = invoke(bootstrap.cwd, { ...bootstrap, branch: ticketBranch, body: markerV3({ ...bootstrap, packetSha256: digest(bootstrap.cwd, bootstrap.base, bootstrap.head, 3) }) });
+    assert.notEqual(bootstrapV3.status, 0);
+    assert.match(bootstrapV3.stderr, /not accepted until the exact trusted base activates v3/);
+    const activatedTicket = invoke(activated.cwd, { ...activated, branch: ticketBranch, body: "No review marker." });
+    assert.notEqual(activatedTicket.status, 0);
+    assert.match(activatedTicket.stderr, /v3 final-review attestation is required/);
+    const activatedV2 = invoke(activated.cwd, { ...activated, branch: ticketBranch, body: marker({ ...activated, packetSha256: digest(activated.cwd, activated.base, activated.head) }) });
+    assert.notEqual(activatedV2.status, 0);
+    assert.match(activatedV2.stderr, /legacy packet-consistency evidence|v3 final-review gate/);
+  } finally {
+    await rm(bootstrap.cwd, { recursive: true, force: true });
+    await rm(activated.cwd, { recursive: true, force: true });
+  }
+});
+
+test("candidate flags and environment cannot select v3 activation", async () => {
+  const bootstrap = await repository();
+  const activated = await activatedRepository();
+  try {
+    const bootstrapResult = invoke(bootstrap.cwd, { ...bootstrap, branch: ticketBranch, body: "No review marker." }, { ADVERSARIAL_REVIEW_REQUIRE_V3: "true" });
+    assert.equal(bootstrapResult.status, 0, bootstrapResult.stderr);
+    const activatedResult = invoke(activated.cwd, { ...activated, branch: ticketBranch, body: "No review marker." }, { ADVERSARIAL_REVIEW_REQUIRE_V3: "false" });
+    assert.notEqual(activatedResult.status, 0);
+    assert.match(activatedResult.stderr, /v3 final-review attestation is required/);
+  } finally {
+    await rm(bootstrap.cwd, { recursive: true, force: true });
+    await rm(activated.cwd, { recursive: true, force: true });
+  }
 });
 
 test("adversarial review attestation fails closed for malformed, multiple, stale, non-clean, and sensitive markers", async () => {
-  const fixture = await repository();
+  const fixture = await activatedRepository();
   try {
-    const valid = validInput(fixture);
+    const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head, 3);
+    const valid = { ...fixture, branch: ticketBranch, body: markerV3({ ...fixture, packetSha256 }) };
     const cases = [
-      ["reviewer identity field", marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head) }).replace('"outcome"', '"reviewerRole":"private-reviewer","outcome"'), /unsupported or missing fields/],
-      ["malformed", "<!-- pi-sampler-adversarial-review-attestation:v2 not-json -->", /exactly once|invalid JSON/],
+      ["reviewer identity field", markerV3({ ...fixture, packetSha256 }).replace('"outcome"', '"reviewerRole":"private-reviewer","outcome"'), /unsupported or missing fields/],
+      ["malformed", "<!-- pi-sampler-adversarial-review-attestation:v3 not-json -->", /exactly once|invalid JSON/],
       ["multiple", `${valid.body}\n${valid.body}`, /exactly once/],
-      ["stale digest", marker({ ...fixture, packetSha256: "0".repeat(64) }), /packet digest/],
-      ["stale base", marker({ ...fixture, base: "0".repeat(40), packetSha256: digest(fixture.cwd, fixture.base, fixture.head) }), /base or head does not match/],
-      ["unresolved outcome", marker({ ...fixture, packetSha256: digest(fixture.cwd, fixture.base, fixture.head), outcome: "blocker" }), /outcome must be clean/],
+      ["stale digest", markerV3({ ...fixture, packetSha256: "0".repeat(64) }), /packet digest/],
+      ["stale base", markerV3({ ...fixture, base: "0".repeat(40), packetSha256 }), /trusted base validator|base or head does not match/],
+      ["unresolved outcome", markerV3({ ...fixture, packetSha256, outcome: "blocker" }), /outcome must be clean/],
       ["private body is not printed", "private-example $(do-not-execute)", /required for an AIDEV ticket branch/],
       ["oversized body", "x".repeat(24 * 1024 + 1), /body is missing, unsafe, or exceeds its bound/],
     ];

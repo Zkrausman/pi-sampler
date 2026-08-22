@@ -7,6 +7,7 @@
  * digests and a private receipt digest to exact base/head commits. The latter
  * digests are opaque to CI; the local receipt validator owns their meaning.
  */
+import { execFileSync } from "node:child_process";
 import { generateReviewPacketV2, generateReviewPacketV3, reviewPacketSha256V2, reviewPacketSha256V3 } from "./generate-review-packet.mjs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -21,6 +22,16 @@ const DIGEST = /^[0-9a-f]{64}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:+/\-]{0,127}$/;
 const PROFILE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._:+\-]{0,63}$/;
 const FORMAT = "pi-sampler.adversarial-review-attestation";
+export const TRUSTED_V3_ATTESTATION_ACTIVATION = "pi-sampler.adversarial-review-attestation:v3";
+const TRUSTED_VALIDATOR_PATH = "scripts/validate-adversarial-review-attestation.mjs";
+const TRUSTED_V3_ACTIVATION_LINE = `export const TRUSTED_V3_ATTESTATION_ACTIVATION = ${JSON.stringify(TRUSTED_V3_ATTESTATION_ACTIVATION)};`;
+const SAFE_ENVIRONMENT_NAMES = Object.freeze(process.platform === "win32"
+  ? ["PATH", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA"]
+  : ["PATH", "HOME", "TMPDIR", "TMP", "TEMP"]);
+const TRUSTED_GIT_OPTIONS = Object.freeze([
+  "--no-pager", "--no-replace-objects", "-c", "trace2.eventTarget=", "-c", "trace2.normalTarget=", "-c", "trace2.perfTarget=",
+  "-c", "color.ui=false", "-c", "core.hooksPath=/dev/null", "-c", "user.useConfigOnly=true",
+]);
 const MARKER_PREFIX = "pi-sampler-adversarial-review-attestation";
 const V2_TAG = `<!-- ${MARKER_PREFIX}:v2`;
 const V3_TAG = `<!-- ${MARKER_PREFIX}:v3`;
@@ -33,6 +44,30 @@ const EXPECTED_KEYS_V3 = [
 ];
 
 function fail(message) { throw new Error(message); }
+function fixedGitEnvironment(source = process.env) {
+  const environment = {};
+  for (const expectedName of SAFE_ENVIRONMENT_NAMES) {
+    const entry = Object.entries(source).find(([name]) => name.toLowerCase() === expectedName.toLowerCase());
+    if (entry && !/^git_/i.test(entry[0])) environment[entry[0]] = entry[1];
+  }
+  environment.GIT_CONFIG_NOSYSTEM = "1";
+  environment.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  environment.GIT_TERMINAL_PROMPT = "0";
+  return environment;
+}
+function trustedBaseValidatorSource(base) {
+  try {
+    return execFileSync("git", [...TRUSTED_GIT_OPTIONS, "cat-file", "blob", `${base}:${TRUSTED_VALIDATOR_PATH}`], {
+      cwd: process.cwd(), encoding: "utf8", shell: false, windowsHide: true, maxBuffer: 128 * 1024, env: fixedGitEnvironment(),
+    });
+  } catch {
+    fail("the exact trusted base validator could not be inspected");
+  }
+}
+export function trustedBaseActivatesV3(base) {
+  const source = trustedBaseValidatorSource(base).replace(/\r\n/g, "\n");
+  return source.split("\n").some((line) => line.trim() === TRUSTED_V3_ACTIVATION_LINE);
+}
 function boundedString(value, label, maximum, { allowEmpty = false } = {}) {
   if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maximum || value.includes("\0") || (!allowEmpty && !value)) fail(`${label} is missing, unsafe, or exceeds its bound`);
   return value;
@@ -42,22 +77,15 @@ function exactDigest(value, label) {
   return value;
 }
 function singleOptionArguments(argv) {
-  if (argv.length > 10) fail("too many attestation validator arguments");
+  if (argv.length > 8) fail("too many attestation validator arguments");
   const names = new Map([
     ["--base", "base"], ["--head", "head"], ["--branch", "branch"], ["--body", "body"],
-    ["--require-v3", "requireV3"], ["--require-final-review", "requireV3"],
   ]);
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const key = names.get(argument);
     if (!key || Object.hasOwn(options, key)) fail("expected each supported option at most once");
-    if (key === "requireV3") {
-      const next = argv[index + 1];
-      if (next === "true" || next === "false") { options[key] = next === "true"; index += 1; }
-      else options[key] = true;
-      continue;
-    }
     if (index + 1 >= argv.length) fail(`${argument} requires a value`);
     const value = argv[++index];
     const maximum = key === "body" ? LIMITS.body : key === "branch" ? LIMITS.branch : LIMITS.argument;
@@ -177,29 +205,34 @@ function validateSchemaV3(attestation, { base, head, packetSha256 }) {
 }
 
 /** Validate a bounded PR body without emitting its contents. */
-export async function validateAdversarialReviewAttestation({ base, head, branch, body, requireV3 = false } = {}) {
+export async function validateAdversarialReviewAttestation({ base, head, branch, body } = {}) {
   base = boundedString(base, "base", LIMITS.sha);
   head = boundedString(head, "head", LIMITS.sha);
   branch = boundedString(branch, "branch", LIMITS.branch);
   body = boundedString(body ?? "", "body", LIMITS.body, { allowEmpty: true });
   if (!SHA.test(base) || !SHA.test(head)) fail("base and head must be exact lowercase 40- or 64-character commit SHAs");
 
+  // Activation is selected only by the exact trusted base's validator bytes.
+  // Candidate workflow flags, environment variables, and CLI claims cannot
+  // turn the v3 gate on or off.
+  const v3Active = trustedBaseActivatesV3(base);
   const marker = parseMarkerJson(body);
   const required = isTicketBranch(branch);
   if (!marker) {
-    if (required) fail(requireV3 ? "a v3 final-review attestation is required for an AIDEV ticket branch" : "an adversarial-review attestation is required for an AIDEV ticket branch");
-    return { required: false, attested: false, finalReview: false, legacy: false };
+    if (required && v3Active) fail("a v3 final-review attestation is required for an AIDEV ticket branch");
+    return { required, attested: false, finalReview: false, legacy: !v3Active, bootstrap: !v3Active, activation: v3Active ? "v3" : "legacy" };
   }
 
   if (marker.version === 2) {
-    if (requireV3 && required) fail("a v2 marker is legacy packet-consistency evidence and cannot satisfy the v3 final-review gate");
+    if (v3Active && required) fail("a v2 marker is legacy packet-consistency evidence and cannot satisfy the v3 final-review gate");
     const packet = await generateReviewPacketV2({ base, head });
     if (packet.base !== base || packet.head !== head) fail("base or head did not resolve exactly to the supplied commit SHA");
     const packetSha256 = reviewPacketSha256V2(packet);
     validateSchemaV2(marker.value, { base: packet.base, head: packet.head, packetSha256 });
-    return { required, attested: true, finalReview: false, legacy: true, version: 2, base: packet.base, head: packet.head, packetSha256 };
+    return { required, attested: true, finalReview: false, legacy: true, bootstrap: !v3Active, activation: v3Active ? "v3" : "legacy", version: 2, base: packet.base, head: packet.head, packetSha256 };
   }
 
+  if (!v3Active) fail("a v3 final-review attestation is not accepted until the exact trusted base activates v3");
   const packet = await generateReviewPacketV3({ base, head });
   if (packet.base !== base || packet.head !== head) fail("base or head did not resolve exactly to the supplied commit SHA");
   const packetSha256 = reviewPacketSha256V3(packet);
@@ -208,6 +241,8 @@ export async function validateAdversarialReviewAttestation({ base, head, branch,
     required,
     attested: true,
     finalReview: true,
+    bootstrap: false,
+    activation: "v3",
     legacy: false,
     version: 3,
     base: packet.base,
@@ -224,22 +259,18 @@ export async function validateAdversarialReviewAttestation({ base, head, branch,
 
 function cliInputs(argv = process.argv.slice(2), environment = process.env) {
   const options = singleOptionArguments(argv);
-  const requested = options.requireV3;
-  const envRequired = environment.ADVERSARIAL_REVIEW_REQUIRE_V3;
-  if (envRequired !== undefined && !["true", "false", "1", "0"].includes(envRequired)) fail("ADVERSARIAL_REVIEW_REQUIRE_V3 must be true or false");
   return {
     base: inputValue(options, environment, "base", "ADVERSARIAL_REVIEW_BASE_SHA", LIMITS.sha),
     head: inputValue(options, environment, "head", "ADVERSARIAL_REVIEW_HEAD_SHA", LIMITS.sha),
     branch: inputValue(options, environment, "branch", "ADVERSARIAL_REVIEW_HEAD_REF", LIMITS.branch),
     body: inputValue(options, environment, "body", "ADVERSARIAL_REVIEW_PR_BODY", LIMITS.body, true),
-    requireV3: requested ?? (envRequired === "true" || envRequired === "1"),
   };
 }
 
 async function main() {
   try {
     const result = await validateAdversarialReviewAttestation(cliInputs());
-    console.log(result.finalReview ? "Final review attestation validated." : result.attested ? "Adversarial review attestation validated." : "No adversarial review attestation required for this non-ticket branch.");
+    console.log(result.finalReview ? "Final review attestation validated." : result.attested ? "Adversarial review attestation validated." : result.bootstrap ? "No v3 final-review attestation required before trusted-base activation." : "No adversarial review attestation required for this non-ticket branch.");
   } catch (error) {
     // Never echo the PR body or any local review content.
     console.error(`adversarial-review-attestation: ${error.message}`);
