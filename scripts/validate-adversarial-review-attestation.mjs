@@ -25,6 +25,9 @@ const PROFILE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._:+\-]{0,63}$/;
 const FORMAT = "pi-sampler.adversarial-review-attestation";
 export const TRUSTED_V3_ATTESTATION_ACTIVATION = "pi-sampler.adversarial-review-attestation:v3";
 const TRUSTED_VALIDATOR_PATH = "scripts/validate-adversarial-review-attestation.mjs";
+const TRUSTED_PROFILE_PATH = "profiles/pi-sampler.json";
+const TRUSTED_PROFILE_MAX_BYTES = 128 * 1024;
+const REPOSITORY_SOURCE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const TRUSTED_V3_ACTIVATION_LINE = `export const TRUSTED_V3_ATTESTATION_ACTIVATION = ${JSON.stringify(TRUSTED_V3_ATTESTATION_ACTIVATION)};`;
 const SAFE_ENVIRONMENT_NAMES = Object.freeze(process.platform === "win32"
   ? ["PATH", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA"]
@@ -126,6 +129,23 @@ function trustedBaseRequiresLegacyV2(source) {
   return trustedBaseUsesLegacyV2Marker(source)
     && /if\s*\(\s*!\s*marker\s*\)\s*\{[\s\S]{0,4096}?if\s*\(\s*required\s*\)\s*fail\s*\(/.test(source);
 }
+function trustedBaseConsumerRepository(base) {
+  const exactBase = resolveExactCommit(base);
+  let profileText;
+  try {
+    profileText = execFileSync("git", [...TRUSTED_GIT_OPTIONS, "cat-file", "blob", `${exactBase}:${TRUSTED_PROFILE_PATH}`], {
+      cwd: process.cwd(), encoding: "utf8", shell: false, windowsHide: true, maxBuffer: TRUSTED_PROFILE_MAX_BYTES, env: fixedGitEnvironment(),
+    });
+  } catch {
+    fail("the exact trusted base consumer profile could not be inspected");
+  }
+  if (Buffer.byteLength(profileText, "utf8") > TRUSTED_PROFILE_MAX_BYTES) fail("the exact trusted base consumer profile exceeds its bound");
+  let profile;
+  try { profile = JSON.parse(profileText); } catch { fail("the exact trusted base consumer profile is not valid JSON"); }
+  const repository = profile?.repository?.source;
+  if (typeof repository !== "string" || !REPOSITORY_SOURCE.test(repository)) fail("the exact trusted base consumer profile has no valid repository source");
+  return repository;
+}
 function trustedBasePolicy(base) {
   const source = trustedBaseValidatorSource(base).replace(/\r\n/g, "\n");
   return {
@@ -143,10 +163,10 @@ function exactDigest(value, label) {
   return value;
 }
 function singleOptionArguments(argv) {
-  if (argv.length > 14) fail("too many attestation validator arguments");
+  if (argv.length > 12) fail("too many attestation validator arguments");
   const names = new Map([
     ["--base", "base"], ["--head", "head"], ["--branch", "branch"], ["--body", "body"],
-    ["--receipt", "receiptPath"], ["--repository", "repository"], ["--pull-request", "pullRequest"],
+    ["--receipt", "receiptPath"], ["--pull-request", "pullRequest"],
   ]);
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -277,7 +297,7 @@ function validateSchemaV3(attestation, { base, head, packetSha256 }) {
 }
 
 /** Validate the opaque local receipt against the exact public marker before push. */
-async function validateLocalFinalReviewMarker({ body, receiptPath, base, head, repository, pullRequest }) {
+async function validateLocalFinalReviewMarker({ body, receiptPath, base, head, pullRequest }) {
   if (!receiptPath) fail("a local final-review receipt is required to validate an activated v3 marker");
   let receipt;
   try {
@@ -288,14 +308,14 @@ async function validateLocalFinalReviewMarker({ body, receiptPath, base, head, r
   const result = validateFinalReviewAttestation(body, receipt, {
     base,
     head,
-    ...(repository === undefined ? {} : { repository }),
+    repository: trustedBaseConsumerRepository(base),
     ...(pullRequest === undefined ? {} : { pullRequest }),
   });
   if (!result.ok) fail(result.errors[0]);
 }
 
 /** Validate a bounded PR body without emitting its contents. */
-export async function validateAdversarialReviewAttestation({ base, head, branch, body, receiptPath, repository, pullRequest } = {}) {
+export async function validateAdversarialReviewAttestation({ base, head, branch, body, receiptPath, pullRequest } = {}) {
   base = boundedString(base, "base", LIMITS.sha);
   head = boundedString(head, "head", LIMITS.sha);
   branch = boundedString(branch, "branch", LIMITS.branch);
@@ -327,7 +347,7 @@ export async function validateAdversarialReviewAttestation({ base, head, branch,
   if (!v3Active) fail("a v3 final-review attestation is not accepted until the exact trusted base activates v3");
   // CI has only the opaque public digest; the local pre-push path supplies the
   // ignored receipt path and therefore also enforces revocation state.
-  if (receiptPath !== undefined) await validateLocalFinalReviewMarker({ body, receiptPath, base, head, repository, pullRequest });
+  if (receiptPath !== undefined) await validateLocalFinalReviewMarker({ body, receiptPath, base, head, pullRequest });
   const packet = await generateReviewPacketV3({ base, head });
   if (packet.base !== base || packet.head !== head) fail("base or head did not resolve exactly to the supplied commit SHA");
   const packetSha256 = reviewPacketSha256V3(packet);
@@ -360,7 +380,6 @@ function cliInputs(argv = process.argv.slice(2), environment = process.env) {
     branch: inputValue(options, environment, "branch", "ADVERSARIAL_REVIEW_HEAD_REF", LIMITS.branch),
     body: inputValue(options, environment, "body", "ADVERSARIAL_REVIEW_PR_BODY", LIMITS.body, true),
     receiptPath: optionalInputValue(options, environment, "receiptPath", "ADVERSARIAL_REVIEW_RECEIPT_PATH", LIMITS.argument),
-    repository: optionalInputValue(options, environment, "repository", "ADVERSARIAL_REVIEW_REPOSITORY", LIMITS.argument),
     pullRequest: optionalInputValue(options, environment, "pullRequest", "ADVERSARIAL_REVIEW_PULL_REQUEST", LIMITS.argument),
   };
 }

@@ -74,6 +74,33 @@ async function activatedRepository() {
   git(fixture.cwd, "commit", "--quiet", "-m", "activated head");
   return { ...fixture, legacyBase, base, head: git(fixture.cwd, "rev-parse", "HEAD") };
 }
+async function alternateProfileRepository() {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-adversarial-alternate-profile-"));
+  git(cwd, "init", "--quiet");
+  git(cwd, "config", "user.email", "test@example.invalid");
+  git(cwd, "config", "user.name", "Attestation Test");
+  await mkdir(join(cwd, "scripts"));
+  await mkdir(join(cwd, "profiles"));
+  for (const file of [
+    "validate-adversarial-review-attestation.mjs", "generate-review-packet.mjs", "final-review-receipt.mjs", "validate-review-packet.mjs",
+    "package-lock-admission.mjs", "package-lock-entry.mjs", "package-lock-validation.mjs",
+  ]) {
+    await copyFile(join(root, "scripts", file), join(cwd, "scripts", file));
+  }
+  const profile = JSON.parse(await readFile(join(root, "profiles", "pi-sampler.json"), "utf8"));
+  profile.repository.source = "Alternate/consumer-repository";
+  await writeFile(join(cwd, "profiles", "pi-sampler.json"), `${JSON.stringify(profile, null, 2)}\n`);
+  await writeFile(join(cwd, "candidate.txt"), "base\n");
+  git(cwd, "add", ".");
+  git(cwd, "commit", "--quiet", "-m", "alternate trusted consumer base");
+  const base = git(cwd, "rev-parse", "HEAD");
+  profile.repository.source = "Candidate/forged-repository";
+  await writeFile(join(cwd, "profiles", "pi-sampler.json"), `${JSON.stringify(profile, null, 2)}\n`);
+  await writeFile(join(cwd, "candidate.txt"), "head\n");
+  git(cwd, "add", ".");
+  git(cwd, "commit", "--quiet", "-m", "candidate profile drift");
+  return { cwd, base, head: git(cwd, "rev-parse", "HEAD"), trustedRepository: "Alternate/consumer-repository", candidateRepository: "Candidate/forged-repository" };
+}
 function digest(cwd, base, head, version = 2) {
   const packet = execFileSync(process.execPath, [packetGenerator, "--version", String(version), "--base", base, "--head", head], { cwd, encoding: "utf8" });
   return createHash("sha256").update(packet, "utf8").digest("hex");
@@ -87,6 +114,26 @@ function markerV3({ base, head, packetSha256, outcome = "clean", ...provenance }
 function templateWithMarker(template, replacement) {
   assert.match(template, V2_TEMPLATE_MARKER);
   return template.replace(V2_TEMPLATE_MARKER, replacement);
+}
+async function fakeGithub(record) {
+  const directory = await mkdtemp(join(tmpdir(), "pi-adversarial-fake-gh-"));
+  const recordPath = join(directory, "record.json");
+  await writeFile(recordPath, JSON.stringify(record));
+  let nodeOptions;
+  if (process.platform === "win32") {
+    const preload = join(directory, "fake-gh-preload.cjs");
+    await writeFile(preload, String.raw`const fs = require("node:fs"); const arg = process.argv[1] || ""; if (arg === "pr" || arg.endsWith("\\pr") || arg.endsWith("/pr")) { process.stdout.write(fs.readFileSync(process.env.FAKE_GH_RECORD, "utf8")); process.exit(0); }` + "\n");
+    await copyFile(process.execPath, join(directory, "gh.exe"));
+    nodeOptions = `--require=${preload}`;
+  } else {
+    await writeFile(join(directory, "gh"), "#!/usr/bin/env node\nimport { readFileSync } from \"node:fs\"; process.stdout.write(readFileSync(process.env.FAKE_GH_RECORD, \"utf8\"));\n");
+    await chmod(join(directory, "gh"), 0o755);
+  }
+  return {
+    directory,
+    env: { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH ?? ""}`, FAKE_GH_RECORD: recordPath, ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}) },
+    async update(nextRecord) { await writeFile(recordPath, JSON.stringify(nextRecord)); },
+  };
 }
 function invoke(cwd, { base, head, branch, body }, extraEnvironment = {}) {
   return spawnSync(process.execPath, [validator], {
@@ -142,6 +189,7 @@ test("adversarial review gate is isolated from ordinary validation and executes 
 
 test("pre-push marker validation uses bounded argv and fail-closed PR lookup", async () => {
   const hook = (await readFile(join(root, "scripts", "hooks", "pre-push.mjs"), "utf8")).replace(/\r\n/g, "\n");
+  const validatorSource = (await readFile(validator, "utf8")).replace(/\r\n/g, "\n");
   assert.match(hook, /execFileSync/);
   assert.doesNotMatch(hook, /execSync|`gh pr view|origin\\\/\\$\{base/);
   assert.match(hook, /gh.*pr.*list/);
@@ -152,15 +200,17 @@ test("pre-push marker validation uses bounded argv and fail-closed PR lookup", a
   assert.match(hook, /parts\.length !== 4/);
   assert.match(hook, /remoteDeletion/);
   assert.match(hook, /--receipt/);
-  assert.match(hook, /--repository/);
+  assert.doesNotMatch(hook, /--repository|Zkrausman\/pi-sampler/);
   assert.match(hook, /--pull-request/);
   assert.doesNotMatch(hook, /ADVERSARIAL_REVIEW_REQUIRE_V3|--require-v3/);
+  assert.match(validatorSource, /trustedBaseConsumerRepository/);
+  assert.doesNotMatch(validatorSource, /--repository|ADVERSARIAL_REVIEW_REPOSITORY/);
 });
 
 test("the real pre-push path rejects a revoked same-head v3 receipt from attached or detached workspaces", async () => {
   const hook = join(root, "scripts", "hooks", "pre-push.mjs");
   const receiptPath = join(root, "artifacts", "final-review", "receipt.json");
-  const fakeGh = await mkdtemp(join(tmpdir(), "pi-adversarial-fake-gh-"));
+  let fakeGithubCommand;
   const previousReceipt = await readFile(receiptPath).catch(() => null);
   try {
     const exactHead = git(root, "rev-parse", "HEAD");
@@ -179,22 +229,10 @@ test("the real pre-push path rejects a revoked same-head v3 receipt from attache
     });
     await mkdir(join(root, "artifacts", "final-review"), { recursive: true });
     await writeFile(receiptPath, `${JSON.stringify(clean)}\n`);
-    const recordPath = join(fakeGh, "record.json");
-    await writeFile(recordPath, JSON.stringify({ number: 160, baseRefOid: exactHead, headRefName: branch, body: marker }));
-    let nodeOptions;
-    if (process.platform === "win32") {
-      const preload = join(fakeGh, "fake-gh-preload.cjs");
-      await writeFile(preload, String.raw`const fs = require("node:fs"); const arg = process.argv[1] || ""; if (arg === "pr" || arg.endsWith("\\pr") || arg.endsWith("/pr")) { process.stdout.write(fs.readFileSync(process.env.FAKE_GH_RECORD, "utf8")); process.exit(0); }` + "\n");
-      await copyFile(process.execPath, join(fakeGh, "gh.exe"));
-      nodeOptions = `--require=${preload}`;
-    } else {
-      await writeFile(join(fakeGh, "gh"), "#!/usr/bin/env node\nimport { readFileSync } from \"node:fs\"; process.stdout.write(readFileSync(process.env.FAKE_GH_RECORD, \"utf8\"));\n");
-      await chmod(join(fakeGh, "gh"), 0o755);
-    }
+    fakeGithubCommand = await fakeGithub({ number: 160, baseRefOid: exactHead, headRefName: branch, body: marker });
     const input = `refs/heads/${branch} ${exactHead} refs/heads/main ${"0".repeat(40)}\n`;
     const runHook = () => spawnSync(process.execPath, [hook], {
-      cwd: root, encoding: "utf8", input,
-      env: { ...process.env, PATH: `${fakeGh}${delimiter}${process.env.PATH ?? ""}`, FAKE_GH_RECORD: recordPath, ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}) },
+      cwd: root, encoding: "utf8", input, env: fakeGithubCommand.env,
     });
     const accepted = runHook();
     assert.equal(accepted.status, 0, accepted.stderr);
@@ -206,7 +244,46 @@ test("the real pre-push path rejects a revoked same-head v3 receipt from attache
   } finally {
     if (previousReceipt === null) await rm(receiptPath, { force: true });
     else await writeFile(receiptPath, previousReceipt);
-    await rm(fakeGh, { recursive: true, force: true });
+    if (fakeGithubCommand) await rm(fakeGithubCommand.directory, { recursive: true, force: true });
+  }
+});
+
+test("pre-push binds receipt validation to the immutable trusted profile, not candidate profile bytes", async () => {
+  const fixture = await alternateProfileRepository();
+  const hook = join(root, "scripts", "hooks", "pre-push.mjs");
+  const receiptPath = join(fixture.cwd, "artifacts", "final-review", "receipt.json");
+  let fakeGithubCommand;
+  try {
+    const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head, 3);
+    const review = (repository) => {
+      const receipt = createFinalReviewReceipt({
+        repository, pullRequest: "160", base: fixture.base, head: fixture.head,
+        packetSha256, acceptanceMatrixSha256: "a".repeat(64), verificationEvidenceSha256: "b".repeat(64),
+        reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
+      });
+      return { receipt, marker: createFinalReviewAttestation(receipt, {
+        repository, pullRequest: "160", base: fixture.base, head: fixture.head,
+        packetSha256, acceptanceMatrixSha256: receipt.acceptanceMatrixSha256, verificationEvidenceSha256: receipt.verificationEvidenceSha256,
+      }) };
+    };
+    await mkdir(join(fixture.cwd, "artifacts", "final-review"), { recursive: true });
+    const trusted = review(fixture.trustedRepository);
+    await writeFile(receiptPath, `${JSON.stringify(trusted.receipt)}\n`);
+    fakeGithubCommand = await fakeGithub({ number: 160, baseRefOid: fixture.base, headRefName: ticketBranch, body: trusted.marker });
+    const input = `refs/heads/${ticketBranch} ${fixture.head} refs/heads/main ${"0".repeat(40)}\n`;
+    const runHook = () => spawnSync(process.execPath, [hook], { cwd: fixture.cwd, encoding: "utf8", input, env: fakeGithubCommand.env });
+    const accepted = runHook();
+    assert.equal(accepted.status, 0, `${accepted.stdout}\n${accepted.stderr}`);
+
+    const candidate = review(fixture.candidateRepository);
+    await writeFile(receiptPath, `${JSON.stringify(candidate.receipt)}\n`);
+    await fakeGithubCommand.update({ number: 160, baseRefOid: fixture.base, headRefName: ticketBranch, body: candidate.marker });
+    const rejected = runHook();
+    assert.notEqual(rejected.status, 0, `${rejected.stdout}\n${rejected.stderr}`);
+    assert.match(`${rejected.stdout}\n${rejected.stderr}`, /repository|validation failed/);
+  } finally {
+    if (fakeGithubCommand) await rm(fakeGithubCommand.directory, { recursive: true, force: true });
+    await rm(fixture.cwd, { recursive: true, force: true });
   }
 });
 

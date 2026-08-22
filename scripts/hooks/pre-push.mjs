@@ -13,7 +13,6 @@ const MAX_BODY_BYTES = 24 * 1024;
 const TICKET_BRANCH = /^zkrausman\/aidev-[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const LOCAL_FINAL_REVIEW_RECEIPT = "artifacts/final-review/receipt.json";
-const REPOSITORY = "Zkrausman/pi-sampler";
 
 function bounded(value, label, maximum, { allowEmpty = false } = {}) {
   if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maximum || value.includes("\0") || (!allowEmpty && !value)) throw new Error(`${label} is missing or exceeds its bound`);
@@ -111,9 +110,11 @@ function prRecord(branch) {
 }
 function validateMarker({ branch, head, base, body, pullRequest }) {
   const env = { ...process.env };
-  for (const key of ["ADVERSARIAL_REVIEW_BASE_SHA", "ADVERSARIAL_REVIEW_HEAD_SHA", "ADVERSARIAL_REVIEW_HEAD_REF", "ADVERSARIAL_REVIEW_PR_BODY", "ADVERSARIAL_REVIEW_RECEIPT_PATH", "ADVERSARIAL_REVIEW_REPOSITORY", "ADVERSARIAL_REVIEW_PULL_REQUEST"]) delete env[key];
+  for (const key of ["ADVERSARIAL_REVIEW_BASE_SHA", "ADVERSARIAL_REVIEW_HEAD_SHA", "ADVERSARIAL_REVIEW_HEAD_REF", "ADVERSARIAL_REVIEW_PR_BODY", "ADVERSARIAL_REVIEW_RECEIPT_PATH", "ADVERSARIAL_REVIEW_PULL_REQUEST"]) delete env[key];
   env.ADVERSARIAL_REVIEW_PR_BODY = body;
-  const args = ["scripts/validate-adversarial-review-attestation.mjs", "--base", base, "--head", head, "--branch", branch, "--receipt", LOCAL_FINAL_REVIEW_RECEIPT, "--repository", REPOSITORY, "--pull-request", String(pullRequest)];
+  const args = ["scripts/validate-adversarial-review-attestation.mjs", "--base", base, "--head", head, "--branch", branch, "--receipt", LOCAL_FINAL_REVIEW_RECEIPT, "--pull-request", String(pullRequest)];
+  // The validator derives repository binding from the exact trusted-base
+  // profile; this hook supplies no repository identity.
   // Activation is selected only by the validator bytes at the exact trusted
   // base; this hook must not provide a candidate-controlled override.
   safeExec(process.execPath, args, { env, stdio: "inherit" });
