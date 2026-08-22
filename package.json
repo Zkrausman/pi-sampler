@@ -16,6 +16,7 @@
     "validate:changesets": "node scripts/validate-changesets.mjs",
     "validate:dco": "node scripts/validate-dco.mjs",
     "validate:adversarial-review": "node scripts/validate-adversarial-review-attestation.mjs",
+    "validate:final-review-receipt": "node scripts/final-review-receipt.mjs",
     "validate:review-packet": "node scripts/validate-review-packet.mjs",
     "validate:review-packet-schema": "node scripts/validate-review-packet.mjs --schema",
     "validate:delivery-schemas": "node scripts/validate-delivery-schemas.mjs",

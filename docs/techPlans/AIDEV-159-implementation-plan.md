@@ -9,6 +9,10 @@ The workflow remains two user-managed sessions. Terra owns iterative review and 
 
 Public model/profile fields are privacy-safe maintainer claims, not cryptographic model proof. Full lifecycle artifacts, prompts, findings, session/run IDs, usage, cost, and receipts remain local. No PR efficiency comment is generated.
 
+## Review Evidence Flow
+
+The exact trusted base selects the evidence flow before any marker is interpreted. If its validator contains the v3 activation declaration, planning guidance freezes a complete v3 packet, acceptance matrix, verification evidence, and current clean local receipt, then revalidates the rendered marker against that receipt before publication. A later receipt revocation invalidates an earlier marker even when base and head are unchanged. If v3 is absent, planning guidance preserves the exact trusted base's legacy behavior: when that base requires v2, the exact base/head receive one frozen v2 packet-consistency marker, and missing, malformed, stale, or unbound v2 evidence fails. V2 is bootstrap compatibility only and never satisfies the post-activation v3 gate.
+
 ## Expected File Changes
 *   `[NEW]` `scripts/final-review-receipt.mjs`: Validate local Pi-subagent lifecycle artifacts, correction count, exact frozen inputs, revocation, and canonical receipt digest.
 *   `[NEW]` `docs/final-review-receipt-v1.schema.json`: Strict local receipt schema and bounds.
@@ -22,15 +26,18 @@ Public model/profile fields are privacy-safe maintainer claims, not cryptographi
 *   `[MODIFY]` `CONTRIBUTING.md`: Document the two-session/final-child workflow and the marker's caller-claim limit.
 *   `[MODIFY]` `scripts/hooks/pre-push.mjs`: Validate marker consistency without granting push or merge authority.
 *   `[NEW]` `tests/final-review-receipt.test.mjs`: Lifecycle, rebinding, resume, revocation, loss, and bounds tests.
-*   `[MODIFY]` `tests/adversarial-review-attestation.test.mjs`: V3 schema, privacy, exact binding, downgrade, and bootstrap tests.
+*   `[MODIFY]` `tests/adversarial-review-attestation.test.mjs`: V3 schema, privacy, exact binding, downgrade, bootstrap-v2 enforcement, and exact-object tests.
+*   `[MODIFY]` `.agents/skills/create-implementation-plan/SKILL.md`: Generate post-activation v3 evidence guidance with bootstrap-only v2 compatibility and receipt revalidation.
+*   `[MODIFY]` `docs/techPlans/AIDEV-159-implementation-plan.md`: Record the trusted-base evidence-flow guidance and correction regressions.
+*   `[MODIFY]` `docs/techPlans/AIDEV-159-acceptance-manifest-v1.json`: Rebind the manifest to the updated plan digest.
 
 Minimal public marker v3 contains only format/version, base/head, clean outcome, packet-v3 digest, acceptance-matrix digest, verification-evidence digest, reviewer model ID, review-profile version, and opaque local-receipt digest. It excludes identity, sessions, runs, transcript, findings, prompts, paths, token/usage counts, latency, and cost.
 
 ## Step-by-Step Execution
 1.  **Phase 1: Bootstrap trusted validation**
     *   Step 1.1: Land marker-v3 schema parsing, privacy bounds, and trusted-base workflow support without making v3 the required gate for its own PR.
-    *   Step 1.2: Keep v2 accepted only as legacy packet-consistency evidence and prevent it from satisfying the new final-gate status.
-    *   Step 1.3: Activate the required v3 status only in a later PR whose base already contains the validator.
+    *   Step 1.2: Preserve the exact trusted base's legacy v2 enforcement during bootstrap; missing, malformed, stale, or unbound v2 evidence fails, while v2 remains packet-consistency evidence only.
+    *   Step 1.3: Activate the required v3 status only in a later PR whose base already contains the validator; v2 cannot satisfy the activated gate.
 2.  **Phase 2: Final-child lifecycle**
     *   Step 2.1: Terra freezes exact repository/PR/base/head, packet v3, acceptance matrix, and verification evidence after iterative review is provisionally clean.
     *   Step 2.2: Launch exactly one fresh Terra-model child with read-only tools and the versioned review profile.
@@ -43,7 +50,8 @@ Minimal public marker v3 contains only format/version, base/head, clean outcome,
 4.  **Phase 4: Render and validate the marker**
     *   Step 4.1: Render v3 only for a current clean local receipt whose every digest matches the frozen inputs.
     *   Step 4.2: CI regenerates packet v3 with trusted-base code and validates public digests/fields. It labels model/profile as maintainer-attested provenance, not external proof.
-    *   Step 4.3: Passing review evidence marks the PR review-ready only; the user must separately issue `Merge PR #N`.
+    *   Step 4.3: Revalidate every rendered v3 marker against the current non-revoked local receipt; a later same-head revocation invalidates the earlier marker.
+    *   Step 4.4: Passing review evidence marks the PR review-ready only; the user must separately issue `Merge PR #N`.
 5.  **Phase 5: Rollback**
     *   Step 5.1: Disable v3 issuance/status if necessary while preserving local receipt history and v2 compatibility. Never silently downgrade a v3-required PR to v2.
 
@@ -61,3 +69,6 @@ Minimal public marker v3 contains only format/version, base/head, clean outcome,
     *   [ ] `A159-T09` Existing v2 fixtures validate as legacy consistency only and cannot satisfy v3 final review.
     *   [ ] `A159-T10` Trusted workflow uses pinned actions, read-only permissions, trusted-base code, bounded environment data, redacted logs, and no candidate dependencies.
     *   [ ] `A159-T11` Bootstrap PR does not enforce its own new validator; activation succeeds only after the validator is on base.
+    *   [ ] Bootstrap regression: the exact legacy base rejects missing, malformed, stale, and unbound v2 evidence, while a valid immutable v2 marker passes.
+    *   [ ] Revocation regression: a marker rendered from a clean receipt fails authoritative local validation after that receipt is revoked at the same base/head.
+    *   [ ] Planning guidance regression: post-activation instructions produce complete v3 packet/matrix/evidence flow and retain v2 only for trusted-base bootstrap compatibility.

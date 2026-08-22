@@ -117,3 +117,27 @@ Shell redirection is the caller's responsibility after securing its target
 directory. The scoped reviewer is read-only, uses a fresh context, reports only
 blocker/high findings, and must not inspect mutable source, direct imports,
 untracked files, credentials, sessions, or unrelated governance material.
+
+## Final Terra review gate
+
+Terra retains iterative and remediation review continuity, then launches exactly
+one fresh final child with the complete v3 packet, acceptance matrix, and
+verification evidence for one exact base/head pair. The child is read-only and
+reports only blocker/high findings. A correction resumes that same child at
+most twice, but always supplies a newly frozen complete input set; delta-only
+review is not valid. A blocker/high finding or later Terra blocker revokes the
+local clean receipt even if HEAD is unchanged. Child loss, timeout, provider
+failure, malformed receipt, changed binding, or a third correction blocks.
+
+`scripts/final-review-receipt.mjs` validates the bounded local receipt and
+renders the only publishable artifact: the minimal v3 marker. Its canonical
+receipt digest binds the opaque local lineage/nonce and every complete pass,
+while the public marker exposes only exact base/head, packet/matrix/evidence
+digests, bounded model/profile caller claims, outcome, and receipt digest. The
+authoritative local path must also validate an existing marker against the
+current receipt with `validateFinalReviewAttestation`; this rejects an older
+same-base/head marker after the receipt is revoked. The pre-push hook invokes
+this authoritative path for the ignored
+`artifacts/final-review/receipt.json` before accepting an activated-v3 push. CI
+can validate the public receipt digest and packet bindings, but cannot observe
+opaque local revocation state.

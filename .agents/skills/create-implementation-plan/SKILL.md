@@ -60,20 +60,10 @@ As per the Global **Tech Planning Standard**, you must physically write the plan
     *   Apply the `Needs-Human` label if you hit an unresolvable roadblock or context limit.
 2. Use the `write_to_file` tool to save the plan to: `docs/techPlans/[TICKET-ID]-implementation-plan.md`
 3. Commit and push the file to a new branch, and open a PR. **CRITICAL:** You must sign-off your commits using the `-s` flag (e.g., `git commit -s -m "..."`) or the repository's DCO check will fail.
-4. **Adversarial Review Evidence:** Any branch matching a ticket pattern (e.g. `zkrausman/aidev-*`) strictly requires a JSON attestation marker in the PR body. You **must** generate it and append it to the PR body using the repository's generator utility (e.g. `node scripts/generate-review-packet.mjs` or a custom script wrapping its output). For example, write and run this temporary script:
-   ```javascript
-   import { generateReviewPacket, reviewPacketSha256 } from "./scripts/generate-review-packet.mjs";
-   import { execSync } from "child_process";
-   async function main() {
-     const head = execSync("git rev-parse HEAD").toString().trim();
-     const base = execSync("git merge-base origin/main HEAD").toString().trim();
-     const packet = await generateReviewPacket({ base, head });
-     const sha = reviewPacketSha256(packet);
-     console.log(`<!-- pi-sampler-adversarial-review-attestation:v2 {"base":"${packet.base}","format":"pi-sampler.adversarial-review-attestation","head":"${packet.head}","outcome":"clean","packetSha256":"${sha}","version":2} -->`);
-   }
-   main();
-   ```
-   Append the output to your PR body using the `gh` CLI or similar.
+4. **Adversarial Review Evidence and Version Selection:** For a branch matching a ticket pattern (for example, `zkrausman/aidev-*`), resolve the supplied base only as the exact immutable commit (`base^{commit}`) before selecting the evidence flow.
+   * **Post-activation:** When the exact trusted base contains the v3 activation declaration, generate the complete v3 packet, acceptance matrix, and verification evidence. Validate one current clean local receipt, revalidate any rendered marker against that receipt with `validateFinalReviewAttestation`, and publish only the minimal v3 marker. The pre-push hook invokes that authoritative path against `artifacts/final-review/receipt.json`; a revoked receipt invalidates an older marker even when base and head are unchanged.
+   * **Bootstrap:** When v3 is absent from the exact trusted base, preserve that base's legacy behavior. If it requires v2 evidence, generate the frozen v2 packet and exactly one v2 packet-consistency marker for the exact base/head; missing, malformed, stale, or unbound v2 evidence fails. V2 is historical bootstrap evidence only and must never satisfy the post-activation v3 gate. Do not publish a v3 marker during bootstrap.
+   * The generated plan must identify the selected trusted-base flow, complete v3 inputs, receipt revalidation, revocation handling, and the exact test cases for both bootstrap and post-activation states. Do not use a v2-only attestation example as the default planning guidance.
 
 The content of the file **must** use the rigid, copy-pasteable Markdown template below. Do not deviate from these headers.
 
@@ -90,6 +80,9 @@ The content of the file **must** use the rigid, copy-pasteable Markdown template
 *   `[NEW]` `path/to/new/file.go`: *Purpose of the new file.*
 *   `[MODIFY]` `path/to/existing/file.go`: *Brief description of the change.*
 *   `[DELETE]` `path/to/deprecated/file.go`: *Reason for deletion.*
+
+## Review Evidence Flow
+*State how the exact trusted base selects bootstrap legacy v2 versus post-activation v3 evidence, how complete packet/matrix/verification inputs are frozen, how the current receipt is revalidated before publication, and how revocation invalidates a same-head marker. Preserve v2 only as trusted-base bootstrap compatibility; v3 is the default after activation.*
 
 ## Step-by-Step Execution
 *Provide a granular, sequential list of actions required to implement the feature.*

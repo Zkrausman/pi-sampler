@@ -31,6 +31,26 @@ checks, prohibited paths, and domain policy.
   local identity only in a separately authorized disposable experiment; it is
   not part of candidate review.
 
+## Terra final-review continuity
+
+Terra is the persistent review parent. Terra keeps the early review and
+remediation findings, but may launch exactly one fresh-context final child only
+after the complete candidate is provisionally clean. The child receives the
+exact immutable base/head, complete v3 packet, acceptance matrix, verification
+evidence, and versioned read-only review profile; it does not receive a mutable
+checkout or any publication capability. It reports only blocker/high findings.
+
+A blocker/high result immediately invalidates the current clean receipt,
+including when HEAD is unchanged. Luna must fix and push, then Terra freezes a
+new complete packet, matrix, and evidence set and resumes the same child. A
+resume is a full-candidate review, never a delta review, and no more than two
+resumes are allowed. A child loss, timeout, provider failure, malformed local
+receipt, changed base/head, or third correction blocks the gate. A replacement
+child requires explicit user authorization and starts a new receipt lineage.
+The local receipt binds every pass to exact repository/PR/base/head and all
+three input digests. Only its minimal v3 marker may be published; sessions,
+runs, findings, prompts, paths, usage, cost, and raw evidence remain local.
+
 ## Review and cleanup
 
 - Inspect the complete diff and the declared scope.
