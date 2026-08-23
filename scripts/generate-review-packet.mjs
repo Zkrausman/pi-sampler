@@ -28,9 +28,11 @@ const LIMITS = Object.freeze({
 });
 export const REVIEW_PACKET_LIMITS = LIMITS;
 const SAFE_PATH_SEGMENT = /^[A-Za-z0-9.][A-Za-z0-9._@+,-]*$/;
-const SHA = /^[0-9a-f]{40,64}$/;
+const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const V2_FORMAT = "pi-sampler.scoped-review-packet.v2";
 const V3_FORMAT = "pi-sampler.scoped-review-packet.v3";
+export const REVIEW_PACKET_V2_FORMAT = V2_FORMAT;
+export const REVIEW_PACKET_V3_FORMAT = V3_FORMAT;
 
 function fail(message) { throw new Error(message); }
 function bounded(value, label, maximum) {

@@ -27,6 +27,20 @@ for (const skillUrl of skillUrls) {
   });
 }
 
+test("active implementation planning guidance selects post-activation v3 and bootstrap-only v2", async () => {
+  const skill = await readFile(skillUrls[0], "utf8");
+  const plan = await readFile(new URL("../docs/techPlans/AIDEV-159-implementation-plan.md", import.meta.url), "utf8");
+  assert.match(skill, /Post-activation.*v3 packet.*acceptance matrix.*verification evidence/s);
+  assert.match(skill, /validateFinalReviewAttestation/);
+  assert.match(skill, /Bootstrap.*v2.*packet-consistency marker/s);
+  assert.match(skill, /revoked receipt invalidates an older marker/s);
+  assert.match(skill, /pre-push hook invokes.*artifacts\/final-review\/receipt\.json/s);
+  assert.doesNotMatch(skill, /pi-sampler-adversarial-review-attestation:v2 .*version.*2/);
+  assert.match(plan, /^## Review Evidence Flow$/m);
+  assert.match(plan, /missing, malformed, stale, or unbound v2 evidence fails/);
+  assert.match(plan, /revalidates the rendered marker against that receipt/);
+});
+
 test("planning agents inherit a registered model and retain role-specific thinking", async () => {
   for (const agent of planningAgents) {
     const url = new URL(`../.agents/agents/${agent.path}`, import.meta.url);

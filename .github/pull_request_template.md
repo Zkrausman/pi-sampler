@@ -10,16 +10,17 @@
 
 <!-- Changeset added / no package release needed / follow-up required. -->
 
-## AIDEV adversarial review evidence
+## AIDEV final-review attestation
 
 <!-- Required only when the head branch is exactly zkrausman/aidev-<positive-number>-<lowercase-kebab-description>.
-     Complete a fresh-context adversarial review of the local commit-only packet, resolve blocker/high findings,
-     then have the solo maintainer calculate its SHA-256 and record the attestation below. Keep review reports,
-     session IDs, prompts, credentials, generated review content, and reviewer identities out of this PR body. -->
+     Terra retains iterative/remediation review, then launches one fresh-context final child.
+     The child reviews the complete final v3 packet, acceptance matrix, and verification evidence.
+     Resolve blocker/high findings and render exactly one marker from the current local receipt.
+     Keep reports, findings, sessions, prompts, credentials, receipt, and reviewer identity out of this body. -->
 
-<!-- pi-sampler-adversarial-review-attestation:v2 {"format":"pi-sampler.adversarial-review-attestation","version":2,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","outcome":"clean","packetSha256":"<lowercase-sha256-of-the-commit-only-packet>"} -->
+<!-- pi-sampler-adversarial-review-attestation:v3 {"format":"pi-sampler.adversarial-review-attestation","version":3,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","outcome":"clean","packetSha256":"<v3-packet-sha256>","acceptanceMatrixSha256":"<acceptance-matrix-sha256>","verificationEvidenceSha256":"<verification-evidence-sha256>","reviewerModelId":"<trusted-catalog-model-id>","reviewProfileVersion":"<trusted-catalog-profile-version>","receiptSha256":"<opaque-local-receipt-sha256>"} -->
 
-<!-- CI verifies this commit-bound evidence only. A fresh-context adversarial review remains operationally required; no separate GitHub reviewer approval is required for this solo-maintainer repository. Delete this placeholder marker for non-ticket branches. -->
+<!-- CI verifies exact base/head and public digests only. Model/profile values are maintainer-attested caller claims, not external proof. The marker never grants merge authority. Delete this placeholder marker for non-ticket branches. -->
 
 ## Checklist
 

@@ -22,25 +22,46 @@ Thanks for improving pi-sampler. By submitting a pull request, you agree that yo
 
 ## Adversarial review evidence for AIDEV ticket branches
 
-AIDEV ticket branches use this strict convention: `zkrausman/aidev-<positive-ticket-number>-<lowercase-kebab-description>` (for example, `zkrausman/aidev-109-make-adversarial-review-gate-solo-maintainer-compatible`). A pull request whose head branch matches that exact convention requires a fresh-context adversarial review before merge. Branches that do not match it do not require an attestation; a near match such as `zkrausman/AIDEV-109-example` is intentionally not a ticket branch.
+AIDEV ticket branches are recognized from the immutable trusted-base project profile, not from a repository-wide hard-coded prefix. The trusted profile's `delivery.branchPrefix` and `workItem.idPattern` determine whether a lower-cased work-item branch stem with a bounded lowercase-kebab suffix is a ticket branch. A pull request whose head branch matches that trusted policy requires the final-review gate before merge; branches that do not match it do not require an attestation. Candidate profile bytes, caller flags, environment variables, and remote branch names cannot change the trusted policy.
 
-The fresh-context reviewer keeps their report, prompts, sessions, credentials, and any generated review material local. Review the deterministic commit-only packet for the exact PR base and head, resolve every blocker or high finding, then the solo maintainer records **one** single-line attestation marker in the PR body. The marker is metadata only; do not include review text, session identifiers, personal identifiers, reviewer identities, or credentials. The repository has one developer, so no separate GitHub reviewer approval is required.
+Terra keeps the early review and remediation continuity, then launches exactly one fresh-context final child after the complete candidate is provisionally clean. The child receives only the exact final v3 packet, acceptance matrix, verification evidence, and versioned read-only profile. A blocker/high result revokes the clean state immediately. Luna fixes and pushes; Terra freezes a complete input set for the new head and resumes the same child for no more than two corrections. A third correction, child loss, timeout, provider failure, malformed receipt, or changed binding blocks. A replacement child requires explicit user authorization and a new local receipt lineage.
+
+The reviewer and Terra keep reports, prompts, sessions, credentials, receipts, findings, and generated review material local. Publish only one minimal marker; it contains no identity, sessions, runs, transcript, finding text, paths, usage, latency, cost, or credentials. Model/profile values are bounded maintainer-attested caller claims, not cryptographic proof that a model ran. The marker is review evidence only; the user remains the merge authority.
+
+`reviewerModelId` and `reviewProfileVersion` use the versioned, repository-trusted catalog in `scripts/review-provenance-contract.mjs`, mirrored exactly by `docs/final-review-receipt-v1.schema.json` and enforced before receipt persistence, digest generation, or marker acceptance. Catalog version 1 contains exactly these public reviewer-role model IDs: `openai-codex/gpt-5.6-sol` and `openai-codex/gpt-5.6-terra`. It contains exactly this review profile version: `terra-final-v1`. These fields use exact catalog membership, not semantic guessing or caller-provided suffixes; paths, URLs, emails, UUIDs, ULIDs, sessions, identities, timestamps, unknown models, and all other unlisted values are rejected without echoing them. Adding a model or profile requires a reviewed change to the trusted-base catalog and its schema.
 
 ```html
-<!-- pi-sampler-adversarial-review-attestation:v2 {"format":"pi-sampler.adversarial-review-attestation","version":2,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","outcome":"clean","packetSha256":"<lowercase-sha256-of-the-commit-only-packet>"} -->
+<!-- pi-sampler-adversarial-review-attestation:v3 {"format":"pi-sampler.adversarial-review-attestation","version":3,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","outcome":"clean","packetSha256":"<v3-packet-sha256>","acceptanceMatrixSha256":"<acceptance-matrix-sha256>","verificationEvidenceSha256":"<verification-evidence-sha256>","reviewerModelId":"<trusted-catalog-model-id>","reviewProfileVersion":"<trusted-catalog-profile-version>","receiptSha256":"<opaque-local-receipt-sha256>"} -->
 ```
 
-`outcome` must be exactly `clean`, which attests that no blocker or high finding remains unresolved. To calculate the digest locally, use the same immutable commits that will be in the PR (for example `base=$(git rev-parse origin/main)` and `head=$(git rev-parse HEAD)`), then run:
+Render the marker only from a current clean local receipt after validating all
+three complete inputs:
 
 ```sh
-node --input-type=module -e "import { generateReviewPacket, reviewPacketSha256 } from './scripts/generate-review-packet.mjs'; const [base, head] = process.argv.slice(1); console.log(reviewPacketSha256(await generateReviewPacket({ base, head })));" "$base" "$head"
+node scripts/final-review-receipt.mjs --receipt <local-receipt.json> --base <exact-base-sha> --head <exact-head-sha> --packet <packet-v3.json> --acceptance-matrix <matrix.json> --verification-evidence <verification.json> --emit-marker
 ```
 
-Before opening or updating the PR, replace the placeholders in the marker with those exact SHAs and digest. The complete check runs in GitHub Actions; do not copy review material into the PR body.
+For an activated v3 base, the pre-push hook invokes the same authoritative
+receipt/marker validation path and requires the current ignored receipt at
+`artifacts/final-review/receipt.json`; a later revocation therefore rejects the
+push even when the public marker's base, head, and bytes are unchanged.
+The protected trusted-base CI job remains the authoritative evidence gate.
+The pre-push hook is fail-closed early feedback only: it is bypassable by
+Git's normal hook controls and has no approval, publication, push, merge, or
+PR-body mutation authority. A successful hook never substitutes for CI.
+When a push is a genuine first creation of a branch and the hook explicitly
+verifies that no PR exists, it reports the lifecycle state
+`initial-publication` and allows that one push only to bootstrap PR creation.
+That exception grants no approval or merge authority and emits no approval
+claim; protected trusted-base CI remains blocked until the required evidence
+exists. An update to an existing branch
+with a verified-absent PR fails closed, while unavailable, malformed, or
+ambiguous PR lookup also fails closed. Non-branch destinations and existing-PR
+branches classified as non-ticket remain explicitly evidence-free.
 
-The required **Adversarial review evidence** CI job runs from trusted workflow definitions: `pull_request_target` handles PR lifecycle changes. It checks out and executes only the immutable PR base-branch validator, fetches the PR head as Git commit objects without checking it out, and regenerates the packet from the immutable base/head commits. The job reads the PR body as a bounded environment value and never executes or logs it. It fails for missing, malformed, multiple, stale, mismatched, non-clean, or sensitive attestation evidence. CI verifies the exact commit-bound marker; the solo maintainer must ensure the adversarial review used fresh context before merge.
+The trusted `pull_request_target` job checks out and executes only the immutable PR base-branch validator, fetches the PR head as Git objects without checking it out, regenerates the v3 packet, and validates the minimal marker. CI can validate public digests and exact commit binding but cannot inspect the opaque local receipt or prove the claimed model execution. It fails for missing, malformed, multiple, stale, mismatched, downgraded, non-clean, or sensitive markers. The v2 marker remains frozen historical packet-consistency evidence and cannot satisfy the v3 final-review gate.
 
-**Bootstrap limitation:** a PR that first adds or changes this trusted workflow cannot enforce itself, because `pull_request_target` uses the workflow already on the base branch. Review that bootstrap PR manually. After its trusted workflow is merged to `main`, subsequent AIDEV ticket PRs are enforced by the required **Adversarial review evidence** check.
+**Bootstrap boundary:** the validator selects activation only by inspecting the exact trusted base's validator bytes; candidate workflow flags, environment variables, and CLI claims cannot select the rule. When that base does not contain the v3 activation declaration, the bootstrap PR uses only the trusted-base legacy behavior: no v3 receipt/marker is required, a v2 marker remains historical evidence, and a candidate-supplied v3 marker is rejected. Once v3 is present on the trusted base, every AIDEV ticket PR requires one exact, current v3 final-review marker; missing, malformed, stale, mismatched, downgraded, or sensitive evidence fails closed. A PR that first adds or changes this trusted validator/workflow therefore cannot enforce its own new v3 gate; activation begins only for later PRs whose trusted base contains the declaration.
 
 ## Contribution provenance and DCO
 

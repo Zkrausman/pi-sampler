@@ -23,6 +23,8 @@ jobs:
       ADVERSARIAL_REVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       ADVERSARIAL_REVIEW_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       ADVERSARIAL_REVIEW_PR_BODY: ${{ github.event.pull_request.body }}
+      # The validator selects legacy versus v3 only from the exact trusted base
+      # validator bytes. Candidate workflow flags cannot select activation.
     steps:
       # Check out only the immutable base commit containing this trusted
       # workflow and validator. Do not use the PR merge ref or head ref here.

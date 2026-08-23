@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-sampler.dev/schemas/final-review-receipt-v1.json",
+  "title": "Pi Sampler final review receipt v1",
+  "x-provenanceCatalog": {
+    "format": "pi-sampler.public-review-provenance-catalog",
+    "version": 1
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "repository",
+    "pullRequest",
+    "nonce",
+    "base",
+    "head",
+    "packetSha256",
+    "acceptanceMatrixSha256",
+    "verificationEvidenceSha256",
+    "reviewerModelId",
+    "reviewProfileVersion",
+    "outcome",
+    "lifecycle",
+    "revocation",
+    "receiptSha256"
+  ],
+  "properties": {
+    "format": { "const": "pi-sampler.final-review-receipt" },
+    "version": { "const": 1 },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "pullRequest": { "type": "string", "pattern": "^[1-9][0-9]{0,30}$" },
+    "nonce": { "type": "string", "pattern": "^[a-f0-9]{32,128}$" },
+    "base": { "$ref": "#/$defs/commit" },
+    "head": { "$ref": "#/$defs/commit" },
+    "packetSha256": { "$ref": "#/$defs/digest" },
+    "acceptanceMatrixSha256": { "$ref": "#/$defs/digest" },
+    "verificationEvidenceSha256": { "$ref": "#/$defs/digest" },
+    "reviewerModelId": { "type": "string", "minLength": 1, "maxLength": 128, "enum": ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.6-terra"] },
+    "reviewProfileVersion": { "type": "string", "minLength": 1, "maxLength": 64, "enum": ["terra-final-v1"] },
+    "outcome": { "enum": ["clean", "blocked"] },
+    "lifecycle": { "$ref": "#/$defs/lifecycle" },
+    "revocation": { "$ref": "#/$defs/revocation" },
+    "receiptSha256": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "commit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$", "minLength": 40, "maxLength": 64 },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$", "minLength": 64, "maxLength": 64 },
+    "opaqueId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,191}$" },
+    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$" },
+    "pass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "kind",
+        "lineageId",
+        "base",
+        "head",
+        "packetSha256",
+        "acceptanceMatrixSha256",
+        "verificationEvidenceSha256",
+        "outcome",
+        "blockerCount",
+        "highCount",
+        "recordedAt"
+      ],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "kind": { "enum": ["initial", "resume"] },
+        "lineageId": { "$ref": "#/$defs/opaqueId" },
+        "base": { "$ref": "#/$defs/commit" },
+        "head": { "$ref": "#/$defs/commit" },
+        "packetSha256": { "$ref": "#/$defs/digest" },
+        "acceptanceMatrixSha256": { "$ref": "#/$defs/digest" },
+        "verificationEvidenceSha256": { "$ref": "#/$defs/digest" },
+        "outcome": { "enum": ["clean", "blocked"] },
+        "blockerCount": { "type": "integer", "minimum": 0, "maximum": 128 },
+        "highCount": { "type": "integer", "minimum": 0, "maximum": 128 },
+        "recordedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lineageId", "fresh", "correctionCount", "passes"],
+      "properties": {
+        "lineageId": { "$ref": "#/$defs/opaqueId" },
+        "fresh": { "const": true },
+        "correctionCount": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "passes": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/$defs/pass" } }
+      }
+    },
+    "revocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revoked", "reason", "source", "recordedAt"],
+      "properties": {
+        "revoked": { "type": "boolean" },
+        "reason": { "type": ["string", "null"], "maxLength": 1024 },
+        "source": { "enum": ["final-child", "terra-parent", "head-change", "operator", "validation", null] },
+        "recordedAt": { "anyOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] }
+      }
+    }
+  }
+}
