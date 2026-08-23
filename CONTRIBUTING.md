@@ -43,6 +43,19 @@ For an activated v3 base, the pre-push hook invokes the same authoritative
 receipt/marker validation path and requires the current ignored receipt at
 `artifacts/final-review/receipt.json`; a later revocation therefore rejects the
 push even when the public marker's base, head, and bytes are unchanged.
+The protected trusted-base CI job remains the authoritative evidence gate.
+The pre-push hook is fail-closed early feedback only: it is bypassable by
+Git's normal hook controls and has no approval, publication, push, merge, or
+PR-body mutation authority. A successful hook never substitutes for CI.
+When a push is a genuine first creation of a branch and the hook explicitly
+verifies that no PR exists, it reports the lifecycle state
+`initial-publication` and allows that one push only to bootstrap PR creation.
+That exception grants no approval or merge authority and emits no approval
+claim; protected trusted-base CI remains blocked until the required evidence
+exists. An update to an existing branch
+with a verified-absent PR fails closed, while unavailable, malformed, or
+ambiguous PR lookup also fails closed. Non-branch destinations and existing-PR
+branches classified as non-ticket remain explicitly evidence-free.
 
 The trusted `pull_request_target` job checks out and executes only the immutable PR base-branch validator, fetches the PR head as Git objects without checking it out, regenerates the v3 packet, and validates the minimal marker. CI can validate public digests and exact commit binding but cannot inspect the opaque local receipt or prove the claimed model execution. It fails for missing, malformed, multiple, stale, mismatched, downgraded, non-clean, or sensitive markers. The v2 marker remains frozen historical packet-consistency evidence and cannot satisfy the v3 final-review gate.
 
