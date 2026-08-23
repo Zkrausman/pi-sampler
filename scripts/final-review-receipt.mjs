@@ -11,6 +11,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { assertPrivacySafeReviewProvenance, assertPrivacySafeReviewerModelId, assertPrivacySafeReviewProfileVersion } from "./review-provenance-contract.mjs";
 import { assertValidReviewPacketAgainstGit } from "./validate-review-packet.mjs";
 
 export const FINAL_REVIEW_RECEIPT_FORMAT = "pi-sampler.final-review-receipt";
@@ -40,8 +41,6 @@ const DIGEST = /^[0-9a-f]{64}$/;
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const PULL_REQUEST = /^[1-9][0-9]{0,30}$/;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,191}$/;
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:+/\-]{0,127}$/;
-const PROFILE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._:+\-]{0,63}$/;
 const NONCE = /^[a-f0-9]{32,128}$/;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const MARKER_PREFIX = "pi-sampler-adversarial-review-attestation";
@@ -126,7 +125,12 @@ function receiptBinding(receipt) {
   const { receiptSha256: _receiptSha256, ...binding } = receipt;
   return binding;
 }
-export function canonicalReceiptPayload(receipt) { return canonicalJson(receiptBinding(receipt)); }
+export function canonicalReceiptPayload(receipt) {
+  const binding = receiptBinding(receipt);
+  // Provenance is validated before any canonical receipt bytes are generated.
+  assertPrivacySafeReviewProvenance(binding);
+  return canonicalJson(binding);
+}
 export function finalReviewReceiptSha256(receipt) { return sha256Hex(canonicalReceiptPayload(receipt)); }
 export const receiptSha256 = finalReviewReceiptSha256;
 
@@ -276,8 +280,8 @@ export function validateFinalReviewReceipt(receipt, options = {}) {
     digest(receipt.packetSha256, "packetSha256");
     digest(receipt.acceptanceMatrixSha256, "acceptanceMatrixSha256");
     digest(receipt.verificationEvidenceSha256, "verificationEvidenceSha256");
-    boundedString(receipt.reviewerModelId, "reviewerModelId", FINAL_REVIEW_RECEIPT_LIMITS.modelId, MODEL_ID);
-    boundedString(receipt.reviewProfileVersion, "reviewProfileVersion", FINAL_REVIEW_RECEIPT_LIMITS.profileVersion, PROFILE_VERSION);
+    assertPrivacySafeReviewerModelId(receipt.reviewerModelId);
+    assertPrivacySafeReviewProfileVersion(receipt.reviewProfileVersion);
     if (!["clean", "blocked"].includes(receipt.outcome)) fail("final-review receipt outcome is unsupported");
 
     exactKeys(receipt.lifecycle, LIFECYCLE_KEYS, "lifecycle");
@@ -327,6 +331,8 @@ export function validateFinalReviewReceipt(receipt, options = {}) {
       reviewerModelId: options.reviewerModelId ?? options.expectedReviewerModelId,
       reviewProfileVersion: options.reviewProfileVersion ?? options.expectedReviewProfileVersion,
     };
+    if (expectedValues.reviewerModelId !== undefined) assertPrivacySafeReviewerModelId(expectedValues.reviewerModelId, "expected reviewerModelId");
+    if (expectedValues.reviewProfileVersion !== undefined) assertPrivacySafeReviewProfileVersion(expectedValues.reviewProfileVersion, "expected reviewProfileVersion");
     for (const [key, value] of Object.entries(expectedValues)) if (value !== undefined && receipt[key] !== value) fail(`final-review receipt ${key} does not match the exact expected value`);
     if (options.requireClean === true && (receipt.outcome !== "clean" || receipt.revocation.revoked || latest.outcome !== "clean")) fail("final-review receipt is not a current clean attestation");
     return { ok: true, errors: [], receipt, canonicalPayload: canonicalReceiptPayload(receipt), receiptSha256: receipt.receiptSha256, latestPass: latest };
@@ -344,6 +350,7 @@ export function assertValidFinalReviewReceipt(receipt, options = {}) {
 }
 
 function receiptObject(fields) {
+  assertPrivacySafeReviewProvenance(fields);
   const receipt = {
     format: FINAL_REVIEW_RECEIPT_FORMAT,
     version: FINAL_REVIEW_RECEIPT_VERSION,
@@ -371,6 +378,7 @@ export function createFinalReviewReceipt({
   lineageId, recordedAt = new Date().toISOString(), outcome = "clean",
   blockerCount = 0, highCount = 0,
 }) {
+  assertPrivacySafeReviewProvenance({ reviewerModelId, reviewProfileVersion });
   const lineage = lineageId ?? `child-${randomBytes(16).toString("hex")}`;
   const lifecycle = {
     lineageId: lineage,
@@ -487,8 +495,8 @@ export function parseFinalReviewAttestation(body) {
   digest(marker.acceptanceMatrixSha256, "marker.acceptanceMatrixSha256");
   digest(marker.verificationEvidenceSha256, "marker.verificationEvidenceSha256");
   digest(marker.receiptSha256, "marker.receiptSha256");
-  boundedString(marker.reviewerModelId, "marker.reviewerModelId", FINAL_REVIEW_RECEIPT_LIMITS.modelId, MODEL_ID);
-  boundedString(marker.reviewProfileVersion, "marker.reviewProfileVersion", FINAL_REVIEW_RECEIPT_LIMITS.profileVersion, PROFILE_VERSION);
+  assertPrivacySafeReviewerModelId(marker.reviewerModelId, "marker.reviewerModelId");
+  assertPrivacySafeReviewProfileVersion(marker.reviewProfileVersion, "marker.reviewProfileVersion");
   return marker;
 }
 

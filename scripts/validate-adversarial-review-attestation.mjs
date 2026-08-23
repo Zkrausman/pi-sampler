@@ -9,18 +9,16 @@
  */
 import { execFileSync } from "node:child_process";
 import { generateReviewPacketV2, generateReviewPacketV3, reviewPacketSha256V2, reviewPacketSha256V3 } from "./generate-review-packet.mjs";
+import { assertPrivacySafeReviewerModelId, assertPrivacySafeReviewProfileVersion } from "./review-provenance-contract.mjs";
 import { parseFinalReviewReceipt, readBoundedRegularFile, validateFinalReviewAttestation } from "./final-review-receipt.mjs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 const LIMITS = Object.freeze({
   argument: 4096, branch: 256, sha: 64, body: 24 * 1024, markerJson: 4096,
-  modelId: 128, profileVersion: 64,
 });
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const DIGEST = /^[0-9a-f]{64}$/;
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:+/\-]{0,127}$/;
-const PROFILE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._:+\-]{0,63}$/;
 const FORMAT = "pi-sampler.adversarial-review-attestation";
 export const TRUSTED_V3_ATTESTATION_ACTIVATION = "pi-sampler.adversarial-review-attestation:v3";
 const TRUSTED_VALIDATOR_PATH = "scripts/validate-adversarial-review-attestation.mjs";
@@ -320,8 +318,8 @@ function validateSchemaV3(attestation, { base, head, packetSha256 }) {
   exactDigest(attestation.acceptanceMatrixSha256, "final-review acceptance matrix digest");
   exactDigest(attestation.verificationEvidenceSha256, "final-review verification evidence digest");
   exactDigest(attestation.receiptSha256, "final-review local receipt digest");
-  if (typeof attestation.reviewerModelId !== "string" || !MODEL_ID.test(attestation.reviewerModelId) || Buffer.byteLength(attestation.reviewerModelId, "utf8") > LIMITS.modelId) fail("final-review reviewer model ID is missing or outside its bound");
-  if (typeof attestation.reviewProfileVersion !== "string" || !PROFILE_VERSION.test(attestation.reviewProfileVersion) || Buffer.byteLength(attestation.reviewProfileVersion, "utf8") > LIMITS.profileVersion) fail("final-review profile version is missing or outside its bound");
+  assertPrivacySafeReviewerModelId(attestation.reviewerModelId, "final-review reviewer model ID");
+  assertPrivacySafeReviewProfileVersion(attestation.reviewProfileVersion, "final-review profile version");
 }
 
 /** Validate the opaque local receipt against the exact public marker before push. */

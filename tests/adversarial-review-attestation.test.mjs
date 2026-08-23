@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createFinalReviewAttestation, createFinalReviewReceipt, revokeFinalReviewReceipt } from "../scripts/final-review-receipt.mjs";
 import { PRE_PUSH_KINDS, PRE_PUSH_LIFECYCLE_KINDS, PRE_PUSH_LIFECYCLE_TABLE, PRE_PUSH_PR_STATES, PRE_PUSH_STATE_TABLE, classifyPrePushLifecycle, classifyTrustedDestination, normalizePrePushInput } from "../scripts/hooks/pre-push-protocol.mjs";
+import { REVIEW_PROVENANCE_CANONICAL_EXAMPLES, REVIEW_PROVENANCE_PRIVACY_PROBES } from "./helpers/review-provenance-probes.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const validator = join(root, "scripts", "validate-adversarial-review-attestation.mjs");
@@ -87,7 +88,7 @@ async function alternateProfileRepository(objectFormat = null) {
   await mkdir(join(cwd, "scripts"));
   await mkdir(join(cwd, "profiles"));
   for (const file of [
-    "validate-adversarial-review-attestation.mjs", "generate-review-packet.mjs", "final-review-receipt.mjs", "validate-review-packet.mjs",
+    "validate-adversarial-review-attestation.mjs", "generate-review-packet.mjs", "final-review-receipt.mjs", "review-provenance-contract.mjs", "validate-review-packet.mjs",
     "package-lock-admission.mjs", "package-lock-entry.mjs", "package-lock-validation.mjs",
   ]) {
     await copyFile(join(root, "scripts", file), join(cwd, "scripts", file));
@@ -126,7 +127,7 @@ function marker({ base, head, packetSha256, outcome = "clean" }) {
   return `<!-- pi-sampler-adversarial-review-attestation:v2 ${JSON.stringify({ format: "pi-sampler.adversarial-review-attestation", version: 2, base, head, outcome, packetSha256 })} -->`;
 }
 function markerV3({ base, head, packetSha256, outcome = "clean", ...provenance }) {
-  return `<!-- pi-sampler-adversarial-review-attestation:v3 ${JSON.stringify({ format: "pi-sampler.adversarial-review-attestation", version: 3, base, head, outcome, packetSha256, acceptanceMatrixSha256: provenance.acceptanceMatrixSha256 ?? "a".repeat(64), verificationEvidenceSha256: provenance.verificationEvidenceSha256 ?? "b".repeat(64), reviewerModelId: provenance.reviewerModelId ?? "openai/gpt-5.6", reviewProfileVersion: provenance.reviewProfileVersion ?? "terra-final-v1", receiptSha256: provenance.receiptSha256 ?? "c".repeat(64) })} -->`;
+  return `<!-- pi-sampler-adversarial-review-attestation:v3 ${JSON.stringify({ format: "pi-sampler.adversarial-review-attestation", version: 3, base, head, outcome, packetSha256, acceptanceMatrixSha256: provenance.acceptanceMatrixSha256 ?? "a".repeat(64), verificationEvidenceSha256: provenance.verificationEvidenceSha256 ?? "b".repeat(64), reviewerModelId: provenance.reviewerModelId ?? "openai-codex/gpt-5.6-sol", reviewProfileVersion: provenance.reviewProfileVersion ?? "terra-final-v1", receiptSha256: provenance.receiptSha256 ?? "c".repeat(64) })} -->`;
 }
 function templateWithMarker(template, replacement) {
   assert.match(template, V2_TEMPLATE_MARKER);
@@ -205,7 +206,7 @@ function trustedV3Review(fixture, head = fixture.head, repository = fixture.trus
   const receipt = createFinalReviewReceipt({
     repository, pullRequest: "160", base: fixture.base, head,
     packetSha256, acceptanceMatrixSha256: "a".repeat(64), verificationEvidenceSha256: "b".repeat(64),
-    reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
+    reviewerModelId: "openai-codex/gpt-5.6-sol", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
   });
   const body = createFinalReviewAttestation(receipt, {
     repository, pullRequest: "160", base: fixture.base, head, packetSha256,
@@ -415,7 +416,7 @@ test("the real pre-push attached-HEAD path accepts clean then rejects same-head 
     const clean = createFinalReviewReceipt({
       repository: fixture.trustedRepository, pullRequest: "160", base: fixture.base, head: exactHead,
       packetSha256, acceptanceMatrixSha256: "a".repeat(64), verificationEvidenceSha256: "b".repeat(64),
-      reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
+      reviewerModelId: "openai-codex/gpt-5.6-sol", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
     });
     const marker = createFinalReviewAttestation(clean, {
       repository: clean.repository, pullRequest: clean.pullRequest, base: fixture.base, head: exactHead,
@@ -464,7 +465,7 @@ test("detached four-field pre-push enforces alternate trusted policy despite can
       const receipt = createFinalReviewReceipt({
         repository, pullRequest: "160", base: fixture.base, head: fixture.head,
         packetSha256, acceptanceMatrixSha256: "a".repeat(64), verificationEvidenceSha256: "b".repeat(64),
-        reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
+        reviewerModelId: "openai-codex/gpt-5.6-sol", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
       });
       return { receipt, marker: createFinalReviewAttestation(receipt, {
         repository, pullRequest: "160", base: fixture.base, head: fixture.head,
@@ -531,7 +532,7 @@ test("real Git detached HEAD push to a trusted destination enforces clean and re
     const clean = createFinalReviewReceipt({
       repository: fixture.trustedRepository, pullRequest: "160", base: fixture.base, head: fixture.head,
       packetSha256, acceptanceMatrixSha256: "a".repeat(64), verificationEvidenceSha256: "b".repeat(64),
-      reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
+      reviewerModelId: "openai-codex/gpt-5.6-sol", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
     });
     const marker = createFinalReviewAttestation(clean, {
       repository: clean.repository, pullRequest: clean.pullRequest, base: fixture.base, head: fixture.head,
@@ -586,7 +587,7 @@ test("real Git branch creation and deletion use the deletion protocol without ev
     const clean = createFinalReviewReceipt({
       repository: fixture.trustedRepository, pullRequest: "160", base: fixture.base, head: fixture.head,
       packetSha256, acceptanceMatrixSha256: "a".repeat(64), verificationEvidenceSha256: "b".repeat(64),
-      reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
+      reviewerModelId: "openai-codex/gpt-5.6-sol", reviewProfileVersion: "terra-final-v1", recordedAt: "2026-08-22T00:00:00.000Z",
     });
     const marker = createFinalReviewAttestation(clean, {
       repository: clean.repository, pullRequest: clean.pullRequest, base: fixture.base, head: fixture.head,
@@ -853,6 +854,28 @@ test("v3 final-review attestation binds the complete v3 packet and bounded prove
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Final review attestation validated/);
     assert.doesNotMatch(body, /session|transcript|finding|path|token|cost/i);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("public v3 validation has provenance parity and never echoes privacy probes", async () => {
+  const fixture = await activatedRepository();
+  try {
+    const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head, 3);
+    for (const reviewerModelId of REVIEW_PROVENANCE_CANONICAL_EXAMPLES.reviewerModelId) {
+      for (const reviewProfileVersion of REVIEW_PROVENANCE_CANONICAL_EXAMPLES.reviewProfileVersion) {
+        const body = markerV3({ ...fixture, packetSha256, reviewerModelId, reviewProfileVersion });
+        const result = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body });
+        assert.equal(result.status, 0, `${reviewerModelId}/${reviewProfileVersion}: ${result.stderr}`);
+      }
+    }
+    for (const [field, probes] of Object.entries(REVIEW_PROVENANCE_PRIVACY_PROBES)) {
+      for (const rejected of probes) {
+        const body = markerV3({ ...fixture, packetSha256, [field]: rejected });
+        const result = invoke(fixture.cwd, { ...fixture, branch: ticketBranch, body });
+        assert.notEqual(result.status, 0, `public validator accepted ${field} privacy probe`);
+        assert.ok(!result.stderr.includes(rejected), `public validator echoed ${field} privacy probe`);
+      }
+    }
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 

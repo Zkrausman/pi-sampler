@@ -18,7 +18,7 @@
      Resolve blocker/high findings and render exactly one marker from the current local receipt.
      Keep reports, findings, sessions, prompts, credentials, receipt, and reviewer identity out of this body. -->
 
-<!-- pi-sampler-adversarial-review-attestation:v3 {"format":"pi-sampler.adversarial-review-attestation","version":3,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","outcome":"clean","packetSha256":"<v3-packet-sha256>","acceptanceMatrixSha256":"<acceptance-matrix-sha256>","verificationEvidenceSha256":"<verification-evidence-sha256>","reviewerModelId":"<bounded-model-id>","reviewProfileVersion":"<bounded-profile-version>","receiptSha256":"<opaque-local-receipt-sha256>"} -->
+<!-- pi-sampler-adversarial-review-attestation:v3 {"format":"pi-sampler.adversarial-review-attestation","version":3,"base":"<exact-lowercase-40-or-64-character-base-sha>","head":"<exact-lowercase-40-or-64-character-head-sha>","outcome":"clean","packetSha256":"<v3-packet-sha256>","acceptanceMatrixSha256":"<acceptance-matrix-sha256>","verificationEvidenceSha256":"<verification-evidence-sha256>","reviewerModelId":"<trusted-catalog-model-id>","reviewProfileVersion":"<trusted-catalog-profile-version>","receiptSha256":"<opaque-local-receipt-sha256>"} -->
 
 <!-- CI verifies exact base/head and public digests only. Model/profile values are maintainer-attested caller claims, not external proof. The marker never grants merge authority. Delete this placeholder marker for non-ticket branches. -->
 

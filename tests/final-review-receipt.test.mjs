@@ -17,6 +17,8 @@ import {
 } from "../scripts/final-review-receipt.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { TRUSTED_V3_ATTESTATION_ACTIVATION } from "../scripts/validate-adversarial-review-attestation.mjs";
+import { REVIEWER_MODEL_ID_SCHEMA, REVIEW_PROFILE_VERSION_SCHEMA, REVIEW_PROVENANCE_CONTRACT } from "../scripts/review-provenance-contract.mjs";
+import { REVIEW_PROVENANCE_CANONICAL_EXAMPLES, REVIEW_PROVENANCE_PRIVACY_PROBES } from "./helpers/review-provenance-probes.mjs";
 
 const base = "a".repeat(40);
 const head = "b".repeat(40);
@@ -40,13 +42,107 @@ function receipt(overrides = {}) {
     packetSha256: packet,
     acceptanceMatrixSha256: matrix,
     verificationEvidenceSha256: evidence,
-    reviewerModelId: "openai/gpt-5.6",
+    reviewerModelId: "openai-codex/gpt-5.6-sol",
     reviewProfileVersion: "terra-final-v1",
     lineageId: "opaque-child-lineage",
     recordedAt: time0,
     ...overrides,
   });
 }
+
+function markerWithProvenance(marker, field, value) {
+  const prefix = "<!-- pi-sampler-adversarial-review-attestation:v3 ";
+  assert.ok(marker.startsWith(prefix) && marker.endsWith(" -->"));
+  const payload = JSON.parse(marker.slice(prefix.length, -4));
+  payload[field] = value;
+  return `${prefix}${JSON.stringify(payload)} -->`;
+}
+
+function schemaAccepts(fieldSchema, value) {
+  return typeof value === "string"
+    && value.length >= fieldSchema.minLength
+    && value.length <= fieldSchema.maxLength
+    && fieldSchema.enum.includes(value);
+}
+
+test("the shared provenance contract has receipt, marker, and schema parity", async () => {
+  const schema = JSON.parse(await readFile(join(process.cwd(), "docs", "final-review-receipt-v1.schema.json"), "utf8"));
+  const contributing = await readFile(join(process.cwd(), "CONTRIBUTING.md"), "utf8");
+  assert.match(contributing, /review-provenance-contract\.mjs/);
+  assert.match(contributing, /trusted-catalog-model-id/);
+  assert.match(contributing, /trusted-catalog-profile-version/);
+  assert.match(contributing, /openai-codex\/gpt-5\.6-sol/);
+  assert.match(contributing, /openai-codex\/gpt-5\.6-terra/);
+  assert.match(contributing, /terra-final-v1/);
+  assert.deepEqual(schema.properties.reviewerModelId, REVIEWER_MODEL_ID_SCHEMA);
+  assert.deepEqual(schema.properties.reviewProfileVersion, REVIEW_PROFILE_VERSION_SCHEMA);
+  assert.equal(REVIEW_PROVENANCE_CONTRACT.catalog.version, 1);
+  assert.deepEqual(schema["x-provenanceCatalog"], {
+    format: REVIEW_PROVENANCE_CONTRACT.catalog.format,
+    version: REVIEW_PROVENANCE_CONTRACT.catalog.version,
+  });
+  assert.deepEqual(schema.properties.reviewerModelId.enum, [...REVIEW_PROVENANCE_CONTRACT.catalog.reviewerModelIds]);
+  assert.deepEqual(schema.properties.reviewProfileVersion.enum, [...REVIEW_PROVENANCE_CONTRACT.catalog.reviewProfileVersions]);
+  assert.deepEqual(REVIEW_PROVENANCE_CANONICAL_EXAMPLES.reviewerModelId, [...REVIEW_PROVENANCE_CONTRACT.catalog.reviewerModelIds]);
+  assert.deepEqual(REVIEW_PROVENANCE_CANONICAL_EXAMPLES.reviewProfileVersion, [...REVIEW_PROVENANCE_CONTRACT.catalog.reviewProfileVersions]);
+
+  for (const reviewerModelId of REVIEW_PROVENANCE_CANONICAL_EXAMPLES.reviewerModelId) {
+    for (const reviewProfileVersion of REVIEW_PROVENANCE_CANONICAL_EXAMPLES.reviewProfileVersion) {
+      const value = receipt({ reviewerModelId, reviewProfileVersion });
+      assert.equal(validateFinalReviewReceipt(value, { requireClean: true, base, head }).ok, true);
+      const marker = createFinalReviewAttestation(value, {
+        repository: value.repository, pullRequest: value.pullRequest, base, head,
+        packetSha256: value.packetSha256, acceptanceMatrixSha256: value.acceptanceMatrixSha256,
+        verificationEvidenceSha256: value.verificationEvidenceSha256,
+      });
+      assert.equal(validateFinalReviewAttestation(marker, value, {
+        repository: value.repository, pullRequest: value.pullRequest, base, head,
+      }).ok, true);
+      assert.equal(schemaAccepts(schema.properties.reviewerModelId, reviewerModelId), true);
+      assert.equal(schemaAccepts(schema.properties.reviewProfileVersion, reviewProfileVersion), true);
+    }
+  }
+
+  const valid = receipt();
+  const validMarker = createFinalReviewAttestation(valid, {
+    repository: valid.repository, pullRequest: valid.pullRequest, base, head,
+    packetSha256: valid.packetSha256, acceptanceMatrixSha256: valid.acceptanceMatrixSha256,
+    verificationEvidenceSha256: valid.verificationEvidenceSha256,
+  });
+  for (const [field, probes] of Object.entries(REVIEW_PROVENANCE_PRIVACY_PROBES)) {
+    for (const rejected of probes) {
+      const forgedReceipt = structuredClone(valid);
+      forgedReceipt[field] = rejected;
+      const receiptResult = validateFinalReviewReceipt(forgedReceipt);
+      assert.equal(receiptResult.ok, false, `receipt accepted ${field} privacy probe`);
+      assert.ok(!receiptResult.errors.join(" ").includes(rejected), `receipt echoed ${field} privacy probe`);
+      assert.throws(() => finalReviewReceiptSha256(forgedReceipt), (error) => {
+        assert.ok(!error.message.includes(rejected), `receipt digest echoed ${field} privacy probe`);
+        return /trusted public .*catalog/.test(error.message);
+      });
+
+      const creationInput = {
+        repository: valid.repository, pullRequest: valid.pullRequest, base, head,
+        packetSha256: valid.packetSha256, acceptanceMatrixSha256: valid.acceptanceMatrixSha256,
+        verificationEvidenceSha256: valid.verificationEvidenceSha256,
+        reviewerModelId: valid.reviewerModelId, reviewProfileVersion: valid.reviewProfileVersion,
+        recordedAt: time0,
+        [field]: rejected,
+      };
+      assert.throws(() => createFinalReviewReceipt(creationInput), (error) => {
+        assert.ok(!error.message.includes(rejected), `receipt creation echoed ${field} privacy probe`);
+        return /trusted public .*catalog/.test(error.message);
+      });
+
+      const markerResult = validateFinalReviewAttestation(markerWithProvenance(validMarker, field, rejected), valid, {
+        repository: valid.repository, pullRequest: valid.pullRequest, base, head,
+      });
+      assert.equal(markerResult.ok, false, `public marker accepted ${field} privacy probe`);
+      assert.ok(!markerResult.errors.join(" ").includes(rejected), `public marker echoed ${field} privacy probe`);
+      assert.equal(schemaAccepts(schema.properties[field], rejected), false, `schema accepted ${field} privacy probe`);
+    }
+  }
+});
 
 test("a fresh clean receipt is canonical and renders only minimal v3 provenance", () => {
   const value = receipt();
@@ -119,8 +215,8 @@ test("corrections re-review the complete candidate on the same child and cap at 
     acceptanceMatrixSha256: forgedSameHead.acceptanceMatrixSha256,
     verificationEvidenceSha256: forgedSameHead.verificationEvidenceSha256,
   }), /correction/);
-  const generatedA = createFinalReviewReceipt({ repository: "Zkrausman/pi-sampler", pullRequest: "159", base, head, packetSha256: packet, acceptanceMatrixSha256: matrix, verificationEvidenceSha256: evidence, reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: time0 });
-  const generatedB = createFinalReviewReceipt({ repository: "Zkrausman/pi-sampler", pullRequest: "159", base, head, packetSha256: packet, acceptanceMatrixSha256: matrix, verificationEvidenceSha256: evidence, reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", recordedAt: time0 });
+  const generatedA = createFinalReviewReceipt({ repository: "Zkrausman/pi-sampler", pullRequest: "159", base, head, packetSha256: packet, acceptanceMatrixSha256: matrix, verificationEvidenceSha256: evidence, reviewerModelId: "openai-codex/gpt-5.6-sol", reviewProfileVersion: "terra-final-v1", recordedAt: time0 });
+  const generatedB = createFinalReviewReceipt({ repository: "Zkrausman/pi-sampler", pullRequest: "159", base, head, packetSha256: packet, acceptanceMatrixSha256: matrix, verificationEvidenceSha256: evidence, reviewerModelId: "openai-codex/gpt-5.6-sol", reviewProfileVersion: "terra-final-v1", recordedAt: time0 });
   assert.notEqual(generatedA.lifecycle.lineageId, generatedB.lifecycle.lineageId);
   assert.notEqual(generatedA.nonce, generatedB.nonce);
   assert.throws(() => resumeFinalReviewReceipt(third, {
@@ -219,7 +315,7 @@ test("a v3 marker validates exact packet bytes and rejects a v2 downgrade when r
     const marker = `<!-- pi-sampler-adversarial-review-attestation:v3 ${JSON.stringify({
       format: "pi-sampler.adversarial-review-attestation", version: 3, base: exactBase, head: exactHead,
       outcome: "clean", packetSha256, acceptanceMatrixSha256: matrix, verificationEvidenceSha256: evidence,
-      reviewerModelId: "openai/gpt-5.6", reviewProfileVersion: "terra-final-v1", receiptSha256: packetSha256,
+      reviewerModelId: "openai-codex/gpt-5.6-sol", reviewProfileVersion: "terra-final-v1", receiptSha256: packetSha256,
     })} -->`;
     const validator = join(process.cwd(), "scripts", "validate-adversarial-review-attestation.mjs");
     const run = (body, extra = []) => spawnSync(process.execPath, [validator, "--base", exactBase, "--head", exactHead, "--branch", "zkrausman/aidev-159-final-gate", ...extra], {

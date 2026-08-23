@@ -2,6 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pi-sampler.dev/schemas/final-review-receipt-v1.json",
   "title": "Pi Sampler final review receipt v1",
+  "x-provenanceCatalog": {
+    "format": "pi-sampler.public-review-provenance-catalog",
+    "version": 1
+  },
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -33,8 +37,8 @@
     "packetSha256": { "$ref": "#/$defs/digest" },
     "acceptanceMatrixSha256": { "$ref": "#/$defs/digest" },
     "verificationEvidenceSha256": { "$ref": "#/$defs/digest" },
-    "reviewerModelId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+/\\-]{0,127}$" },
-    "reviewProfileVersion": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+\\-]{0,63}$" },
+    "reviewerModelId": { "type": "string", "minLength": 1, "maxLength": 128, "enum": ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.6-terra"] },
+    "reviewProfileVersion": { "type": "string", "minLength": 1, "maxLength": 64, "enum": ["terra-final-v1"] },
     "outcome": { "enum": ["clean", "blocked"] },
     "lifecycle": { "$ref": "#/$defs/lifecycle" },
     "revocation": { "$ref": "#/$defs/revocation" },
