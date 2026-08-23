@@ -5,6 +5,9 @@
 *   **Estimated Effort:** 2 weeks
 *   **Primary Risk:** Allowing automated commits or merges without manual operator review, or drift between the exact planning base and execution base causing out-of-sync implementations.
 
+### Trusted Planning Handoff
+The initial lead planner is Gemini running manually in Antigravity. Gemini receives the exact-base planning requirements and research, then produces the uncommitted implementation plan and sibling acceptance manifest. Gemini must not be represented or invoked as a Pi provider/model. Implementation, review, publication, and merge authority remain separate.
+
 ## 2. Expected File Changes
 *   `[MODIFY]` `.agents/skills/create-implementation-plan/SKILL.md`: Update to become the single canonical planning skill. Strip automatic commit/push/PR and Linear SDLC sync capabilities. Add instructions for epic planning metadata, exact-base worktree provisioning, and manual Antigravity handoff.
 *   `[DELETE]` `.agents/skills/create-implementation-plan-team/SKILL.md`: Delete redundant team wrapper.
@@ -47,7 +50,7 @@ The exact trusted base selects post-activation v3 evidence. Complete packet, acc
 *   **Target Command**: `npm test`
 *   **Validation Scenarios**:
     *   [ ] A182-T01: Canonical-skill migration ensures `create-implementation-plan` is strictly manual handoff, deleting team wrapper, synchronizing behavior with docs/IMPLEMENTATION-PLANNING.md.
-    *   [ ] A182-T02: Prohibit automatic commit/push/PR; uncommitted artifacts only.
+    *   [ ] A182-T02: Manual Antigravity handoff uses Gemini as the initial lead planner; Gemini receives the exact-base planning requirements and research and produces the uncommitted implementation plan and sibling manifest. Gemini must not be represented or invoked as a Pi provider/model; implementation, review, publication, and merge authority remain separate, with no automatic lifecycle authority.
     *   [ ] A182-T03: Exact-base worktree provisioning is verified by tests, bounded by `scripts/delivery-worktree.mjs` contract.
     *   [ ] A182-T04: Deterministic validator ensures strict bounds (40/64 char SHA, Posix paths, no execution mutations) and rejects drift, missing objects, or traversal.
     *   [ ] A182-T05: Implement implementation-plan-manifest/v2 with TypeBox schema and export script at `contracts/implementation-plan-manifest-v2.schema.json`.
