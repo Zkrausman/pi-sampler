@@ -1,0 +1,25 @@
+{
+  "schema_version": "acceptance-manifest/v1",
+  "ticket_id": "AIDEV-182",
+  "repository": "Zkrausman/pi-sampler",
+  "plan_path": "docs/techPlans/AIDEV-182-implementation-plan.md",
+  "plan_sha256": "38ff7825e95d0b33772ccd62aef979660d15e0f292aea2105356f623516188de",
+  "base_sha": "5c1e144b0ab8e36378050996a1c112a06d2b5a30",
+  "rows": [
+    {"id": "A182-T01", "title": "Canonical-skill migration", "acceptance_class": "authority", "requirement": "Canonical skill strictly requires manual handoff, deleting team wrapper, and matching docs."},
+    {"id": "A182-T02", "title": "Manual Antigravity boundary", "acceptance_class": "authority", "requirement": "Prohibit automatic commit/push/PR; uncommitted artifacts only."},
+    {"id": "A182-T03", "title": "Exact-base worktree provisioning", "acceptance_class": "authority", "requirement": "Exact-base worktree provisioning is verified and bounded by delivery-worktree.mjs."},
+    {"id": "A182-T04", "title": "Deterministic validator contract", "acceptance_class": "ordinary", "requirement": "Validator ensures strict input, path, and security bounds, and performs no mutations."},
+    {"id": "A182-T05", "title": "Manifest v2 contract", "acceptance_class": "ordinary", "requirement": "Implement implementation-plan-manifest/v2 with exporter and generated schema in contracts/."},
+    {"id": "A182-T06", "title": "Exact schema parity", "acceptance_class": "ordinary", "requirement": "Exact runtime and generated-schema parity verification passes."},
+    {"id": "A182-T07", "title": "V1 Backward compatibility", "acceptance_class": "ordinary", "requirement": "Preserve read/validation for existing v1 plans; no silent rewrites."},
+    {"id": "A182-T08", "title": "Epic metadata in v2 manifest", "acceptance_class": "ordinary", "requirement": "V2 manifest carries hard dependencies, predecessor outputs, and portfolio metadata."},
+    {"id": "A182-T09", "title": "Explicit staleness boundaries", "acceptance_class": "ordinary", "requirement": "Defines explicit drift triggers without claiming descendant-base campaign staleness."},
+    {"id": "A182-T10", "title": "Digest and ID parity", "acceptance_class": "ordinary", "requirement": "Digest and acceptance IDs match exactly between plan and manifest over UTF-8 bytes."},
+    {"id": "A182-T11", "title": "Audit corpus tests", "acceptance_class": "ordinary", "requirement": "AIDEV-132–AIDEV-140 audit corpus tests verify detections via independent classes."},
+    {"id": "A182-T12", "title": "Exact negative tests", "acceptance_class": "ordinary", "requirement": "Independent tests cover JSON faults, bounds, traversal, Git refs, base-drifts, and ID mismatches."},
+    {"id": "A182-T13", "title": "Review discipline", "acceptance_class": "ordinary", "requirement": "Classifies defects vs preferences, bounding revisions and adversarial paths."},
+    {"id": "A182-T14", "title": "V1-to-V2 Bootstrap boundary", "acceptance_class": "ordinary", "requirement": "Ensures AIDEV-182 emits valid v1 artifacts until v2 merges."},
+    {"id": "A182-T15", "title": "Rollback verification", "acceptance_class": "ordinary", "requirement": "Tests rollback restoring previous skill versions without auto-publication."}
+  ]
+}
