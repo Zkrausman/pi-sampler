@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -15,8 +16,7 @@ const validator = join(root, "scripts", "validate-adversarial-review-attestation
 const packetGenerator = join(root, "scripts", "generate-review-packet.mjs");
 const { TRUSTED_V3_ATTESTATION_ACTIVATION } = await import(pathToFileURL(validator).href);
 const ticketBranch = "zkrausman/aidev-109-make-adversarial-review-gate-solo-maintainer-compatible";
-const HISTORICAL_BOOTSTRAP_BASE = "465e7a4a20e78f100b5cefcf29fbf41c65656f94";
-const HISTORICAL_V2_TEMPLATE_BASE = "92b538cefd1d50d3d109f36cdbe14e7c747d51f2";
+const RETIRED_HISTORICAL_OBJECT = "465e7a4a20e78f100b5cefcf29fbf41c65656f94";
 const V2_TEMPLATE_MARKER = /<!-- pi-sampler-adversarial-review-attestation:v2 [^\r\n]* -->/;
 
 function git(cwd, ...args) {
@@ -64,6 +64,58 @@ async function repository() {
   await writeFile(join(cwd, "tracked.txt"), "head\n");
   git(cwd, "add", "tracked.txt"); git(cwd, "commit", "--quiet", "-m", "head");
   return { cwd, base, head: git(cwd, "rev-parse", "HEAD") };
+}
+async function historicalBootstrapRepository() {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-adversarial-historical-bootstrap-"));
+  git(cwd, "init", "--quiet");
+  git(cwd, "config", "user.email", "test@example.invalid");
+  git(cwd, "config", "user.name", "Attestation Test");
+  await writeFile(join(cwd, "tracked.txt"), "bootstrap\n");
+  await mkdir(join(cwd, "scripts"));
+  await mkdir(join(cwd, "profiles"));
+  await mkdir(join(cwd, ".github"));
+  await copyFile(join(root, "profiles", "pi-sampler.json"), join(cwd, "profiles", "pi-sampler.json"));
+  const legacyValidator = [
+    'export const TRUSTED_V3_ATTESTATION_ACTIVATION = "synthetic-legacy-only";',
+    'const MARKER_PREFIX = "pi-sampler-adversarial-review-attestation";',
+    'const V2_TAG = `<!-- ${MARKER_PREFIX}:v2`;',
+    'const MARKER_V2 = new RegExp(`<!-- ${MARKER_PREFIX}:v2 ([^\\\\r\\\\n]{1,4096}) -->`, "g");',
+    'function legacyRule(body, required) {',
+    '  const marker = parseMarkerJson(body);',
+    '  if (!marker) {',
+    '    if (required) fail("a v2 adversarial-review attestation is required by the exact trusted base");',
+    '  }',
+    '}',
+  ].join("\n");
+  await writeFile(join(cwd, "scripts", "validate-adversarial-review-attestation.mjs"), legacyValidator);
+  git(cwd, "add", "tracked.txt", "profiles/pi-sampler.json", "scripts/validate-adversarial-review-attestation.mjs");
+  git(cwd, "commit", "--quiet", "-m", "synthetic legacy bootstrap base");
+  const base = git(cwd, "rev-parse", "HEAD");
+
+  const template = [
+    "## Summary",
+    "",
+    "<!-- What changes, and why? -->",
+    "",
+    "## AIDEV adversarial review evidence",
+    "",
+    "<!-- Required only for an AIDEV ticket branch; keep review material local. -->",
+    '<!-- pi-sampler-adversarial-review-attestation:v2 {"format":"pi-sampler.adversarial-review-attestation","version":2,"base":"<exact-base-sha>","head":"<exact-head-sha>","outcome":"clean","packetSha256":"<packet-sha256>"} -->',
+    "",
+    "## Checklist",
+    "",
+    "- [ ] I kept credentials and review material out of this body.",
+  ].join("\n");
+  await writeFile(join(cwd, ".github", "pull_request_template.md"), `${template}\n`);
+  git(cwd, "add", ".github/pull_request_template.md");
+  git(cwd, "commit", "--quiet", "-m", "synthetic v2 template descendant");
+  const templateBase = git(cwd, "rev-parse", "HEAD");
+
+  await writeFile(join(cwd, "tracked.txt"), "candidate\n");
+  git(cwd, "add", "tracked.txt");
+  git(cwd, "commit", "--quiet", "-m", "synthetic candidate head");
+  const head = git(cwd, "rev-parse", "HEAD");
+  return { cwd, base, templateBase, head, template: git(cwd, "show", `${templateBase}:.github/pull_request_template.md`) };
 }
 async function activatedRepository() {
   const fixture = await repository();
@@ -826,23 +878,58 @@ test("historical v2 attestation remains bound to frozen v2 bytes", async () => {
 });
 
 test("historical bootstrap base rejects missing v2 and accepts a bound v2 template marker", async () => {
-  assert.equal(git(root, "cat-file", "-t", HISTORICAL_BOOTSTRAP_BASE), "commit");
-  assert.equal(git(root, "cat-file", "-t", HISTORICAL_V2_TEMPLATE_BASE), "commit");
-  const head = git(root, "rev-parse", "HEAD");
-  const template = git(root, "show", `${HISTORICAL_V2_TEMPLATE_BASE}:.github/pull_request_template.md`);
-  const packetSha256 = digest(root, HISTORICAL_BOOTSTRAP_BASE, head);
-  const missing = invoke(root, {
-    base: HISTORICAL_BOOTSTRAP_BASE, head, branch: ticketBranch,
-    body: templateWithMarker(template, ""),
-  });
-  assert.notEqual(missing.status, 0, missing.stdout);
-  assert.match(missing.stderr, /v2 adversarial-review attestation is required by the exact trusted base/);
-  const valid = invoke(root, {
-    base: HISTORICAL_BOOTSTRAP_BASE, head, branch: ticketBranch,
-    body: templateWithMarker(template, marker({ base: HISTORICAL_BOOTSTRAP_BASE, head, packetSha256 })),
-  });
-  assert.equal(valid.status, 0, valid.stderr);
-  assert.match(valid.stdout, /Adversarial review attestation validated/);
+  const fixture = await historicalBootstrapRepository();
+  try {
+    assert.equal(git(fixture.cwd, "cat-file", "-t", fixture.base), "commit");
+    assert.equal(git(fixture.cwd, "cat-file", "-t", fixture.templateBase), "commit");
+    assert.equal(git(fixture.cwd, "cat-file", "-t", fixture.head), "commit");
+    assert.equal(git(fixture.cwd, "remote"), "");
+    assert.match(fixture.template, V2_TEMPLATE_MARKER);
+
+    const baseToTemplate = spawnSync("git", ["merge-base", "--is-ancestor", fixture.base, fixture.templateBase], { cwd: fixture.cwd, encoding: "utf8" });
+    const templateToHead = spawnSync("git", ["merge-base", "--is-ancestor", fixture.templateBase, fixture.head], { cwd: fixture.cwd, encoding: "utf8" });
+    assert.equal(baseToTemplate.status, 0, baseToTemplate.stderr);
+    assert.equal(templateToHead.status, 0, templateToHead.stderr);
+
+    // The enclosing checkout has neither the old candidate object nor an ancestry path to it.
+    const unavailableHistoricalObject = spawnSync("git", ["cat-file", "-e", `${RETIRED_HISTORICAL_OBJECT}^{commit}`], { cwd: fixture.cwd, encoding: "utf8" });
+    const unrelatedHistoricalBase = spawnSync("git", ["merge-base", "--is-ancestor", RETIRED_HISTORICAL_OBJECT, fixture.head], { cwd: fixture.cwd, encoding: "utf8" });
+    assert.notEqual(unavailableHistoricalObject.status, 0);
+    assert.notEqual(unrelatedHistoricalBase.status, 0);
+
+    const packetSha256 = digest(fixture.cwd, fixture.base, fixture.head);
+    const wrongPacketSha256 = digest(fixture.cwd, fixture.templateBase, fixture.head);
+    const cases = [
+      ["missing v2 marker", templateWithMarker(fixture.template, ""), /v2 adversarial-review attestation is required by the exact trusted base/],
+      ["malformed v2 marker", templateWithMarker(fixture.template, "<!-- pi-sampler-adversarial-review-attestation:v2 not-json -->"), /exactly once|invalid JSON/],
+      ["wrong base", templateWithMarker(fixture.template, marker({ base: fixture.templateBase, head: fixture.head, packetSha256 })), /base or head does not match/],
+      ["wrong head", templateWithMarker(fixture.template, marker({ base: fixture.base, head: fixture.templateBase, packetSha256 })), /base or head does not match/],
+      ["stale digest", templateWithMarker(fixture.template, marker({ base: fixture.base, head: fixture.head, packetSha256: "0".repeat(64) })), /packet digest/],
+      ["wrong packet", templateWithMarker(fixture.template, marker({ base: fixture.base, head: fixture.head, packetSha256: wrongPacketSha256 })), /packet digest/],
+    ];
+    for (const [name, body, expected] of cases) {
+      const result = invoke(fixture.cwd, { base: fixture.base, head: fixture.head, branch: ticketBranch, body });
+      assert.notEqual(result.status, 0, `${name}: ${result.stdout}`);
+      assert.match(result.stderr, expected, name);
+    }
+
+    const valid = invoke(fixture.cwd, {
+      base: fixture.base, head: fixture.head, branch: ticketBranch,
+      body: templateWithMarker(fixture.template, marker({ base: fixture.base, head: fixture.head, packetSha256 })),
+    });
+    assert.equal(valid.status, 0, valid.stderr);
+    assert.match(valid.stdout, /Adversarial review attestation validated/);
+
+    const v3OnLegacyBase = invoke(fixture.cwd, {
+      base: fixture.base, head: fixture.head, branch: ticketBranch,
+      body: templateWithMarker(fixture.template, markerV3({ base: fixture.base, head: fixture.head, packetSha256: digest(fixture.cwd, fixture.base, fixture.head, 3) })),
+    });
+    assert.notEqual(v3OnLegacyBase.status, 0);
+    assert.match(v3OnLegacyBase.stderr, /not accepted until the exact trusted base activates v3/);
+  } finally {
+    await rm(fixture.cwd, { recursive: true, force: true });
+    assert.equal(existsSync(fixture.cwd), false);
+  }
 });
 
 test("v3 final-review attestation binds the complete v3 packet and bounded provenance", async () => {
