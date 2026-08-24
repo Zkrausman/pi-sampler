@@ -372,7 +372,21 @@ async function generateReviewPacketV3(options, { onGitCommand, cwd = process.cwd
   let totalPatchBytes = 0;
   for (const { path: filePath } of files) {
     const diff = await gitCommand(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, head, "--", filePath]);
-    const { patch, totalBytes } = patchHunks(diff, filePath);
+    const { patch, totalBytes } = (() => {
+      const starts = [];
+      const header = /^@@ /gm;
+      let match;
+      while ((match = header.exec(diff)) !== null) starts.push(match.index);
+      if (!starts.length) fail(`${filePath} has no textual patch hunks`);
+      const hunks = starts.map((start, index) => diff.slice(start, starts[index + 1] ?? diff.length));
+      if (hunks.length > LIMITS.hunks) fail(`${filePath} has ${hunks.length} patch hunks, exceeding the fixed ${LIMITS.hunks}-hunk review-packet bound; produce a smaller range`);
+      const hunkBytes = hunks.map((hunk) => Buffer.byteLength(hunk, "utf8"));
+      const oversized = hunkBytes.findIndex((size) => size > LIMITS.hunk);
+      if (oversized !== -1) fail(`${filePath} patch hunk ${oversized + 1} exceeds the fixed ${LIMITS.hunk}-byte review-packet bound; produce a smaller range`);
+      const totalBytes = hunkBytes.reduce((total, size) => total + size, 0);
+      if (totalBytes > LIMITS.patch) fail(`${filePath} patch hunks exceed the fixed ${LIMITS.patch}-byte review-packet bound; produce a smaller range`);
+      return { patch: { path: filePath, hunks }, totalBytes };
+    })();
     totalPatchBytes += totalBytes;
     if (totalPatchBytes > LIMITS.patches) fail(`patch hunks exceed the fixed ${LIMITS.patches}-byte total review-packet bound; produce a smaller range`);
     patches.push({ path: filePath, hunks: patch.hunks.map((hunk) => encodeV3Hunk(hunk, filePath)) });

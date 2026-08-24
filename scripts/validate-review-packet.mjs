@@ -250,8 +250,151 @@ function validatePacketObject(packet) {
     if (!Array.isArray(packet[field]) || packet[field].length !== 0) fail(`packet ${field} must be empty`);
   }
   if (Object.hasOwn(packet, "validationEvidence")) utf8Bytes(packet.validationEvidence, "packet validationEvidence", LIMITS.argument, { allowEmpty: false });
+  validateAllHunkGrammar(packet);
   return packet;
 }
+
+const NO_NEWLINE_MARKER = "\\ No newline at end of file\n";
+function validateAllHunkGrammar(packet) {
+  for (const patch of packet.patches) for (let hunkIndex = 0; hunkIndex < patch.hunks.length; hunkIndex += 1) {
+    validateHunkGrammar(patch.hunks[hunkIndex], `patches[${packet.patches.indexOf(patch)}].hunks[${hunkIndex}]`, hunkIndex < patch.hunks.length - 1);
+  }
+}
+function validateHunkGrammar(hunk, path, nonFinalHunk) {
+  const match = /^@@ -[0-9]+(?:,([0-9]+))? \+[0-9]+(?:,([0-9]+))? @@/.exec(hunk.header);
+  if (!match) fail(`${path} hunk header is malformed`);
+  const oldCount = Number(match[1] ?? 1);
+  const newCount = Number(match[2] ?? 1);
+  if (![oldCount, newCount].every((count) => Number.isSafeInteger(count) && count >= 0 && count <= LIMITS.hunk)) fail(`${path} hunk line counts exceed their fixed bound`);
+  let oldSeen = 0;
+  let newSeen = 0;
+  let oldEof = false;
+  let newEof = false;
+  let previousOrdinary;
+  for (let lineIndex = 0; lineIndex < hunk.logicalLines.length; lineIndex += 1) {
+    const value = hunk.logicalLines[lineIndex].segments.join("");
+    const isLastLine = lineIndex === hunk.logicalLines.length - 1;
+    if ((!isLastLine || nonFinalHunk) && !value.endsWith("\n")) fail(`${path} logical line is missing its Git output line terminator`);
+    if (value === NO_NEWLINE_MARKER) {
+      if (!previousOrdinary) fail(`${path} no-newline marker must immediately follow an ordinary Git diff line`);
+      const prefix = previousOrdinary[0];
+      const oldSide = prefix !== "+";
+      const newSide = prefix !== "-";
+      if (oldSide && oldSeen !== oldCount) fail(`${path} old-side no-newline marker precedes the old hunk line count`);
+      if (newSide && newSeen !== newCount) fail(`${path} new-side no-newline marker precedes the new hunk line count`);
+      if (prefix === "+" && oldSeen !== oldCount) fail(`${path} new-side no-newline marker is reordered before the old side reaches EOF`);
+      if (prefix === " " && (oldSeen !== oldCount || newSeen !== newCount)) fail(`${path} context no-newline marker is not at the hunk EOF`);
+      if (oldSide && oldEof || newSide && newEof) fail(`${path} no-newline marker is duplicated or out of order`);
+      if (oldSide) oldEof = true;
+      if (newSide) newEof = true;
+      previousOrdinary = undefined;
+      continue;
+    }
+    const prefix = value[0];
+    if (!new Set([" ", "+", "-"]).has(prefix)) fail(`${path} contains a non-marker line with an invalid Git diff prefix`);
+    const oldSide = prefix !== "+";
+    const newSide = prefix !== "-";
+    if (oldSide && oldEof || newSide && newEof) fail(`${path} logical line consumes a side already proven to have reached no-newline EOF`);
+    if (oldSide && ++oldSeen > oldCount || newSide && ++newSeen > newCount) fail(`${path} logical-line prefixes exceed the hunk header counts`);
+    previousOrdinary = prefix;
+  }
+  if (oldSeen !== oldCount || newSeen !== newCount) fail(`${path} logical-line prefixes do not match the hunk header counts`);
+}
+
+const RAW_GIT_OPTIONS = Object.freeze([
+  "--no-pager", "--no-replace-objects",
+  "-c", "trace2.eventTarget=", "-c", "trace2.normalTarget=", "-c", "trace2.perfTarget=",
+  "-c", "color.ui=false", "-c", "core.hooksPath=/dev/null",
+]);
+const RAW_GIT_ENVIRONMENT_NAMES = Object.freeze(process.platform === "win32"
+  ? ["PATH", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA"]
+  : ["PATH", "HOME", "TMPDIR", "TMP", "TEMP"]);
+function rawGitEnvironment() {
+  const environment = {};
+  for (const expectedName of RAW_GIT_ENVIRONMENT_NAMES) {
+    const entry = Object.entries(process.env).find(([name]) => name.toLowerCase() === expectedName.toLowerCase());
+    if (entry && !/^git_/i.test(entry[0])) environment[entry[0]] = entry[1];
+  }
+  return environment;
+}
+async function rawGitText(args, cwd, maxBuffer) {
+  const { execFile } = await import("node:child_process");
+  const result = await new Promise((resolve) => execFile("git", [...RAW_GIT_OPTIONS, ...args], {
+    cwd,
+    env: rawGitEnvironment(),
+    windowsHide: true,
+    encoding: "buffer",
+    timeout: LIMITS.gitTimeout,
+    killSignal: "SIGTERM",
+    maxBuffer,
+  }, (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+  if (result.error) {
+    if (result.error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") fail(`trusted git ${args[0]} output exceeds its fixed bound`);
+    if (result.error.code === "ETIMEDOUT" || result.error.killed) fail(`trusted git ${args[0]} exceeded the fixed ${LIMITS.gitTimeout}ms timeout`);
+    const stderr = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : String(result.stderr ?? "");
+    fail(`trusted git ${args[0]} failed: ${stderr.trim() || result.error.message}`);
+  }
+  const output = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout ?? "");
+  const text = output.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(output)) fail(`trusted git ${args[0]} returned invalid UTF-8`);
+  return text;
+}
+function rawChangedFiles(raw) {
+  const parts = raw.split("\u0000");
+  if (parts.at(-1) === "") parts.pop();
+  if (parts.length % 2) fail("trusted Git returned an ambiguous changed-file list");
+  const files = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    const status = parts[index];
+    const filePath = parts[index + 1];
+    if (!/^[ADM]$/.test(status)) fail("trusted Git returned an unsupported v3 change status");
+    safePath(filePath, "trusted Git changed path");
+    files.push({ path: filePath, status });
+  }
+  if (files.length > LIMITS.files || new Set(files.map(({ path }) => path)).size !== files.length) fail("trusted Git changed-file list exceeds its bound or contains duplicates");
+  return files;
+}
+function rawHunks(diff, filePath) {
+  const starts = [];
+  const header = /^@@ /gm;
+  let match;
+  while ((match = header.exec(diff)) !== null) starts.push(match.index);
+  if (!starts.length) fail(`${filePath} has no textual hunk in trusted Git output`);
+  const hunks = starts.map((start, index) => diff.slice(start, starts[index + 1] ?? diff.length));
+  if (hunks.length > LIMITS.hunks) fail(`${filePath} trusted Git hunk count exceeds its bound`);
+  return hunks;
+}
+function sameRawFiles(actual, expected) {
+  return actual.length === expected.length && actual.every((file, index) => file.path === expected[index].path && file.status === expected[index].status);
+}
+export async function assertRawGitHunkBinding(packet, { base, head, cwd }) {
+  const resolvedBase = (await rawGitText(["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`], cwd, 128)).trim();
+  const resolvedHead = (await rawGitText(["rev-parse", "--verify", "--end-of-options", `${head}^{commit}`], cwd, 128)).trim();
+  if (!SHA.test(resolvedBase) || !SHA.test(resolvedHead)) fail("trusted Git refs did not resolve to exact commits");
+  await rawGitText(["merge-base", "--is-ancestor", resolvedBase, resolvedHead], cwd, 128);
+  const expectedFiles = rawChangedFiles(await rawGitText(["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--no-renames", resolvedBase, resolvedHead], cwd, 64 * 1024));
+  if (packet.base !== resolvedBase || packet.head !== resolvedHead || !sameRawFiles(packet.changedFiles, expectedFiles)) fail("packet content does not match the trusted raw Git-derived v3 packet");
+  for (let index = 0; index < packet.patches.length; index += 1) {
+    const patch = packet.patches[index];
+    const diff = await rawGitText(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", resolvedBase, resolvedHead, "--", patch.path], cwd, LIMITS.diff);
+    const expectedHunks = rawHunks(diff, patch.path);
+    const actualHunks = patch.hunks.map((hunk) => reconstructV3Hunk(hunk));
+    if (actualHunks.length !== expectedHunks.length || actualHunks.some((hunk, hunkIndex) => !Buffer.from(hunk, "utf8").equals(Buffer.from(expectedHunks[hunkIndex] ?? "", "utf8")))) fail(`${patch.path} packet hunks do not match the trusted raw Git-derived v3 packet`);
+  }
+  return { base: resolvedBase, head: resolvedHead };
+}
+
+const originalAssertValidReviewPacketAgainstGit = assertValidReviewPacketAgainstGit;
+assertValidReviewPacketAgainstGit = async function validatorRawGitBinding(input, options = {}) {
+  const structural = assertValidPacketInput(input);
+  await assertRawGitHunkBinding(structural.packet, {
+    base: options.base ?? options.expectedBase,
+    head: options.head ?? options.expectedHead,
+    cwd: options.cwd ?? process.cwd(),
+  });
+  return originalAssertValidReviewPacketAgainstGit(input, options);
+};
+
 function validateCanonical(packet, text) {
   const canonical = serializeReviewPacketV3(packet);
   if (text !== undefined && canonical !== text) fail("packet bytes are not canonical v3 serialization");

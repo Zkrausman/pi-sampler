@@ -42,13 +42,24 @@ and the explicit completeness fields. Each hunk is represented as:
 
 `logicalLines` are the review evidence. Ordered `segments` are only a bounded
 transport representation: they are never independent source chunks and must
-be concatenated in order. A line's byte length and digest cover the exact
-reconstructed UTF-8 bytes, including its line ending when present. A hunk is
-reconstructed as its header, one LF, and the concatenated logical lines. The
-validator rejects missing, duplicated, reordered, oversized, invalid, or
-out-of-order fields, duplicate JSON keys, noncanonical JSON, noncanonical
-segment boundaries, digest/length mismatches, and any hunk that cannot be
-reconstructed within the bounds. Acceptance also requires either trusted
+be concatenated in order. V3 generation captures each raw Git hunk without
+split/join line normalization, so hunk-boundary bytes are preserved exactly.
+A line's byte length and digest cover the exact reconstructed UTF-8 bytes,
+including its line ending when present. Every logical line before the final
+logical line of a hunk retains its Git-output LF, and every non-final hunk must
+retain the LF after its final logical line. Git's explicit `\ No newline at end
+of file` marker is preserved as its own terminated logical line and must remain
+in order after the content line it annotates. The validator matches each hunk's
+old/new header counts to ordinary diff prefixes, permits a marker only after an
+eligible context/add/delete line, and records the old/new side(s) that reached
+no-newline EOF so no later line can consume or remark that side. A final hunk
+may preserve the raw output's final-line terminator semantics. The validator
+rejects missing, duplicated, reordered, oversized, invalid, or out-of-order
+fields, duplicate JSON keys, noncanonical JSON, noncanonical segment
+boundaries, digest/length mismatches, missing non-final-hunk terminators, and
+any hunk that cannot be reconstructed within the bounds. Trusted base/head
+validation independently compares reconstructed hunk bytes with raw Git hunk
+slices before accepting the generator-bound packet. Acceptance also requires either trusted
 base/head refs, which are resolved and regenerated through Git for exact packet
 content, or a separately supplied trusted packet digest. Untrusted expected
 refs, nonexistent commits, non-ancestor ranges, forged hunks, and recounts are
