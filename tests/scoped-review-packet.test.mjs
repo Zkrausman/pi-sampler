@@ -429,6 +429,220 @@ test("v3 packet is the default and keeps a representative multiline hunk line-re
   } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
 });
 
+function gitRaw(cwd, ...args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8" });
+}
+function rawHunks(diff) {
+  const starts = [];
+  const header = /^@@ /gm;
+  let match;
+  while ((match = header.exec(diff)) !== null) starts.push(match.index);
+  assert.ok(starts.length, "raw Git diff must contain a hunk");
+  return starts.map((start, index) => diff.slice(start, starts[index + 1] ?? diff.length));
+}
+
+test("v3 preserves exact Git hunk bytes and non-final LF terminators", async () => {
+  const fixture = await repository();
+  try {
+    const baseLines = Array.from({ length: 30 }, (_, index) => `line ${index}`);
+    const headLines = [...baseLines];
+    headLines[1] = "line 1 changed";
+    headLines[25] = "line 25 changed";
+    const range = await committedRange(fixture.cwd, {
+      base: { "multi-hunk.txt": `${baseLines.join("\n")}\n` },
+      head: { "multi-hunk.txt": `${headLines.join("\n")}\n` },
+    });
+    const raw = gitRaw(fixture.cwd, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", range.base, range.head, "--", "multi-hunk.txt");
+    const packet = await generateReviewPacketV3({ base: range.base, head: range.head }, { cwd: fixture.cwd });
+    const patch = packet.patches.find(({ path }) => path === "multi-hunk.txt");
+    assert.equal(patch.hunks.length, 2);
+    assert.deepEqual(patch.hunks.map(reconstructV3Hunk), rawHunks(raw));
+    assert.ok(patch.hunks.slice(0, -1).every((hunk) => reconstructV3Hunk(hunk).endsWith("\n")));
+    assert.ok(patch.hunks.some((hunk) => hunk.logicalLines.some((line) => line.segments.join("").startsWith(" "))));
+    assert.ok(patch.hunks.some((hunk) => hunk.logicalLines.some((line) => line.segments.join("").startsWith("-"))));
+    assert.ok(patch.hunks.some((hunk) => hunk.logicalLines.some((line) => line.segments.join("").startsWith("+"))));
+    const result = await validateReviewPacketAgainstGit(packet, { base: range.base, head: range.head, cwd: fixture.cwd });
+    assert.equal(result.ok, true, result.errors?.join("; "));
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 rejects self-consistent missing, duplicated, embedded, or reordered terminators", async () => {
+  const fixture = await repository();
+  try {
+    const baseLines = Array.from({ length: 30 }, (_, index) => `line ${index}`);
+    const headLines = [...baseLines];
+    headLines[1] = "line 1 changed";
+    headLines[25] = "line 25 changed";
+    const range = await committedRange(fixture.cwd, {
+      base: { "multi-hunk.txt": `${baseLines.join("\n")}\n` },
+      head: { "multi-hunk.txt": `${headLines.join("\n")}\n` },
+    });
+    const packet = await generateReviewPacketV3({ base: range.base, head: range.head }, { cwd: fixture.cwd });
+    const firstHunk = packet.patches[0].hunks[0];
+    const mutate = (change) => {
+      const candidate = structuredClone(packet);
+      change(candidate.patches[0].hunks[0].logicalLines);
+      for (const line of candidate.patches[0].hunks[0].logicalLines) refreshLineDigest(line);
+      return validateReviewPacketStructure(candidate);
+    };
+    assert.equal(mutate((lines) => {
+      const line = lines.at(-1);
+      line.segments = [line.segments.join("").slice(0, -1)];
+    }).ok, false, "a non-final hunk may not lose its final LF");
+    assert.equal(mutate((lines) => {
+      const line = lines.find((candidate) => candidate.segments.join("").endsWith("\n"));
+      const value = line.segments.join("");
+      line.segments = [`${value}\n`];
+    }).ok, false, "a logical line may not contain a duplicated LF");
+    assert.equal(mutate((lines) => {
+      const line = lines.find((candidate) => candidate.segments.join("").endsWith("\n"));
+      const value = line.segments.join("");
+      line.segments = [`${value.slice(0, -1)}\nembedded`];
+    }).ok, false, "a logical line may not contain an embedded LF");
+    assert.equal(mutate((lines) => {
+      const first = lines[0].segments.join("");
+      const second = lines[1].segments.join("");
+      lines[0].segments = [first.slice(0, -1)];
+      lines[1].segments = [`\n${second}`];
+    }).ok, false, "line terminators may not be reordered");
+    assert.equal(firstHunk.logicalLines.at(-1).segments.join("").endsWith("\n"), true);
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v3 preserves explicit no-newline-at-EOF markers", async () => {
+  const fixture = await repository();
+  try {
+    const range = await committedRange(fixture.cwd, {
+      base: { "no-newline.txt": "old" },
+      head: { "no-newline.txt": "new" },
+    });
+    const raw = gitRaw(fixture.cwd, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", range.base, range.head, "--", "no-newline.txt");
+    const packet = await generateReviewPacketV3({ base: range.base, head: range.head }, { cwd: fixture.cwd });
+    const hunk = packet.patches.find(({ path }) => path === "no-newline.txt").hunks[0];
+    assert.deepEqual([reconstructV3Hunk(hunk)], rawHunks(raw));
+    assert.equal(hunk.logicalLines.filter((line) => line.segments.join("") === "\\ No newline at end of file\n").length, 2);
+    const valid = await validateReviewPacketAgainstGit(packet, { base: range.base, head: range.head, cwd: fixture.cwd });
+    assert.equal(valid.ok, true, valid.errors?.join("; "));
+    const malformed = structuredClone(packet);
+    const marker = malformed.patches[0].hunks[0].logicalLines.find((line) => line.segments.join("").startsWith("\\ No newline"));
+    marker.segments = [marker.segments.join("").slice(0, -1)];
+    refreshLineDigest(marker);
+    assert.equal(validateReviewPacketStructure(malformed).ok, false, "a marker without its Git output terminator must fail");
+  } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test("v2 serialization and digest remain frozen", () => {
+  const packet = {
+    format: "pi-sampler.scoped-review-packet.v2",
+    base: "a".repeat(40),
+    head: "b".repeat(40),
+    changedFiles: [{ path: "tracked.txt", status: "M" }],
+    diffStat: " tracked.txt | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)",
+    patches: [{ path: "tracked.txt", hunks: ["@@ -1 +1 @@\n-old\n+new\n"] }],
+    incomplete: false,
+    omittedHunks: [],
+    byteTruncatedHunks: [],
+    immutableMaterial: [],
+  };
+  assert.equal(serializeReviewPacketV2(packet), `${JSON.stringify(packet, null, 2)}\n`);
+  assert.equal(createHash("sha256").update(serializeReviewPacketV2(packet), "utf8").digest("hex"), "31bdc04ba25a5610c7622541446ca171459546f5fb51fed35b9976c451f73ae6");
+});
+
+function packetLine(value) {
+  const line = { segments: [value], byteLength: 0, sha256: "" };
+  refreshLineDigest(line);
+  return line;
+}
+function canonicalPacketBytes(packet) {
+  for (const patch of packet.patches) for (const hunk of patch.hunks) for (const line of hunk.logicalLines) refreshLineDigest(line);
+  return serializeReviewPacketV3(packet);
+}
+
+test("v3 accepts old-only, new-only, both-side, and context EOF markers", async () => {
+  const lf = String.fromCharCode(10);
+  const marker = `${String.fromCharCode(92)} No newline at end of file${lf}`;
+  const cases = [
+    ["old-only", "old", `old${lf}`, ["-"]],
+    ["new-only", `old${lf}`, "new", ["+"]],
+    ["both-side", "old", "new", ["-", "+"]],
+    ["context", `before${lf}context`, `after${lf}context`, [" "]],
+  ];
+  for (const [name, baseContent, headContent, expectedPrefixes] of cases) {
+    const fixture = await repository();
+    try {
+      const range = await committedRange(fixture.cwd, { base: { "marker-shapes.txt": baseContent }, head: { "marker-shapes.txt": headContent } });
+      const packet = await generateReviewPacketV3({ base: range.base, head: range.head }, { cwd: fixture.cwd });
+      const hunk = packet.patches.find(({ path }) => path === "marker-shapes.txt").hunks[0];
+      const lines = hunk.logicalLines.map((line) => line.segments.join(""));
+      const markerPrefixes = lines.flatMap((line, index) => line === marker ? [lines[index - 1][0]] : []);
+      assert.deepEqual(markerPrefixes, expectedPrefixes, name);
+      assert.equal(validateReviewPacketStructure(serializeReviewPacketV3(packet)).ok, true, name);
+      const bound = await validateReviewPacketAgainstGit(packet, { base: range.base, head: range.head, cwd: fixture.cwd });
+      assert.equal(bound.ok, true, `${name}: ${bound.errors?.join("; ")}`);
+    } finally { await rm(fixture.cwd, { recursive: true, force: true }); }
+  }
+});
+
+test("v3 rejects canonical duplicated, moved, and reordered EOF markers", async () => {
+  const lf = String.fromCharCode(10);
+  const marker = `${String.fromCharCode(92)} No newline at end of file${lf}`;
+  const contextFixture = await repository();
+  const reorderedFixture = await repository();
+  try {
+    const contextRange = await committedRange(contextFixture.cwd, {
+      base: { "marker-shapes.txt": `before${lf}context` },
+      head: { "marker-shapes.txt": `after${lf}context` },
+    });
+    const contextPacket = await generateReviewPacketV3({ base: contextRange.base, head: contextRange.head }, { cwd: contextFixture.cwd });
+    const contextHunk = contextPacket.patches[0].hunks[0];
+    const plusIndex = contextHunk.logicalLines.findIndex((line) => line.segments.join("").startsWith("+"));
+    const originalMarkerIndex = contextHunk.logicalLines.findIndex((line) => line.segments.join("") === marker);
+    assert.ok(plusIndex >= 0); assert.ok(originalMarkerIndex > plusIndex);
+
+    const insertedDuplicate = structuredClone(contextPacket);
+    insertedDuplicate.patches[0].hunks[0].logicalLines.splice(plusIndex + 1, 0, packetLine(marker));
+    const movedAfterContent = structuredClone(contextPacket);
+    const [movedMarker] = movedAfterContent.patches[0].hunks[0].logicalLines.splice(originalMarkerIndex, 1);
+    const movedPlusIndex = movedAfterContent.patches[0].hunks[0].logicalLines.findIndex((line) => line.segments.join("").startsWith("+"));
+    movedAfterContent.patches[0].hunks[0].logicalLines.splice(movedPlusIndex + 1, 0, movedMarker);
+
+    for (const [name, candidate] of [["inserted duplicate separated by context", insertedDuplicate], ["marker moved after content", movedAfterContent]]) {
+      const canonical = canonicalPacketBytes(candidate);
+      assert.equal(validateReviewPacketStructure(canonical).ok, false, name);
+      const bound = await validateReviewPacketAgainstGit(canonical, { base: contextRange.base, head: contextRange.head, cwd: contextFixture.cwd });
+      assert.equal(bound.ok, false, `${name} must fail exact Git binding`);
+    }
+
+    const rawDisagreement = structuredClone(contextPacket);
+    const rawLine = rawDisagreement.patches[0].hunks[0].logicalLines.find((line) => line.segments.join("").startsWith("+"));
+    const rawValue = rawLine.segments.join("");
+    rawLine.segments = [`${rawValue.slice(0, -1)}X${String.fromCharCode(10)}`];
+    const rawBound = await validateReviewPacketAgainstGit(canonicalPacketBytes(rawDisagreement), { base: contextRange.base, head: contextRange.head, cwd: contextFixture.cwd });
+    assert.equal(rawBound.ok, false, "a structurally valid packet with wrong raw bytes must fail exact binding");
+    assert.match(rawBound.errors?.[0] ?? "", /trusted raw Git-derived v3 packet/);
+
+    const reorderedRange = await committedRange(reorderedFixture.cwd, {
+      base: { "marker-shapes.txt": `old1${lf}old2` },
+      head: { "marker-shapes.txt": "new1" },
+    });
+    const reorderedPacket = await generateReviewPacketV3({ base: reorderedRange.base, head: reorderedRange.head }, { cwd: reorderedFixture.cwd });
+    const reorderedHunk = reorderedPacket.patches[0].hunks[0];
+    const oldLines = reorderedHunk.logicalLines.filter((line) => line.segments.join("").startsWith("-"));
+    const newLine = reorderedHunk.logicalLines.find((line) => line.segments.join("").startsWith("+"));
+    const markerLines = reorderedHunk.logicalLines.filter((line) => line.segments.join("") === marker);
+    assert.equal(oldLines.length, 2); assert.ok(newLine); assert.equal(markerLines.length, 2);
+    reorderedHunk.logicalLines = [oldLines[0], newLine, markerLines[1], oldLines[1], markerLines[0]];
+    const reorderedCanonical = canonicalPacketBytes(reorderedPacket);
+    assert.equal(validateReviewPacketStructure(reorderedCanonical).ok, false, "reordered old/new markers");
+    const reorderedBound = await validateReviewPacketAgainstGit(reorderedCanonical, { base: reorderedRange.base, head: reorderedRange.head, cwd: reorderedFixture.cwd });
+    assert.equal(reorderedBound.ok, false, "reordered old/new markers must fail exact Git binding");
+    const { assertRawGitHunkBinding } = await import(pathToFileURL(packetValidator).href);
+    await assert.rejects(() => assertRawGitHunkBinding(reorderedPacket, { base: reorderedRange.base, head: reorderedRange.head, cwd: reorderedFixture.cwd }), /trusted raw Git-derived v3 packet/);
+  } finally {
+    await Promise.all([rm(contextFixture.cwd, { recursive: true, force: true }), rm(reorderedFixture.cwd, { recursive: true, force: true })]);
+  }
+});
+
 test("review packet rejects intermediate-length commit IDs", async () => {
   const fixture = await repository();
   try {
