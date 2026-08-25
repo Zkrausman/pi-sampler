@@ -93,11 +93,12 @@ The two stages are bounded and have different authorities.
    it must not be represented or invoked as a Pi provider/model, Pi model ID,
    local provider, or Pi subagent. Do not add a Gemini adapter, provider alias,
    or automatic Antigravity invocation.
-3. Gemini drafts one implementation plan and one sibling
-   `docs/techPlans/[TICKET-ID]-acceptance-manifest-v1.json`. The plan uses
-   stable ASCII ticket-scoped ID values for acceptance IDs, and each manifest
-   row binds one ID to its acceptance class and requirement. The artifacts
-   remain uncommitted.
+3. Gemini drafts one implementation plan and one sibling manifest. Before
+   trusted-base activation, the historical handoff is
+   `docs/techPlans/[TICKET-ID]-acceptance-manifest-v1.json`; after activation,
+   new manual outputs use the deterministic sibling
+   `docs/techPlans/[TICKET-ID]-acceptance-manifest-v2.json` with
+   `schema_version: implementation-plan-manifest/v2`. The plan uses stable ASCII ticket-scoped ID values for acceptance IDs, and each manifest row binds one ID to its acceptance class and requirement. The artifacts remain uncommitted.
 4. Run exactly one built-in challenge round. For ordinary risk, the challenge
    is a completeness/repository-reality challenge. For high or critical risk,
    or an explicit threat-model trigger, the same single round gains adversarial
@@ -186,6 +187,44 @@ inputs cannot select trusted policy, models, roles, hard dependencies, or
 publication rules; those values come from the approved profile, explicit
 trusted base, and operator-owned policy.
 
+## Trusted-base v2 activation and deterministic validation
+
+After Slice 3 is reviewed and merged, the default manual output contract is
+`docs/techPlans/[TICKET-ID]-implementation-plan.md` plus the sibling
+`docs/techPlans/[TICKET-ID]-acceptance-manifest-v2.json`. Activation is selected
+only by the exact trusted base containing both the reviewed
+`contracts/implementation-plan-manifest-v2.mjs` contract and
+`scripts/validate-implementation-plan.mjs` validator. Candidate bytes, a
+working-tree file, CLI flags, environment variables, or a manifest field
+cannot activate or replace that trusted rule.
+
+Before the one fresh independent plan review, run the deterministic validator
+with the exact comparison bindings and ticket revision:
+
+```sh
+node scripts/validate-implementation-plan.mjs \
+  --plan docs/techPlans/[TICKET-ID]-implementation-plan.md \
+  --manifest docs/techPlans/[TICKET-ID]-acceptance-manifest-v2.json \
+  --base <TRUSTED-BASE-SHA> \
+  --profile <approved-profile> \
+  --repository <owner/repository> \
+  --ticket [TICKET-ID] \
+  --ticket-revision <TRUSTED-TICKET-REVISION> \
+  --json
+```
+
+Validation success is necessary bounded evidence, never plan approval. A
+reproducible validator defect returns to the manual planner for complete
+artifact remediation within the existing two planner-fix/same-reviewer-verify
+cycles; it does not add a cycle or grant implementation authority. Independent
+review remains the approval gate and its protocol is unchanged.
+
+The historical `acceptance-manifest/v1` artifacts, including AIDEV-182, remain
+readable and are never silently upgraded or rewritten. Rollback preserves the
+manual-only uncommitted workflow and separate action authorities; it never
+silently downgrades a new v2 handoff, upgrades a v1 artifact, or restores
+automatic commit, push, PR, tracker, publication, review, or merge behavior.
+
 ## Review-evidence compatibility
 
 Preserve the valid AIDEV-159 exact-head review behavior. The exact trusted base
@@ -212,16 +251,14 @@ Model/profile values are bounded operator or maintainer claims, not proof that
 an external model ran. Keep full receipts, sessions, prompts, findings, and
 raw review material local.
 
-## Current v1 compatibility and future activation
+## Historical v1 compatibility
 
-Slice 1 keeps the current `acceptance-manifest/v1` planning output and all
-existing v1 plans readable. It does not add an
-implementation-plan-manifest/v2 contract, schema exporter, generated schema,
-deterministic validator, negative fixtures, audit corpus, scheduler, or
-automatic external-planner behavior. Future v2 activation is permitted only
-after the trusted v2 contract and validator implementation are reviewed and
-merged into the trusted base. A v2 design or candidate input cannot activate
-itself, select its own trusted policy, or bypass independent approval.
+The historical `acceptance-manifest/v1` planning output and all existing v1
+plans remain readable. AIDEV-182 remains a v1 bootstrap artifact. The v1
+boundary does not invent a ticket revision, portfolio metadata, dependency
+evidence, or revalidation state, and it never silently rewrites or upgrades a
+historical artifact. New default planning uses v2 only after the reviewed
+contract and deterministic validator are present on the exact trusted base.
 
 ## Sanitized rollback
 

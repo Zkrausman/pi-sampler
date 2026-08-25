@@ -1,0 +1,11 @@
+[
+  {"ticket":"AIDEV-132","plan_path":"docs/techPlans/AIDEV-132-implementation-plan.md","plan_sha256":"4871007c3efe8576f31db9c6229d20f172df82640e49d836e7a54cd7f065f1cc","class":"digest-mismatch","expected_codes":["plan_digest_mismatch"]},
+  {"ticket":"AIDEV-133","plan_path":"docs/techPlans/AIDEV-133-implementation-plan.md","plan_sha256":"c71b6adab190e54d344c9d9bc4f96b14efe9ff4263762034eb49b3ba48456a1b","class":"acceptance-id-mismatch","expected_codes":["acceptance_id_extra","acceptance_id_missing"]},
+  {"ticket":"AIDEV-134","plan_path":"docs/techPlans/AIDEV-134-implementation-plan.md","plan_sha256":"3a1969d667cac8be6adc60f430146ff05330c83b0e3e780ed2ede69e8376b3de","class":"base-drift","expected_codes":["manifest_binding_mismatch"]},
+  {"ticket":"AIDEV-135","plan_path":"docs/techPlans/AIDEV-135-implementation-plan.md","plan_sha256":"432f5b56a58b4579940ba5f67a7614c35c7b16f9a0f80528216d05fea819a106","class":"repository-mismatch","expected_codes":["manifest_binding_mismatch"]},
+  {"ticket":"AIDEV-136","plan_path":"docs/techPlans/AIDEV-136-implementation-plan.md","plan_sha256":"44904a55860e81ab18d68161b191b3701b52429a1d26ff76a597ebdf959c4202","class":"readiness-gap","expected_codes":["readiness_blocked"]},
+  {"ticket":"AIDEV-137","plan_path":"docs/techPlans/AIDEV-137-implementation-plan.md","plan_sha256":"ae3035e6617b27e9e0b496f76b094e40bf5852b785d8a57ccb391b9a23eb8b1e","class":"ticket-mismatch","expected_codes":["manifest_binding_mismatch"]},
+  {"ticket":"AIDEV-138","plan_path":"docs/techPlans/AIDEV-138-implementation-plan.md","plan_sha256":"724d7b1ab271522fda90c1315c0b62775239b25b7adb35ec2ff9973ab6907d7b","class":"legacy-v1-boundary","expected_codes":["legacy_v1_no_rewrite","legacy_v1_not_v2","legacy_v1_readable","legacy_v1_semantics_unavailable"]},
+  {"ticket":"AIDEV-139","plan_path":"docs/techPlans/AIDEV-139-implementation-plan.md","plan_sha256":"d620b97f4e39d31beb0304246e1e82e28f44476380e81bb12bd391f26efbb6c7","class":"dependency-evidence-gap","expected_codes":["revalidation_invalid"]},
+  {"ticket":"AIDEV-140","plan_path":"docs/techPlans/AIDEV-140-implementation-plan.md","plan_sha256":"88f03dbd8dbf79ed14a6342c557c15af6c4b6800031f0720a9dc925b5e43dc73","class":"missing-ticket-revision","expected_codes":["manifest_schema_invalid"]}
+]

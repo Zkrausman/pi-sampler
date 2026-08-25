@@ -113,6 +113,19 @@ function assertRollbackPolicy(text) {
   rejectPolicy(text, /rollback (?:may|can|should) restore[\s\S]{0,100}team wrapper[\s\S]{0,60}active workflow/i, "rollback mutation restores the team wrapper");
 }
 
+function assertV2ActivationPolicy(text) {
+  requirePolicy(text, /docs\/techPlans\/\[TICKET-ID\]-acceptance-manifest-v2\.json/i, "deterministic v2 manifest filename is missing");
+  requirePolicy(text, /schema_version:\s*implementation-plan-manifest\/v2/i, "v2 schema version is missing");
+  requirePolicy(text, /scripts\/validate-implementation-plan\.mjs[\s\S]{0,500}--plan[\s\S]{0,160}--manifest[\s\S]{0,160}--base[\s\S]{0,160}--profile[\s\S]{0,160}--repository[\s\S]{0,160}--ticket[\s\S]{0,160}--ticket-revision[\s\S]{0,160}--json/i, "trusted validator command is incomplete");
+  requirePolicy(text, /exact trusted base[\s\S]{0,180}(?:contains both|containing both)[\s\S]{0,160}implementation-plan-manifest-v2\.mjs[\s\S]{0,160}validate-implementation-plan\.mjs/i, "trusted-base activation condition is missing");
+  requirePolicy(text, /(?:validator[\s\S]{0,180}before[\s\S]{0,180}(?:one fresh independent|independent) (?:plan )?review|before[\s\S]{0,120}validator[\s\S]{0,180}(?:one fresh independent|independent) (?:plan )?review)/i, "validation-before-review boundary is missing");
+  requirePolicy(text, /validation success is necessary[\s\S]{0,80}never plan approval/i, "validation is incorrectly treated as approval");
+  requirePolicy(text, /(?:validator[\s\S]{0,220}manual planner[\s\S]{0,220}(?:reproducible defect|reproducible)|reproducible validator defect[\s\S]{0,220}manual planner)/i, "validator remediation owner is missing");
+  requirePolicy(text, /(?:existing two|two planner-fix)[\s\S]{0,140}(?:planner-fix|same-reviewer-verify|cycle)/i, "validator remediation cycle bound is missing");
+  requirePolicy(text, /historical[\s\S]{0,120}(?:v1|acceptance-manifest\/v1)[\s\S]{0,160}(?:readable|never silently)/i, "historical v1 boundary is missing");
+  rejectPolicy(text, /validation success (?:is|means|constitutes) (?:plan )?approval/i, "validation grants plan approval");
+}
+
 function assertWorkflowPolicy(text) {
   assertExplicitBasePolicy(text);
   assertApprovalPolicy(text);
@@ -121,6 +134,7 @@ function assertWorkflowPolicy(text) {
   assertReviewerPolicy(text);
   assertAuthorityPolicy(text);
   assertRollbackPolicy(text);
+  assertV2ActivationPolicy(text);
 }
 
 test("canonical skill provisions an explicit immutable leased planning worktree", async () => {
@@ -172,6 +186,20 @@ test("canonical planning keeps the bounded two-stage authority and evidence boun
   assert.match(skill, /revoked receipt invalidates an older[\s\S]{0,30}marker/is);
   assert.match(skill, /pre-push hook invokes[\s\S]*artifacts\/final-review\/receipt\.json/is);
   assert.doesNotMatch(skill, /pi-sampler-adversarial-review-attestation:v2 .*version.*2/);
+});
+
+test("v2 activation remains trusted-base selected, validation-before-review, and non-approval", async () => {
+  const [skill, documentation] = await Promise.all([
+    readFile(canonicalSkillUrl, "utf8"),
+    readFile(planningDocumentationUrl, "utf8"),
+  ]);
+  for (const source of [skill, documentation]) {
+    assertV2ActivationPolicy(source);
+    assert.throws(
+      () => assertV2ActivationPolicy(`${source}\nValidation success is plan approval.\n`),
+      /validation grants plan approval/,
+    );
+  }
 });
 
 test("AIDEV-159 evidence guidance remains current and bootstrap-only v2", async () => {
