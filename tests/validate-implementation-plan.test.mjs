@@ -526,7 +526,10 @@ test("parent-directory rename and reparse swaps fail closed before candidate byt
       }
       if (swapped) {
         assert.ok(readError, "the synchronized parent swap must fail closed");
-        assert.ok(["path_symlink", "path_outside_root"].includes(readError.code), readError.code);
+        assert.ok(
+          ["path_symlink", "path_outside_root", "path_missing"].includes(readError.code),
+          `Linux traversal may observe the replaced parent as missing: ${readError.code}`,
+        );
       } else {
         assert.ok(["EPERM", "EACCES", "ENOSYS"].includes(readError?.code), `unexpected native reparse limitation: ${readError?.code}`);
       }
