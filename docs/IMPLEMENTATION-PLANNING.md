@@ -41,8 +41,12 @@ handcraft `git worktree add`, reuse `ai-workspaces/[TICKET-ID]`, or commit a
 lease token.
 
 The planning outputs are deliberately limited to an uncommitted
-`docs/techPlans/[TICKET-ID]-implementation-plan.md` and its sibling
-`docs/techPlans/[TICKET-ID]-acceptance-manifest-v1.json`. Research packets and
+`docs/techPlans/[TICKET-ID]-implementation-plan.md` and one deterministic
+sibling manifest. Before trusted-base activation, historical handoffs use
+`docs/techPlans/[TICKET-ID]-acceptance-manifest-v1.json`; after Slice 3 is
+reviewed and merged, new manual outputs use
+`docs/techPlans/[TICKET-ID]-acceptance-manifest-v2.json` with
+`schema_version: implementation-plan-manifest/v2`. Research packets and
 review material stay local and redacted.
 
 ## Migration from the team wrapper
@@ -51,11 +55,10 @@ The former `.agents/skills/create-implementation-plan-team/SKILL.md` is retired
 and deleted. It is not a compatibility alias and must not be invoked. Existing operators should replace the team-wrapper invocation with the canonical `create-implementation-plan` skill, then follow the same explicit-base provisioning and manual handoff below. No repository automation, provider
 registration, or wrapper alias restores the retired entry point.
 
-This migration consolidates authority; it does not add a validator, manifest v2
-contract, schema exporter, generated schema, audit corpus, campaign scheduler,
-or automatic external-planner integration. Those are future, separately
-approved work. The current v1 planning output remains compatible with existing
-plans and manifests.
+This migration consolidates authority and preserves historical v1 behavior.
+Slice 3 adds the reviewed v2 contract and deterministic validator, but only the
+exact trusted base can activate the new default. The current v1 planning output
+remains compatible with existing plans and manifests and is never rewritten.
 
 ## Manual Antigravity workflow
 
@@ -81,11 +84,13 @@ profiles cannot select trusted models, roles, policy, or hard dependencies.
 Candidate content may propose dependencies, but only trusted policy and an
 operator can accept a dependency as hard.
 
-Gemini writes one implementation plan and one sibling v1 manifest, both
-uncommitted. The plan uses stable ASCII ticket-scoped ID values for acceptance
-IDs, and the manifest maps every ID to its requirement and acceptance class.
-Gemini does not commit, push, create or change a PR, update a tracker, publish
-review artifacts, or merge.
+Gemini writes one implementation plan and one versioned sibling manifest, both
+uncommitted. Before trusted-base activation the historical sibling is v1; after
+activation new manual planning uses
+`docs/techPlans/[TICKET-ID]-acceptance-manifest-v2.json` with
+`schema_version: implementation-plan-manifest/v2`. The plan uses stable ASCII
+ticket-scoped ID values for acceptance IDs, and the manifest maps every ID to
+its requirement and acceptance class. Gemini does not commit, push, create or change a PR, update a tracker, publish review artifacts, or merge.
 
 ## Two-stage state model
 
@@ -179,17 +184,43 @@ The repository is the authority for documentation and contracts. The wiki is
 contextual only. Candidate inputs are never a source of trusted policy, model,
 role, hard dependency, publication rule, or approval state.
 
-## Current v1 compatibility and future v2 activation
+## Trusted-base v2 activation and validation
 
-Slice 1 preserves current `acceptance-manifest/v1` compatibility. Existing v1
-plans and manifests remain readable and are not silently rewritten. The sibling
-manifest is a planning handoff artifact, not an activation of a validator.
+After Slice 3 is reviewed and merged, the default manual output is
+`docs/techPlans/[TICKET-ID]-implementation-plan.md` plus the deterministic
+sibling `docs/techPlans/[TICKET-ID]-acceptance-manifest-v2.json` using
+`schema_version: implementation-plan-manifest/v2`. Activation is selected only
+when the exact trusted base contains both the reviewed
+`contracts/implementation-plan-manifest-v2.mjs` contract and
+`scripts/validate-implementation-plan.mjs` validator. Candidate bytes,
+working-tree files, CLI flags, environment variables, or manifest fields
+cannot activate or replace that rule.
 
-Future `implementation-plan-manifest/v2` behavior may activate only after the
-trusted v2 contract, schema/export path, deterministic validator, and their
-reviewed tests are implemented and merged into the trusted base. Slice 1 does
-not implement or add those pieces. A v2 design or candidate input cannot
-activate itself, select its own trusted policy, or bypass independent approval.
+Run the validator before the one fresh independent review, using exact
+comparison bindings and the trusted ticket revision:
+
+```sh
+node scripts/validate-implementation-plan.mjs \
+  --plan docs/techPlans/[TICKET-ID]-implementation-plan.md \
+  --manifest docs/techPlans/[TICKET-ID]-acceptance-manifest-v2.json \
+  --base <TRUSTED-BASE-SHA> \
+  --profile <approved-profile> \
+  --repository <owner/repository> \
+  --ticket [TICKET-ID] \
+  --ticket-revision <TRUSTED-TICKET-REVISION> \
+  --json
+```
+
+Validation success is necessary bounded evidence and never plan approval. A
+failed validator result returns to the manual planner only for a reproducible
+defect, within the existing two planner-fix/same-reviewer-verify cycles. The
+independent reviewer and its bounded remediation protocol remain unchanged.
+
+Historical `acceptance-manifest/v1` artifacts, including AIDEV-182, remain
+readable and are never silently upgraded or rewritten. Rollback preserves
+manual-only uncommitted planning and separate action authorities; it does not
+silently downgrade or upgrade artifacts and never restores automatic commit,
+push, PR, tracker, publication, review, or merge behavior.
 
 ## AIDEV-159 exact-head publication evidence
 
