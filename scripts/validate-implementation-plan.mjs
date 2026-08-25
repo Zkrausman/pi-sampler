@@ -659,7 +659,7 @@ export function parseImplementationPlanValidatorArgs(argv) {
 function sanitizePointer(value, fallback = "/manifest") {
   if (typeof value !== "string" || value.length === 0 || byteLength(value) > L.maxDiagnosticPathBytes) return fallback;
   const normalized = value.startsWith("/") ? value : `/${value}`;
-  if (!/^\/(?:[A-Za-z0-9_.-]+|[0-9]+)(?:\/(?:[A-Za-z0-9_.-]+|[0-9]+))*$/.test(normalized)) return fallback;
+  if (!/^\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(normalized)) return fallback;
   return normalized;
 }
 
