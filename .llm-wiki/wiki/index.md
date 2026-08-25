@@ -6,6 +6,7 @@ okf_version: "0.2"
 
 ## Directories
 
+- [analyses/](analyses/)
 - [changes/](changes/)
 - [decisions/](decisions/)
 - [requirements/](requirements/)
