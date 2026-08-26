@@ -1,0 +1,235 @@
+# AIDEV-191 — exact implementation-plan-manifest/v2 delivery admission
+
+## 0. Authority and immutable binding
+
+This complete two-file plan is uncommitted size remediation only. Independent approval remains mandatory; planning grants no implementation, commit, push, PR/tracker mutation, marker, merge, cleanup, or quarantine authority. `do not merge` remains sticky; only `Merge PR #N` authorizes that merge.
+
+| Fact | Value |
+|---|---|
+| Repository/profile | `Zkrausman/pi-sampler`; `profiles/pi-sampler.json` |
+| Trusted base | `3d858a0d4f8219f5ca1db13ad1de72e35ee09758` |
+| Ticket/revision | `AIDEV-191`; `80a83a007ceffd8f35a6be12b97c01f781b1f7b67874cc2b7c2185c053e84384` |
+| Ticket snapshot | `4baf5467e678d702b05ce40e90bb700b248fc1421147d88d3da482d5de59be13` |
+| Bootstrap/replacement/continuing authority | `7a85b262fd92dd7b765c3383a655686881b66b4529444831a7bfedafd9beb30e`; `409d3f59503d5f89ec7be4e33c7ba398532009d6e1cec129c1191790d0953a46`; `92ab5154c9325b606281321b0c23115741caaa86a33881918bb7c54b08b49608` |
+| Size authority/blocker | `37a9992a527312d42204277a4562bc230356e5044edf50cf3e841588a4eccf92`; `abca7690d897c43259f08e5d650c4b61e881f20f232b6c2e942c29b7637ac79e` |
+
+Mandatory order: (1) old-base plan-publication bootstrap; (2) inert Slice 1 at the exact base; (3) merge output captures `SLICE1_SHA`/`SLICE1_OUTPUT_SHA256` and makes this pair stale; (4) rewrite/revalidate the complete pair against `SLICE1_SHA` and renew independent approval; (5) Slice 2 transition from exact `SLICE1_SHA`; (6) activated validation only after Slice 2 merge; (7) refresh/review PR #172. Same-ticket output is a plan transition gate, never a manifest self-dependency.
+
+## 1. D1 — strict acceptance-matrix/v2 contract
+
+### 1.1 Canonical bytes, limits, root
+
+Source/runtime: `governance/docs/delivery-evidence/acceptance-matrix-v2.schema.json` and `AcceptanceMatrixV2` in `governance/pkg/deliveryevidence/acceptance_v2.go`; generated/runtime parity is required. Every object is `additionalProperties:false`.
+
+Canonical JSON is valid UTF-8, no BOM/CR/tab/leading or trailing whitespace, exact prescribed key order, shortest JSON escaping/integers, arrays in declared order, and exactly `JSON.stringify(value)+"\n"`. Strict bounded parse precedes typed decode; duplicate key=`matrix_duplicate_key`, malformed=`matrix_json_invalid`, valid noncanonical bytes/order/whitespace/trailing data=`matrix_noncanonical`, unknown/type/bound failure=`matrix_schema_invalid`. Matrix/manifest <=2,097,152 bytes; plan <=4,194,304; depth <=16; rows 1..128; default string <=2,048 UTF-8 bytes; argv 1..32, each 1..256.
+
+Every `*_sha256` is lowercase SHA-256 of exact raw named bytes (no newline normalization); artifact hashes likewise. Only `facts_sha256=SHA256(UTF8("pi-sampler.delivery-normalized-facts/v1\0")||canonicalFactsBytes)`. Receipt continues hashing exact matrix bytes.
+
+Root order and contract:
+
+| # | Key | Exact value/type |
+|---:|---|---|
+|1–3|`schema_version`,`manifest_schema_version`,`evaluation_scope`|`acceptance-matrix/v2`; `implementation-plan-manifest/v2`; `plan-publication|implementation-delivery`|
+|4–6|`repository`,`ticket_id`,`ticket_revision`|trusted values; manifest-v2 patterns; revision 40/64 lowercase hex|
+|7–8|`profile_path`,`profile_sha256`|`profiles/pi-sampler.json`; trusted-base raw digest|
+|9–11|`base_sha`,`head_sha`,`pull_request_number`|trusted 40/64 hex; clean candidate head != base; integer 1..1,000,000,000|
+|12–15|`plan_path`,`plan_sha256`,`manifest_path`,`manifest_sha256`|portable paths <=256; exact raw digests; manifest is deterministic `-acceptance-manifest-v2.json` sibling|
+|16–21|`manifest_contract_path`,`manifest_contract_sha256`,`manifest_validator_path`,`manifest_validator_sha256`,`matrix_contract_path`,`matrix_contract_sha256`|fixed paths `contracts/implementation-plan-manifest-v2.mjs`, `scripts/validate-implementation-plan.mjs`, matrix schema path; authenticated raw blob digests|
+|22–23|`policy_path`,`policy_sha256`|fixed profile path/digest; equals profile digest|
+|24–26|`evidence_root_id`,`generated_at`,`rows`|opaque `^[A-Za-z0-9][A-Za-z0-9._:-]*$` <=128; UTC millisecond RFC3339; exact rows|
+
+Root binding mismatch=`binding_mismatch`; sibling mismatch=`artifact_path_mismatch`; stale/digest mismatch=`digest_mismatch`.
+
+### 1.2 Rows/evidence/policy
+
+Common row order is `id,acceptance_class,requirement,status`; first three equal the exact manifest row byte-for-byte and rows are unique/in manifest order.
+
+* `plan-publication`: keys append `specification`; status exactly `specified`; implementation/observed/waiver/blocker forbidden. Specification must include `plan-validator-report.json` (`ok:true`, exit 0) and `independent-plan-review.md` (`approved`). It proves specification only.
+* `implementation-delivery observed`: keys append `evidence`; status `observed`; class policy must be satisfied.
+* `implementation-delivery blocked`: keys append `blocker`; status `blocked`; blocker order `code,reason,blocked_by`, stable code <=64, reason 1..2048, stable ID or null. Any blocked row yields exit 3 `blocked/rows_blocked`.
+* `waived`, waiver/signature/replay/nonce/threshold objects have no v2 variant and fail schema; replay is never opened.
+
+`specification`/`evidence` order: `verifier,exit_status,started_at,completed_at,artifacts`. Verifier order: `id,version,environment,argv`; stable ASCII IDs/version <=128; environment `local|ci|review|external`; argv bounds above. Exit is 0 for specified/observed. Times are UTC milliseconds, start<=complete<=generated, duration <=900,000 ms, future skew <=300 s. Artifacts 1..32, unique by name and filesystem-normalized path; object order `name,path,sha256,bytes`; name <=128; path relative POSIX <=240 with no absolute/drive/UNC/device/backslash/percent/control/empty/dot/dot-dot/colon/duplicate/trailing slash; file <=10,485,760 bytes, evidence <=33,554,432, matrix aggregate <=104,857,600. Mapping is exactly `canonicalEvidenceRoot/pathSegments`, never search/glob/fallback.
+
+Policy comes only from authenticated `profiles/pi-sampler.json`; exactly one class ID must match. Verifier id/environment/argv equals trusted verifier/environment/command. Missing/duplicate/mismatch=`policy_missing|policy_ambiguous|verifier_policy_mismatch`. `ordinary|authority|resource-bounded|concurrency` require one evidence object and byte-verified artifact. `requirement` uses trusted `wiki-requirement`, environment external, argv exactly `["external:wiki-requirement"]`, one immutable requirement artifact. `evidence|benchmark` are allowed as `specified` but implementation delivery is exit 3 `unsupported_class_policy` until separately trusted policy exists.
+
+### 1.3 Facts, result, dispatch, precedence
+
+Normalized facts order: `format=pi-sampler.delivery-normalized-facts,version=1,repository,ticketId,ticketRevision,profilePath,profileSha256,baseSha,headSha,pullRequestNumber,planPath,planSha256,manifestPath,manifestSha256,manifestSchemaVersion,manifestContractSha256,manifestValidatorSha256,matrixContractSha256,policySha256,evaluationScope,rows`; row order `id,acceptanceClass,requirement`.
+
+Result order: `format,version,status,code,evaluation_scope,facts_sha256,matrix_sha256,rows,diagnostics`; constants `pi-sampler.delivery-acceptance-result`,1; status `valid|blocked|invalid`; row order `id,status,code`; diagnostics `code,path` sorted by precedence/path. Exit 0 only valid, 3 blocked, 1 invalid, 2 usage. Valid publication=`valid/specified`; valid implementation=`valid/observed`.
+
+Precedence: `usage_invalid,git_unavailable,trusted_base_invalid,activation_absent,trusted_blob_invalid,trusted_digest_mismatch,candidate_root_invalid,source_mutated,artifact_too_large,manifest_validator_failed,manifest_version_unsupported,matrix_duplicate_key,matrix_json_invalid,matrix_schema_invalid,matrix_noncanonical,version_pair_mixed,version_pair_unsupported,binding_mismatch,artifact_path_mismatch,digest_mismatch,row_duplicate,row_missing,row_unknown,row_reordered,row_binding_mismatch,scope_status_mismatch,evidence_root_invalid,evidence_path_invalid,evidence_identity_changed,artifact_digest_mismatch,policy_missing,policy_ambiguous,verifier_policy_mismatch,unsupported_class_policy,rows_blocked`.
+
+Dispatch: frozen v1 manifest/v1 matrix calls only legacy API/results; exact implementation-plan-manifest/v2 + matrix/v2 continues. Mixed=`version_pair_mixed`; unknown/future/upgrade/downgrade=`version_pair_unsupported`; alias gives unknown+missing; projection/binding drift fails; duplicate/missing/unknown/reorder/class/requirement drift uses its exact row code. No alias, projection, silent upgrade/downgrade, or candidate-selected version.
+
+## 2. D2/W2 — trusted controller, modes, exact-head bytes
+
+Authority split: authenticated `scripts/trusted-delivery-evidence-controller.mjs` owns Git/trusted selection and trusted planning-validator invocation; Go `acceptance_v2.go` owns matrix/evidence/policy evaluation from bound facts. JS never decides satisfaction; Go never selects live repository contracts. Exports include JS `main,parseTrustedDeliveryArgs,locateFixedGit,readTrustedBlob,runTrustedPlanValidator,buildNormalizedFacts,canonicalJSONString,sha256Bytes`; Go `AcceptanceMatrixV2,AcceptanceMatrixV2Row,AcceptanceEvidenceV2,AcceptanceArtifactV2,NormalizedFactsV1,AcceptanceResultV1,ValidateAcceptanceV2`; platform `OpenExternalEvidenceRoot,ReadVerifiedArtifact`; low-level `ParseImplementationPlanManifestV2Compatibility` always has `delivery_admitted=false`.
+
+### 2.1 Mode-specific authority
+
+**Support (Slice 1 only):** base `3d858a0d4f8219f5ca1db13ad1de72e35ee09758` contains no v2 controller. Candidate runs exactly:
+
+```text
+<node-24> --test tests/delivery-acceptance.test.mjs tests/delivery-acceptance-v2.test.mjs
+<node-24> scripts/run-governance-tests.mjs
+<npm> test
+```
+
+Canonical report keys `format,version,status,authority,base_sha,head_sha,paths,test_report_sha256,repository_inventory_sha256`; constants `pi-sampler.delivery-v2-support-report`,1,`functional-only`,false. It cannot invoke transition/validate or grant authority; old-base review-policy/workspace/packet/protected-CI plus independent review are sole authority.
+
+**Transition (Slice 2 only):** only after Slice 1 merge, full pair refresh/validation/approval. Exact command:
+
+```text
+<node-24> <SLICE1-worktree>/scripts/trusted-delivery-evidence-controller.mjs --mode transition --trusted-base <SLICE1_SHA> --trusted-worktree <SLICE1-worktree> --candidate-root <clean-Slice2-root> --candidate-activation contracts/delivery-acceptance-v2-activation.json --candidate-activation-map contracts/delivery-acceptance-v2-trusted-map.json --expected-repository Zkrausman/pi-sampler --expected-ticket AIDEV-191 --expected-ticket-revision <refreshed-revision> --expected-head <Slice2-head> --expected-pr <PR> --json
+```
+
+Authenticated predecessor set: manifest contract/schema, planning validator, controller, matrix schema, `acceptance_v2.go`, both external-root platform files, CLI main, profile schema/profile. Both `git cat-file -e SLICE1_SHA:contracts/delivery-acceptance-v2-{activation,trusted-map}.json` must fail specifically as absent; present=`transition_activation[_map]_already_present`, other Git failure=`trusted_git_failure`. Candidate declaration/map are clean-head `100644` blobs: strict activation format/version/state `pi-sampler.delivery-acceptance-v2-activation/1/active`; map `pi-sampler.delivery-acceptance-v2-trusted-map/1` binds declaration raw digest, predecessor and candidate Slice-2 path digests. They remain candidate data. Receipt order: `format,version,status,code,authority,trusted_base,candidate_head,repository,ticket_id,ticket_revision,pull_request_number,trusted_paths,activation_path,activation_sha256,activation_map_path,activation_map_sha256,candidate_paths,test_report_sha256,inventory_before_sha256,inventory_after_sha256,state`; constants `pi-sampler.delivery-v2-transition-receipt`,1,valid,transition_ready,false,`will-activate-after-merge`.
+
+**Validate (post-activation only):** same absolute controller with `--mode validate --trusted-base <activated-base> --trusted-worktree <trusted> --candidate-root <clean> --plan <rel> --manifest <rel> --matrix <external-abs> --evidence-root <external-abs> --expected-repository <repo> --expected-ticket <ticket> --expected-ticket-revision <rev> --expected-head <head> --expected-pr <PR> --evaluation-scope <scope> --json`. Authenticate predecessor set and fixed trusted map/declaration. Parse map first; compare declaration raw digest to `activation_sha256`, then every trusted path digest before candidate reads. Missing=`activation[_map]_absent`; malformed=`activation[_map]_invalid`; mismatch=`trusted_digest_mismatch`.
+
+Mode failure precedence: `usage_invalid,mode_invalid,trusted_base_invalid,trusted_git_failure,trusted_blob_invalid,transition_activation_already_present,transition_activation_map_already_present,activation_absent,activation_map_absent,activation_invalid,activation_map_invalid,trusted_digest_mismatch,candidate_root_invalid,candidate_head_mismatch,candidate_not_clean,candidate_blob_invalid,candidate_inventory_changed,test_failed`. Unknown/inapplicable argv exits 2.
+
+### 2.2 Git/process and exact-head route
+
+Trusted worktree is detached, clean, no-remote at exact base. Fixed Git: POSIX `/usr/bin/git`,`/usr/local/bin/git`; Windows `%ProgramFiles%\Git\cmd\git.exe`, then `bin`. Ignore PATH/Git selectors. Spawn shell false, Git timeout 30 s, stdout 8 MiB, stderr 64 KiB, windowsHide; env only SystemRoot/WINDIR where needed plus `LC_ALL=C,LANG=C,GIT_CONFIG_NOSYSTEM=1,GIT_CONFIG_GLOBAL/SYSTEM=/dev/null|NUL,GIT_TERMINAL_PROMPT=0,GIT_OPTIONAL_LOCKS=0,GIT_NO_REPLACE_OBJECTS=1`. Verify base type commit. Each mode-required path: exactly one `ls-tree -z` entry, mode `100644`, type blob, exact path; `cat-file -t/-s/blob`; contract/profile/schema <=2 MiB, controller/validator <=4 MiB, Go source <=2 MiB. Symlink/tree/submodule/duplicate/oversize/drift=`trusted_blob_invalid`; absence is valid only for transition's declaration/map tests.
+
+Committed scope: trusted validator absolute path is `100644`, 62,467 bytes, SHA-256 `3bea29df796b108ba284ffed25094855253599bc7fe4d8c5c2a920b972ea62fc`. Candidate is separate clean checkout, HEAD=`expected-head`; verify object format/commit/ancestry/common+object identities, no alternates/replacements/grafts/shallow state. Plan/manifest are one `expected-head:path` `100644` blob each; safe file reads before/after equal blob bytes/mode/type/size/digest and inventories. Trusted absolute script runs with cwd=candidate, so cwd resolves candidate Git/files while relative ESM imports resolve trusted contracts and profile is still read at trusted base. Inner argv:
+
+```text
+<node-24> <trusted>/scripts/validate-implementation-plan.mjs --plan <plan> --manifest <manifest> --base <trusted-base> --profile profiles/pi-sampler.json --repository <repo> --ticket <ticket> --ticket-revision <rev> --json
+```
+
+Spawn shell false, stdin closed, timeout 120 s, stdout 1 MiB/stderr 64 KiB, sanitized env above plus no NODE_PATH/NODE_OPTIONS/loaders. One JSON line must be `ok:true` with exact bindings/digests. Uncommitted plan-publication is separately labelled `scope=uncommitted-plan-publication`, requires base HEAD and exactly two authorized untracked files, binds no expected head, and can produce no implementation/packet/receipt/marker/push/merge authority. Controller then sends canonical request (`format,version,normalized_facts,facts_sha256,matrix_base64,evidence_root,policy,controller_time`) via <=12 MiB stdin to trusted-worktree Go 1.25 `acceptance-v2`, timeout 900 s. Pre-semantic failures: `trusted_checkout_invalid,trusted_validator_blob_invalid,candidate_root_invalid,candidate_git_identity_invalid,candidate_head_mismatch,candidate_not_clean,candidate_blob_invalid,candidate_file_mismatch,candidate_inventory_changed,validator_spawn_failed,validator_output_invalid,manifest_validator_failed`.
+
+## 3. D3 — external evidence root
+
+Operator/controller argv is the sole root authority; matrix stores only opaque root ID. Algorithm:
+
+1. Require existing absolute canonical directory, UTF-8 <=1,024; reject empty/relative/drive-relative/UNC/device/control/NUL/trailing-dot-space Windows paths. Open root/final identity. Disjoint both directions from candidate/trusted repository, Git common/object dirs, profile worktree/review/quarantine roots and controller temp. Windows compares final-handle paths after prefix stripping and invariant fold; POSIX exact bytes; macOS probes case behavior.
+2. From filesystem root, lstat/handle-open every ancestor; reject symlink, junction/reparse, non-directory, device/socket/FIFO and identity swaps. Capture/recheck device/volume+file ID; all artifacts stay on root filesystem.
+3. Artifact path grammar is §1.2; depth <=10, component <=255 UTF-8, relpath <=240. Reject case-fold aliases. Enumerate handles sorted by raw relpath: <=1,000 entries, <=10 depth, file <=10 MiB, aggregate <=100 MiB. Only referenced regular files plus one inventory report; reject sparse mismatch, ADS, hard links (`st_nlink/NumberOfLinks !=1`) and special files.
+4. POSIX uses parent-relative `openat(O_NOFOLLOW|O_CLOEXEC)` and file `O_RDONLY|O_NOFOLLOW`; Windows `CreateFileW(FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS)`, deny write/delete sharing, check reparse tag/volume serial/FILE_ID_128. Before/after read compare type, device, ID, links, mode/attributes, size, timestamps; read declared bytes exactly, require EOF, stream SHA-256; recheck ancestors after each file/enumeration. Swap=`evidence_identity_changed`.
+5. Before/after candidate inventory binds HEAD/branch, common/object IDs, bounded porcelain-v2 -z, index digest, sorted untracked path/size/hash; root inventory binds sorted path/type/size/identity/hash. Any mismatch=`source_mutated`; write nothing and restart. V2 never calls v1 `externalPath`, waiver replay, candidate schema lookup, or stat/read path race; all evidence pre-exists.
+
+Linux CI runs real POSIX links/races. Windows local tests run real junction/reparse/hard-link/final-handle cases; unavailable privilege is `blocked/windows_capability_unavailable`, never pass. Portable simulations run in Linux; no protected Windows CI is claimed.
+
+## 4. D4/W1 — bootstrap, slices, rollback
+
+### 4.1 Canonical one-time matrix-v1 bootstrap
+
+Parent inputs outside candidate: exact base/plan/manifest/profile; frozen `ticket-binding.json`; strict canonical `PARENT_INPUT`; matrix-v1; parent-authored checker. Trusted planning validator runs in §2.2 uncommitted scope with exact base/repo/ticket/revision.
+
+Checker uses only Node-24 standard modules and fixed Git, no candidate/old-Go/v2 code. It authenticates base `acceptance-matrix-v1.schema.json`: one `100644` blob, 6,396 bytes, SHA-256 `c52283e1d360491ff67f90d1801f2f5ee7b98f4df9ff6e4c8c9f8dd3d94c0021`, then implements every root/row/property enum/pattern/type/bound.
+
+`PARENT_INPUT` key order: `format,version,repository,ticket_id,ticket_revision,ticket_binding_path,ticket_binding_sha256,profile_path,profile_sha256,profile_bytes,base_sha,head_sha,pull_request_number,plan_path,plan_sha256,plan_raw_sha256,plan_bytes,manifest_path,manifest_sha256,manifest_bytes,review_path,review_sha256,review_bytes,review_decision,started_at,completed_at,generated_at,checker_path,checker_sha256`; format/version `pi-sampler.aidev-191-bootstrap-input`/1. It binds authenticated PR head and approved same-review report.
+
+Safe-read exact ticket-binding bytes before/after; raw digest must equal ticket revision `80a83a007ceffd8f35a6be12b97c01f781b1f7b67874cc2b7c2185c053e84384`; no JSON `ticket_revision` member is expected. Exact real fields: ticket `AIDEV-191`, trusted base `3d858a0d4f8219f5ca1db13ad1de72e35ee09758`, trigger PR 172, snapshot `4baf5467e678d702b05ce40e90bb700b248fc1421147d88d3da482d5de59be13`, trigger report `878e45ef8af52b0b16a86caf98e4ad0dd382fd4441973fb02e436a6086f26da8`, parent AIDEV-168, relations blocks AIDEV-187/blocked_by empty/related AIDEV-182,158,169, and explicit planning authority. `github_issue=Zkrausman/pith#58` is mirror identity, never repository authority. Repository comes only from authenticated base `profiles/pi-sampler.json`: one `100644` blob, 2,748 bytes, SHA-256 `96e4b00bc78b16b5e544ee48f369137c74a2ef040c7b226b5c88d542d2e6a6c9`, strict `repository.source=Zkrausman/pi-sampler`. Parent input must equal all derived facts. Ticket/profile/plan/manifest/review identities/bytes/digests are stable before/after. Root `plan_sha256` alone uses v1 LF-normalization; all others raw.
+
+Only row template: key order `id,status,observed`, status observed. Observed order `acceptance_class,verifier,command,tool_version,environment_class,exit_status,started_at,completed_at,artifacts`; values `requirement`, `aidev-191-plan-specification-parent`, exact trusted-validator argv, `pi-sampler.implementation-plan-validator/v1@3bea29df796b108ba284ffed25094855253599bc7fe4d8c5c2a920b972ea62fc`, `review`,0,input times. Artifacts exactly three ordered `name,sha256,bytes`: final plan, v2 manifest, approved review. This is requirement evidence that approved plan specifies the exact tuple, never implementation. No benchmark/waiver/blocker/ordinary/authority/arbitrary value.
+
+Matrix bytes are exactly canonical JSON+LF with root order `schema_version,ticket_id,repository,plan_sha256,manifest_sha256,base_sha,head_sha,pull_request_number,generated_at,rows`; values exact v1,AIDEV-191,repo,input digests/base/head/PR/time,12 rows. Reconstruct expected from trusted inputs and require byte equality, rejecting duplicate/alias/unknown/reorder/BOM/whitespace/trailing bytes. Matrix <=2 MiB/depth16. Times UTC milliseconds; start<=complete<=generated<=clock+300 s, duration <=120 s, generated not before review. Compare unique ordered plan `{id,requirement}` to manifest `{id,class,requirement}`, then bind every matrix row/artifact; no count-only check.
+
+Command: `<node-24> <parent-checker> --base-checkout <clean-base> --input <input> --plan <plan> --manifest <manifest> --matrix <matrix> --json`, shell false, timeout120 s, stdout1 MiB/stderr64 KiB, sanitized env. Success report has exactly these keys in order, no extras: `format,version,status,code,repository,ticket_id,ticket_revision,ticket_binding_sha256,profile_path,profile_sha256,base_sha,head_sha,pull_request_number,plan_sha256,manifest_sha256,matrix_sha256,schema_sha256,tuple_sha256,parent_input_sha256,semantics,implementation_attested`; semantics is `matrix-v2-unavailable;plan-requirements-specified-only` and `implementation_attested=false`. Failures: `schema_blob_invalid,ticket_binding_invalid,profile_blob_invalid,matrix_json_invalid,matrix_noncanonical,matrix_schema_invalid,binding_mismatch,tuple_mismatch,evidence_mismatch,time_invalid,source_mutated`; usage exit2.
+
+Fresh child launches only after checker, clean parent, workspace/packet/lifecycle preflight and base-selected CI preflight. Receipt/marker and protected marker CI happen only after child. Bootstrap cannot approve, attest implementation, or grant lifecycle authority.
+
+### 4.2 Slices and rollback
+
+Slice 1 base exact original; allowlist is §5 Slice1. Exact old-base preflight is `(cd "$BASE_ROOT" && npm test)` under Node major 24 and `(cd "$BASE_ROOT/governance" && go test -race ./...)` under Go `1.25.0`; both must exit 0 and retain exact stdout/stderr SHA-256. PowerShell uses the same literal argv and cwd semantics (`Set-Location`/`git -C`, `node.exe`, `go.exe`), never a substituted shell command. Then implement inert support with declaration/map absent/profile digest unchanged, run §2 support commands, retain functional-only report, then old-base independent review/protected CI. Candidate support is not authority.
+
+After merge, capture full `SLICE1_SHA`, prove original ancestor and support report head; output drift stales pair. Refresh all base/ticket/plan/contract/runtime/schema/profile/validator/JIT digests and renew approval. Slice 2 allowlist is §5 Slice2. Run §2 transition: authenticate predecessor set, prove trusted declaration/map absent, validate candidate declaration/map and candidate path allowlist, complete tests, no self-validation. Receipt has `will-activate-after-merge`. Post-merge activated base alone may validate.
+
+Sanitized rollback is separately reviewed, never blanket revert: remove trusted declaration/map and v2 profile command while retaining safe inert manual/uncommitted support; validate returns `activation_absent`. If inert support unsafe, reviewed fail-closed stub `planning_disabled`; preserve history/workspaces and never restore automation/team wrapper/commit/push/PR/tracker/publication/merge/replay. Rollback needs its own authorities.
+
+## 5. D7 — exact path ownership
+
+Every ordinary path is in manifest `ownership.files`; dot paths use `path:` symbols. Each New/Modified path belongs to one slice.
+
+**Slice 1 New:** `governance/pkg/deliveryevidence/{acceptance_v2.go,external_root_posix.go,external_root_windows.go}`; `governance/docs/delivery-evidence/acceptance-matrix-v2.schema.json`; `scripts/trusted-delivery-evidence-controller.mjs`; `tests/delivery-acceptance-v2.test.mjs`; `tests/fixtures/delivery-acceptance-v2/{aidev-187-implementation-plan.md,aidev-187-acceptance-manifest-v2.json}`.
+
+**Slice 1 Modified:** `governance/cmd/delivery-evidence-validator/main.go`; `governance/pkg/deliveryevidence/validator_test.go`; `tests/delivery-acceptance.test.mjs`; `package.json` (script only, no dependency/lock change).
+
+**Slice 2 New:** `contracts/delivery-acceptance-v2-{activation,trusted-map}.json`.
+
+**Slice 2 Modified:** `profiles/pi-sampler.json`; `governance/docs/delivery-evidence/README.md`; `docs/IMPLEMENTATION-PLANNING.md`; `.agents/skills/{project-delivery,create-implementation-plan}/SKILL.md`.
+
+**Read-only:** `governance/pkg/deliveryevidence/{acceptance.go,schema.go,validator.go}`; v1 manifest/matrix schemas; implementation-plan manifest contract/schema; planning validator/exporter/tests; profile schema; delivery wrapper/schema validator; packet generator/validator; review policy; DCO; final receipt/attestation/pre-push/protocol; final-receipt/adversarial/scoped-packet tests; `docs/SCOPED-REVIEW.md`; `.github/workflows/{adversarial-review.yml,validate.yml}`; `.github/pull_request_template.md`.
+
+Affected contracts: matrix-v2, manifest-v2 admission/validator, normalized-facts-v1, result-v1, external-root-v2, frozen-v1, activation-v1, trusted-map-v1, lifecycle-v3. Consumers/packages: Node root/profile/tests/docs/skills; Go CLI/package; packet/receipt/marker/pre-push/base CI.
+
+## 6. D8 — frozen v1 and lifecycle
+
+Frozen raw digests: v1 manifest schema `03733cedbc78f42ffc9268d7da7071184b2bf2ab702a0d4211237b278526d53d`; v1 matrix schema `c52283e1d360491ff67f90d1801f2f5ee7b98f4df9ff6e4c8c9f8dd3d94c0021`; `acceptance.go` `1ada2e07253b0b1c5053461cb9d2e4689b14948358b779b847842d50033fcfb6`; `schema.go` `99a2acfc90622040995864b48f1194b919f2a679f7460df57d8a5aa8eddf83fd`. Freeze named v1 constants/functions, LF plan digest, fixture bytes, stdout `delivery evidence valid\n`, exact rejection stderr/exits. Test no alias/projection/upgrade/downgrade and that v2 never calls v1.
+
+Lifecycle map at exact base:
+
+| Path | SHA-256 |
+|---|---|
+|`scripts/final-review-receipt.mjs`|`6f54daaf0ca4d9e9d77a7b6ae10ef501dfefdcd3f95f86b0cf436494f36b8f70`|
+|`scripts/validate-adversarial-review-attestation.mjs`|`3f82e8ac12170dff1dd97be463714000999fee1d23c01b4f436593b976771716`|
+|`scripts/hooks/pre-push.mjs`|`909cbd70be40b99cd08c2087e4ed47a9e9fcc9cbef7147e40c938f100748d992`|
+|`.github/workflows/adversarial-review.yml`|`f13e54e13a3fa6243fce15c71e1cd8b85ab186d58ce8e17eb365bb001847e9cc`|
+|`.github/workflows/validate.yml`|`35c3e2e44099b88a877185670e6a6df9b6da5b404fdb9290d404bd5fed0dbdef`|
+|`.github/pull_request_template.md`|`39487f1e424b45a10ecab24cacb6ad45af79e0bab2873623f17b36f8420240c1`|
+
+Also generator `11ebb005703f69a4431e4a28fdc050409a442e340cc09902c82a348272bff2b2`, review-policy `12d32a4b589dc1d1b05089409cc65e4fffcd7867b5eee438b140688a01cc7b4f`, scoped doc `46513d14f2c6da3e7290a80db3283b61668bc48e25485c3bc3a060ab28c1fe16`; `.github/workflows/test.yml` absent. Exact T12 command: `node --test --test-name-pattern "^A191-T12 trusted lifecycle blob map$" tests/delivery-acceptance-v2.test.mjs`; exactly one test, >=9 blob assertions+absence. Preserve packet-v3, receipt-v1, marker-v3, revocation at same head, fixed `artifacts/final-review/receipt.json`, pull_request_target base execution, opaque evidence privacy, DCO and profile `blockedByDefault:true,userOnly:true,unlockPhrase:"Merge PR #N"`.
+
+## 7. D6 — exact AIDEV-187 compatibility/refresh
+
+Source commit `992ba9bbf044dcaecce1e751695834894aa2d9ea`; plan path/blob/bytes/SHA: `docs/techPlans/AIDEV-187-implementation-plan.md`, `69dcd2680600d15f15a850defbcdfbad4ba51cea`,44,524,`e88bafec7997fa247e56451dc72fd49007e9ac1128679d9ee21a6cc061848744`; manifest path/blob/bytes/SHA: sibling v2 JSON, `817aafda0556dd20fda75e735891a0d7aa5616cd`,17,392,`f11f7b638adfec563482163f91d299df00467a3909bb27458cc9da8c6025dabc`; ticket revision `08967f81071a97e0fa0adb2430906e04fd448413ad41546e6f0b19fa5d24f5d4`; historical base `3d858a0d4f8219f5ca1db13ad1de72e35ee09758`.
+
+Exact ordered tuples:
+
+|ID|Class|Requirement|
+|---|---|---|
+|AIDEV-187-1|authority|The optional schema bridge is admitted by the original-base preflight and full profile tests while current profile, trusted loader, active review scripts, and v3 behavior remain byte-identical.|
+|AIDEV-187-2|authority|Exact-base policy loading and resolution ignore untrusted selectors and follow the fixed catalog, profile-admission, considered-set, availability, precedence, and golden-envelope rules.|
+|AIDEV-187-3|ordinary|The adopted profile resolves manual Antigravity Gemini planner, Luna implementer, Sol primary reviewer, and Sol final reviewer with exact selected envelopes.|
+|AIDEV-187-4|authority|Terra direct selection and same-model Sol role assignments resolve without override or model-inequality trust checks, while context admission remains unavailable.|
+|AIDEV-187-5|ordinary|Allowlisted override, both zero-based fallback positions, malformed availability, unsupported catalogs, nonallowed override, exhaustion, and unspecified policy return exact golden envelopes.|
+|AIDEV-187-6|resource-bounded|Policy and resolution canonical bytes, null or zero-based fallbackIndex values, bounds, and domain-separated digest vectors are identical on Windows and Linux.|
+|AIDEV-187-7|authority|The byte-preserving context consumer rejects self-attestation, keeps the dispatch unavailable, and freezes the exact bounded provider-v1 request, result, module, digest, timeout, and error interface for AIDEV-190.|
+|AIDEV-187-8|authority|Packet v4 exactly maps packet v3 including canonical root package-lock admission through 524288 bytes and ordinary 131072-byte endpoints, binds policy/context digests, rejects stale policy, and remains non-authoritative.|
+|AIDEV-187-9|authority|Receipt v2 binds policy and context digests at root and every pass, and marker v4 follows the exact grammar and key order while preserving lifecycle, revocation, provenance, privacy, and inactive publication.|
+|AIDEV-187-10|authority|Immutable dispatch and package-lock boundary parity preserve packet v3, receipt v1, marker v3, terra-final-v1, and terra-parent bytes/results without invented fields, silent upgrade, reinterpretation, or downgrade.|
+|AIDEV-187-11|ordinary|Every model-neutral agent, skill, API, template, documentation, compatibility alias, test, and fixture path is correctly classified and assigned to exactly one slice.|
+|AIDEV-187-12|authority|All slices use the exact external dependency lease, preceding-base admission, path allowlists, non-vacuous tests, independent review, protected CI, and restored no-residue status while publishing downstream digests without activating v4.|
+
+Old v1 rejects unchanged source with exit 1 and stderr containing all exact substrings `does not match published schema acceptance-manifest-v1.schema.json`, `/schema_version`, `/rows/0/id`, and `^A[0-9]{1,9}-T[0-9]{2,4}$`. Activated low-level parser accepts exact bytes/version/historical base/12 tuple digest as `valid/compatibility_tuple_understood,delivery_admitted=false`; no matrix/full validator. After activation, rebase PR172 and refresh only stale base/ticket/plan/JIT/contract/packet/review bindings; require source/refreshed canonical `{id,acceptance_class,requirement}` bytes identical, then full controller may yield `valid/specified`. Separate reports `aidev-187-source-compatibility-report.json` and `aidev-187-refreshed-delivery-report.json` bind both source/tuple digests; only latter binds refreshed delivery.
+
+Rebase invalidates old base/head/tree, ticket, plan/manifest/JIT, validator/approval, packet/matrix/evidence, reviewer claims, receipt lineage/digests, marker, pre-push and CI. Regenerate all, renew independent plan review and fresh final child; old evidence is stale history. AIDEV-187 is downstream only, not dependency.
+
+## 8. D5 — executable acceptance routes
+
+Shared invariant for every route: Node cwd repository root, Node major24; Go cwd `governance`, Go1.25. Exact commands for ID `A191-Tnn` are `node --test --test-name-pattern "^A191-Tnn " tests/delivery-acceptance-v2.test.mjs` and `go test -race ./pkg/deliveryevidence -run '^TestAcceptanceV2/A191-Tnn$' -count=1 -v`; each must discover exactly one named pass, >=1 assertion, zero fail. Reports are canonical external `A191-Tnn-report.json` containing argv/versions/exit/stable code/assertions/before-after repository+evidence inventories; raw digest goes to named next gate. Candidate tests are functional; predecessor review/CI is authority. Linux runs protected POSIX tests; Windows uses identical `node.exe`/`go.exe` argv locally and privilege absence blocks. Numeric/path/time bounds are §§1–3.
+
+- [ ] A191-T01: Add strict acceptance-matrix/v2 as an additive contract while preserving byte-and-result frozen acceptance-manifest/v1 and acceptance-matrix/v1 behavior.
+  Route: Slice1 schema/runtime/Go+Node tests; base v1 schemas/AIDEV-158 fixtures. Assert canonical parity, frozen blob/result envelopes; v1 mutation/v2-as-v1/extra/reorder fail. Report -> Slice2.
+- [ ] A191-T02: Dispatch only exact v1/v1 and v2/v2 manifest/matrix version pairs and fail mixed, unsupported, alias, projection, upgrade, and downgrade inputs with stable envelopes.
+  Route: Slice1 version-pair temp fixtures; assert exact codes/precedence, no callback/env selector; report -> transition review.
+- [ ] A191-T03: Preserve every implementation-plan-manifest/v2 row ID, class, requirement, uniqueness, and order exactly in acceptance-matrix/v2 without aliases or generated projections.
+  Route: Slice1 AIDEV-187 fixtures; exact positive tuple; duplicate/missing/unknown/reorder/binding mutations fail; report -> bootstrap tuple gate.
+- [ ] A191-T04: Select activation, implementation-plan contract, validator, profile, policy, schema, controller, and Go runtime only from verified regular blobs at the exact trusted base.
+  Route: Slice1 support is functional only. Refreshed Slice2 uses §2 transition: predecessor blobs valid; declaration/map absent trusted but valid candidate blobs; hostile candidate controller/schema/profile ignored. Pre-activation validate=`activation_absent`; post-merge authenticates map/declaration. Wrong mode/object/mode/size/digest/absence fails; report -> Slice2 review.
+- [ ] A191-T05: Bind the canonical matrix root and exact row/evidence/artifact objects to repository, ticket revision, profile, policy, plan, manifest, trusted contracts, validator, base, head, PR, paths, digests, timestamps, and bounded external artifacts.
+  Route: Slice1 table-driven all 26 root keys/object fields; mutate each binding/key/duplicate/order/time/path; test 0/129 rows, 2MiB+1 matrix, 32/33 artifacts, 10MiB+1 file, 100MiB+1 total. Positive valid; exact invalid/blocked codes; report -> transition.
+- [ ] A191-T06: Separate plan-publication specified rows from implementation-delivery observed or blocked rows, with waiver unsupported by v2 activation.
+  Route: Slice1 specified publication and observed delivery positives; blocked exit3. Observed-publication, specified-delivery, waiver/replay/signature/threshold fail and replay sentinel unchanged; report -> lifecycle.
+- [ ] A191-T07: Keep structural validity distinct from satisfaction by requiring trusted class policy and byte-verified, race-safe artifacts from an operator-owned external evidence root with zero source mutation.
+  Route: Slice1 temp root positive; invented digest/missing/wrong bytes/arbitrary verifier/candidate root-policy/source mutation/ancestor swap fail. Real POSIX/Windows identity cases, §§1–3 bounds, equal inventories; report -> T09.
+- [ ] A191-T08: Fail v2 benchmark and evidence classes closed without separately trusted verifier and threshold policy, and never consume v1 waiver replay state.
+  Route: publication specified allowed; implementation benchmark/evidence exit3 unsupported; candidate threshold/passed/baseline/failed/waiver/replay never valid; sentinel hash/no-create; report -> activation.
+- [ ] A191-T09: Enforce producer, trusted validator, persistent-parent, fresh-child, receipt, marker, pre-push, and base-selected CI ordering without self-attestation.
+  Route: refreshed Slice2; T09 tests plus `node --test tests/final-review-receipt.test.mjs tests/adversarial-review-attestation.test.mjs`. Reject child-before-parent, receipt-before-child, candidate validator, stale/revoked receipt, marker-before-receipt. Positive only transition receipt; report -> independent review.
+- [ ] A191-T10: Prove the exact AIDEV-187 source blobs are understood without alias or delivery admission by the activated-v2 compatibility parser, then validate the refreshed pair at the activated base with all twelve tuple bytes unchanged.
+  Route: source/refreshed fixtures §7. Old v1 exact schema failure; low-level source result `valid/compatibility_tuple_understood,delivery_admitted=false`; refreshed-only full result `valid/specified`; alias/order/requirement drift fails. Two report digests -> PR172 refresh.
+- [ ] A191-T11: Produce deterministic Linux and Windows results for canonical JSON, trusted Git blobs, path identity, evidence-root traversal, race detection, and runtime/schema parity without claiming protected Windows CI.
+  Route: shared commands on Linux CI; Windows exact commands `node.exe --test --test-name-pattern "^A191-T11 " tests/delivery-acceptance-v2.test.mjs` and Go shared command via `go.exe`. Golden envelopes/facts identical; real platform attacks fail; privilege absence blocked. Both reports -> Slice1 output.
+- [ ] A191-T12: Preserve packet-v3, receipt-v1, marker-v3, revocation, fixed pre-push receipt, trusted-base CI, privacy, DCO, and sticky user-only merge authority unchanged.
+  Route: exact blob-map command §6; `node --test tests/final-review-receipt.test.mjs tests/adversarial-review-attestation.test.mjs`; `node scripts/validate-dco.mjs`; `npm test`. Assert full map/absence, golden bytes, same-head revocation, fixed receipt, base workflow, privacy and merge profile; candidate authority substitution fails. Report required by both reviews.
+
+## 9. Staleness/JIT/completion
+
+Current pair is ready only for publication/Slice1. Plan, ticket, base, any affected contract/requirement/activation, approval expiry, or Slice1 output drift requires complete refresh and renewed approval. JIT rechecks exact current base, ticket revision, final plan digest, manifest contract `9c31dc84e57dfd691b3e2a45046b7ab9b2876e51a08e223556bb7e4350824a0e`, validator `3bea29df796b108ba284ffed25094855253599bc7fe4d8c5c2a920b972ea62fc`, profile `96e4b00bc78b16b5e544ee48f369137c74a2ef040c7b226b5c88d542d2e6a6c9`, profile schema `7c83a3d308d5b7e193a7333316c55cdbfbbc9b3e181b6fadd4f67fba63fae954`. Before Slice2 replace all with exact Slice1 outputs in a newly validated/approved pair. No external hard/predecessor dependency; AIDEV-187 downstream only; unresolved human decisions none. Completion requires plan <61,440 bytes, manifest digest binding, validator ok/12/zero diagnostics, exact two-file status and same-reviewer approval. No lifecycle action follows automatically.

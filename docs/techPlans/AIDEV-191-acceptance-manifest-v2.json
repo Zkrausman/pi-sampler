@@ -1,0 +1,293 @@
+{
+  "schema_version": "implementation-plan-manifest/v2",
+  "ticket_id": "AIDEV-191",
+  "repository": "Zkrausman/pi-sampler",
+  "plan_path": "docs/techPlans/AIDEV-191-implementation-plan.md",
+  "plan_sha256": "d41ff39d679bb525919089674c906304ee3f59b1d73aa6538315c29baf718061",
+  "base_sha": "3d858a0d4f8219f5ca1db13ad1de72e35ee09758",
+  "ticket_revision": "80a83a007ceffd8f35a6be12b97c01f781b1f7b67874cc2b7c2185c053e84384",
+  "epic": {
+    "kind": "standalone"
+  },
+  "hard_dependencies": [],
+  "predecessor_outputs": [],
+  "soft_dependencies": [],
+  "rows": [
+    {
+      "id": "A191-T01",
+      "title": "Additive strict matrix v2",
+      "acceptance_class": "ordinary",
+      "requirement": "Add strict acceptance-matrix/v2 as an additive contract while preserving byte-and-result frozen acceptance-manifest/v1 and acceptance-matrix/v1 behavior."
+    },
+    {
+      "id": "A191-T02",
+      "title": "Exact version dispatch",
+      "acceptance_class": "ordinary",
+      "requirement": "Dispatch only exact v1/v1 and v2/v2 manifest/matrix version pairs and fail mixed, unsupported, alias, projection, upgrade, and downgrade inputs with stable envelopes."
+    },
+    {
+      "id": "A191-T03",
+      "title": "Exact row parity",
+      "acceptance_class": "ordinary",
+      "requirement": "Preserve every implementation-plan-manifest/v2 row ID, class, requirement, uniqueness, and order exactly in acceptance-matrix/v2 without aliases or generated projections."
+    },
+    {
+      "id": "A191-T04",
+      "title": "Trusted-base authority",
+      "acceptance_class": "authority",
+      "requirement": "Select activation, implementation-plan contract, validator, profile, policy, schema, controller, and Go runtime only from verified regular blobs at the exact trusted base."
+    },
+    {
+      "id": "A191-T05",
+      "title": "Complete matrix bindings",
+      "acceptance_class": "ordinary",
+      "requirement": "Bind the canonical matrix root and exact row/evidence/artifact objects to repository, ticket revision, profile, policy, plan, manifest, trusted contracts, validator, base, head, PR, paths, digests, timestamps, and bounded external artifacts."
+    },
+    {
+      "id": "A191-T06",
+      "title": "Evaluation scope separation",
+      "acceptance_class": "ordinary",
+      "requirement": "Separate plan-publication specified rows from implementation-delivery observed or blocked rows, with waiver unsupported by v2 activation."
+    },
+    {
+      "id": "A191-T07",
+      "title": "Verified external evidence",
+      "acceptance_class": "authority",
+      "requirement": "Keep structural validity distinct from satisfaction by requiring trusted class policy and byte-verified, race-safe artifacts from an operator-owned external evidence root with zero source mutation."
+    },
+    {
+      "id": "A191-T08",
+      "title": "Unsupported classes blocked",
+      "acceptance_class": "ordinary",
+      "requirement": "Fail v2 benchmark and evidence classes closed without separately trusted verifier and threshold policy, and never consume v1 waiver replay state."
+    },
+    {
+      "id": "A191-T09",
+      "title": "Truthful review ordering",
+      "acceptance_class": "authority",
+      "requirement": "Enforce producer, trusted validator, persistent-parent, fresh-child, receipt, marker, pre-push, and base-selected CI ordering without self-attestation."
+    },
+    {
+      "id": "A191-T10",
+      "title": "Exact AIDEV-187 compatibility",
+      "acceptance_class": "authority",
+      "requirement": "Prove the exact AIDEV-187 source blobs are understood without alias or delivery admission by the activated-v2 compatibility parser, then validate the refreshed pair at the activated base with all twelve tuple bytes unchanged."
+    },
+    {
+      "id": "A191-T11",
+      "title": "Cross-platform determinism",
+      "acceptance_class": "resource-bounded",
+      "requirement": "Produce deterministic Linux and Windows results for canonical JSON, trusted Git blobs, path identity, evidence-root traversal, race detection, and runtime/schema parity without claiming protected Windows CI."
+    },
+    {
+      "id": "A191-T12",
+      "title": "Frozen review lifecycle",
+      "acceptance_class": "authority",
+      "requirement": "Preserve packet-v3, receipt-v1, marker-v3, revocation, fixed pre-push receipt, trusted-base CI, privacy, DCO, and sticky user-only merge authority unchanged."
+    }
+  ],
+  "portfolio": {
+    "planning_effort": "large",
+    "implementation_size": "very_large",
+    "requirement_readiness": "ready",
+    "information_gain": "high",
+    "downstream_unblock_set": [
+      "AIDEV-187"
+    ],
+    "affected_contracts": [
+      "acceptance-matrix/v2",
+      "implementation-plan-manifest/v2-admission",
+      "implementation-plan-validator/v2",
+      "delivery-normalized-facts/v1",
+      "delivery-acceptance-result/v1",
+      "external-evidence-root/v2",
+      "delivery-acceptance-v1-frozen",
+      "delivery-acceptance-v2-activation/v1",
+      "final-review-lifecycle/v3",
+      "delivery-acceptance-policy/v2",
+      "project-profile-schema/v1",
+      "delivery-acceptance-v2-trusted-map/v1"
+    ],
+    "affected_packages": [
+      "node-root-tooling",
+      "governance/cmd/delivery-evidence-validator",
+      "governance/pkg/deliveryevidence",
+      "planning-skills",
+      "delivery-review-lifecycle"
+    ],
+    "conflict_surface": "high",
+    "staleness_horizon_days": 7,
+    "risk_reduction_value": "high",
+    "unresolved_human_decisions": []
+  },
+  "ownership": {
+    "files": [
+      "governance/pkg/deliveryevidence/acceptance_v2.go",
+      "governance/pkg/deliveryevidence/external_root_posix.go",
+      "governance/pkg/deliveryevidence/external_root_windows.go",
+      "governance/docs/delivery-evidence/acceptance-matrix-v2.schema.json",
+      "scripts/trusted-delivery-evidence-controller.mjs",
+      "tests/delivery-acceptance-v2.test.mjs",
+      "tests/fixtures/delivery-acceptance-v2/aidev-187-implementation-plan.md",
+      "tests/fixtures/delivery-acceptance-v2/aidev-187-acceptance-manifest-v2.json",
+      "governance/cmd/delivery-evidence-validator/main.go",
+      "governance/pkg/deliveryevidence/validator_test.go",
+      "tests/delivery-acceptance.test.mjs",
+      "package.json",
+      "contracts/delivery-acceptance-v2-activation.json",
+      "profiles/pi-sampler.json",
+      "governance/docs/delivery-evidence/README.md",
+      "docs/IMPLEMENTATION-PLANNING.md",
+      "governance/pkg/deliveryevidence/acceptance.go",
+      "governance/pkg/deliveryevidence/schema.go",
+      "governance/docs/delivery-evidence/acceptance-manifest-v1.schema.json",
+      "governance/docs/delivery-evidence/acceptance-matrix-v1.schema.json",
+      "contracts/implementation-plan-manifest-v2.mjs",
+      "contracts/implementation-plan-manifest-v2.schema.json",
+      "scripts/validate-implementation-plan.mjs",
+      "profiles/project-profile.schema.json",
+      "scripts/generate-review-packet.mjs",
+      "scripts/validate-review-packet.mjs",
+      "scripts/final-review-receipt.mjs",
+      "scripts/validate-adversarial-review-attestation.mjs",
+      "scripts/hooks/pre-push.mjs",
+      "scripts/hooks/pre-push-protocol.mjs",
+      "tests/final-review-receipt.test.mjs",
+      "tests/adversarial-review-attestation.test.mjs",
+      "governance/pkg/deliveryevidence/validator.go",
+      "scripts/validate-delivery-evidence.mjs",
+      "scripts/validate-delivery-schemas.mjs",
+      "scripts/export-implementation-plan-manifest-v2-schema.mjs",
+      "tests/implementation-plan-manifest-v2.test.mjs",
+      "tests/validate-implementation-plan.test.mjs",
+      "tests/scoped-review-packet.test.mjs",
+      "docs/SCOPED-REVIEW.md",
+      "scripts/review-policy.mjs",
+      "scripts/validate-dco.mjs",
+      "contracts/delivery-acceptance-v2-trusted-map.json"
+    ],
+    "symbols": [
+      "path:.agents/skills/project-delivery/SKILL.md",
+      "path:.agents/skills/create-implementation-plan/SKILL.md",
+      "path:.github/workflows/adversarial-review.yml",
+      "path:.github/workflows/validate.yml",
+      "path:.github/pull_request_template.md",
+      "AcceptanceMatrixV2",
+      "ValidateAcceptanceV2",
+      "OpenExternalEvidenceRoot",
+      "ReadVerifiedArtifact",
+      "parseTrustedDeliveryArgs",
+      "readTrustedBlob",
+      "buildNormalizedFacts"
+    ],
+    "contracts": [
+      "acceptance-matrix/v2",
+      "implementation-plan-manifest/v2-admission",
+      "implementation-plan-validator/v2",
+      "delivery-normalized-facts/v1",
+      "delivery-acceptance-result/v1",
+      "external-evidence-root/v2",
+      "delivery-acceptance-v1-frozen",
+      "delivery-acceptance-v2-activation/v1",
+      "final-review-lifecycle/v3",
+      "delivery-acceptance-policy/v2",
+      "project-profile-schema/v1",
+      "delivery-acceptance-v2-trusted-map/v1"
+    ]
+  },
+  "compatibility": {
+    "assumptions": [
+      "The exact trusted base selects v1 or v2 before candidate bytes are interpreted.",
+      "The v1 schemas, acceptance.go, schema.go, fixtures, result strings, and line-ending digest semantics remain byte-and-result frozen.",
+      "Packet-v3, receipt-v1, marker-v3, revocation, pre-push, base-selected CI, privacy, DCO, and explicit user-only merge authority remain unchanged.",
+      "AIDEV-187 fixtures are exact bytes from Git object 992ba9bbf044dcaecce1e751695834894aa2d9ea and are never aliased or projected."
+    ],
+    "preserves_v1_readability": true,
+    "silently_upgrades_v1": false
+  },
+  "staleness": {
+    "triggers": [
+      {
+        "kind": "plan_changed",
+        "input": "plan_sha256",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "ticket_changed",
+        "input": "ticket_revision",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "base_revision_changed",
+        "input": "base_sha",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "acceptance-matrix/v2",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "delivery-acceptance-v2-activation/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A191-T01",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "approval_expired",
+        "input": "approval",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "delivery-acceptance-v2-trusted-map/v1",
+        "action": "renew_approval"
+      }
+    ],
+    "descendant_base_campaign_drift_is_not_plan_staleness": true
+  },
+  "just_in_time_revalidation": {
+    "inputs": [
+      {
+        "kind": "repository_revision",
+        "name": "base_sha",
+        "expected": "3d858a0d4f8219f5ca1db13ad1de72e35ee09758"
+      },
+      {
+        "kind": "ticket_revision",
+        "name": "ticket_revision",
+        "expected": "80a83a007ceffd8f35a6be12b97c01f781b1f7b67874cc2b7c2185c053e84384"
+      },
+      {
+        "kind": "plan_digest",
+        "name": "plan_sha256",
+        "expected": "d41ff39d679bb525919089674c906304ee3f59b1d73aa6538315c29baf718061"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "implementation-plan-manifest/v2-admission",
+        "expected": "9c31dc84e57dfd691b3e2a45046b7ab9b2876e51a08e223556bb7e4350824a0e"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "implementation-plan-validator/v2",
+        "expected": "3bea29df796b108ba284ffed25094855253599bc7fe4d8c5c2a920b972ea62fc"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "delivery-acceptance-policy/v2",
+        "expected": "96e4b00bc78b16b5e544ee48f369137c74a2ef040c7b226b5c88d542d2e6a6c9"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "project-profile-schema/v1",
+        "expected": "7c83a3d308d5b7e193a7333316c55cdbfbbc9b3e181b6fadd4f67fba63fae954"
+      }
+    ],
+    "required_before": "implementation"
+  }
+}
