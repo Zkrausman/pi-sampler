@@ -3,7 +3,7 @@
   "ticket_id": "AIDEV-191",
   "repository": "Zkrausman/pi-sampler",
   "plan_path": "docs/techPlans/AIDEV-191-implementation-plan.md",
-  "plan_sha256": "3ff1c4716a717c5f61b430b8acd9c225e28264c720ccff95c7e5651660b6a54c",
+  "plan_sha256": "2f95383853f0e7cb2b330ecd02b58d1f0883a3ede756efdd042a9e8d83b4187c",
   "base_sha": "3d858a0d4f8219f5ca1db13ad1de72e35ee09758",
   "ticket_revision": "80a83a007ceffd8f35a6be12b97c01f781b1f7b67874cc2b7c2185c053e84384",
   "epic": {
@@ -265,7 +265,7 @@
       {
         "kind": "plan_digest",
         "name": "plan_sha256",
-        "expected": "3ff1c4716a717c5f61b430b8acd9c225e28264c720ccff95c7e5651660b6a54c"
+        "expected": "2f95383853f0e7cb2b330ecd02b58d1f0883a3ede756efdd042a9e8d83b4187c"
       },
       {
         "kind": "contract_digest",
