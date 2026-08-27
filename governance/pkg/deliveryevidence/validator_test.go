@@ -1,14 +1,19 @@
 package deliveryevidence
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -558,6 +563,831 @@ func TestBenchmarkBaselineCannotClaimPassAndLocalClassRequiresTenMillion(t *test
 	evidence.Class = "local-10m"
 	if err := ValidateBenchmarkEvidenceAt(evidence, evidence.Repository, evidence.BaseSHA, evidence.HeadSHA, "local-10m", time.Now().UTC()); err == nil {
 		t.Fatal("smaller CI evidence satisfied the local 10M class")
+	}
+}
+
+func v2Now() string {
+	return time.Now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
+}
+
+func v2Facts(matrix AcceptanceMatrixV2) NormalizedFactsV1 {
+	rows := make([]NormalizedFactsV1Row, len(matrix.Rows))
+	for index, row := range matrix.Rows {
+		rows[index] = NormalizedFactsV1Row{ID: row.ID, AcceptanceClass: row.AcceptanceClass, Requirement: row.Requirement}
+	}
+	return NormalizedFactsV1{Format: NormalizedFactsV1Format, Version: NormalizedFactsV1Version, Repository: matrix.Repository, TicketID: matrix.TicketID, TicketRevision: matrix.TicketRevision, ProfilePath: matrix.ProfilePath, ProfileSHA256: matrix.ProfileSHA256, BaseSHA: matrix.BaseSHA, HeadSHA: matrix.HeadSHA, PullRequestNumber: matrix.PullRequestNumber, PlanPath: matrix.PlanPath, PlanSHA256: matrix.PlanSHA256, ManifestPath: matrix.ManifestPath, ManifestSHA256: matrix.ManifestSHA256, ManifestSchemaVersion: matrix.ManifestSchemaVersion, ManifestContractSHA256: matrix.ManifestContractSHA256, ManifestValidatorSHA256: matrix.ManifestValidatorSHA256, MatrixContractSHA256: matrix.MatrixContractSHA256, PolicySHA256: matrix.PolicySHA256, EvaluationScope: matrix.EvaluationScope, Rows: rows}
+}
+
+func v2Matrix(scope, class string, evidence *AcceptanceEvidenceV2, blocker *AcceptanceBlockerV2) AcceptanceMatrixV2 {
+	base := strings.Repeat("a", 40)
+	head := strings.Repeat("b", 40)
+	digest := strings.Repeat("c", 64)
+	row := AcceptanceMatrixV2Row{ID: "AIDEV-191-1", AcceptanceClass: class, Requirement: "A bounded v2 requirement.", Status: "observed", Evidence: evidence}
+	if scope == "plan-publication" {
+		row.Status = "specified"
+		row.Specification = evidence
+		row.Evidence = nil
+	}
+	if blocker != nil {
+		row.Status = "blocked"
+		row.Evidence = nil
+		row.Blocker = blocker
+	}
+	return AcceptanceMatrixV2{SchemaVersion: AcceptanceMatrixV2SchemaVersion, ManifestSchemaVersion: AcceptanceManifestV2SchemaVersion, EvaluationScope: scope, Repository: "Zkrausman/pi-sampler", TicketID: "AIDEV-191", TicketRevision: strings.Repeat("d", 64), ProfilePath: "profiles/pi-sampler.json", ProfileSHA256: digest, BaseSHA: base, HeadSHA: head, PullRequestNumber: 191, PlanPath: "docs/techPlans/AIDEV-191-implementation-plan.md", PlanSHA256: digest, ManifestPath: "docs/techPlans/AIDEV-191-acceptance-manifest-v2.json", ManifestSHA256: digest, ManifestContractPath: "contracts/implementation-plan-manifest-v2.mjs", ManifestContractSHA256: digest, ManifestValidatorPath: "scripts/validate-implementation-plan.mjs", ManifestValidatorSHA256: digest, MatrixContractPath: "governance/docs/delivery-evidence/acceptance-matrix-v2.schema.json", MatrixContractSHA256: digest, PolicyPath: "profiles/pi-sampler.json", PolicySHA256: digest, EvidenceRootID: "operator-root-191", GeneratedAt: v2Now(), Rows: []AcceptanceMatrixV2Row{row}}
+}
+
+func v2Evidence(rootFile string, data []byte, inventory []byte) AcceptanceEvidenceV2 {
+	return AcceptanceEvidenceV2{Verifier: AcceptanceVerifierV2{ID: "test-verifier", Version: "v1", Environment: "local", Argv: []string{"test"}}, ExitStatus: 0, StartedAt: v2Now(), CompletedAt: v2Now(), Artifacts: []AcceptanceArtifactV2{{Name: "proof.txt", Path: rootFile, SHA256: fileSHA256(data), Bytes: int64(len(data))}, {Name: "evidence-inventory.json", Path: "evidence-inventory.json", SHA256: fileSHA256(inventory), Bytes: int64(len(inventory))}}}
+}
+
+func writeV2Inventory(t *testing.T, root string) []byte {
+	t.Helper()
+	opened, err := OpenExternalEvidenceRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, err := InventoryExternalEvidenceRoot(opened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := CanonicalExternalEvidenceInventoryReport(computed)
+	if err := os.WriteFile(filepath.Join(root, "evidence-inventory.json"), inventory, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return inventory
+}
+
+func v2Request(matrix AcceptanceMatrixV2, root string, policy AcceptancePolicyV2) AcceptanceV2Request {
+	facts := v2Facts(matrix)
+	matrixBytes := canonicalAcceptanceMatrixV2Bytes(matrix)
+	policyBytes, _ := json.Marshal(policy)
+	return AcceptanceV2Request{Format: AcceptanceV2RequestFormat, Version: AcceptanceV2RequestVersion, NormalizedFacts: facts, FactsSHA256: normalizedFactsDigestV1(facts), MatrixBase64: base64.StdEncoding.EncodeToString(matrixBytes), EvidenceRoot: root, Policy: policyBytes, ControllerTime: matrix.GeneratedAt}
+}
+
+func TestAcceptanceV2(t *testing.T) {
+	t.Run("A191-T01", func(t *testing.T) {
+		data, err := os.ReadFile("../../docs/delivery-evidence/acceptance-matrix-v2.schema.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema any
+		if err := json.Unmarshal(data, &schema); err != nil {
+			t.Fatal(err)
+		}
+		var visit func(any)
+		visit = func(value any) {
+			if object, ok := value.(map[string]any); ok {
+				if object["type"] == "object" && object["additionalProperties"] != false {
+					t.Fatalf("object without strict properties")
+				}
+				for _, child := range object {
+					visit(child)
+				}
+			} else if array, ok := value.([]any); ok {
+				for _, child := range array {
+					visit(child)
+				}
+			}
+		}
+		visit(schema)
+		root := t.TempDir()
+		proofData := []byte("proof")
+		if err := os.WriteFile(filepath.Join(root, "proof.txt"), proofData, 0600); err != nil {
+			t.Fatal(err)
+		}
+		inventory := writeV2Inventory(t, root)
+		evidence := v2Evidence("proof.txt", proofData, inventory)
+		matrix := v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+		policy := AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}
+		result := ValidateAcceptanceV2(v2Request(matrix, root, policy))
+		if result.Status != "valid" || result.Code != "observed" {
+			t.Fatalf("runtime v2 guard did not run: %+v", result)
+		}
+		matrix.Rows[0].Requirement = strings.Repeat("é", 1024)
+		if parity := ValidateAcceptanceV2(v2Request(matrix, root, policy)); parity.Status != "valid" || parity.Code != "observed" {
+			t.Fatalf("valid UTF-8 at the byte limit was rejected: %+v", parity)
+		}
+		matrix.Rows[0].Requirement = strings.Repeat("é", 1025)
+		if parity := ValidateAcceptanceV2(v2Request(matrix, root, policy)); parity.Code != "matrix_schema_invalid" {
+			t.Fatalf("UTF-8 byte-limit divergence: %+v", parity)
+		}
+	})
+	t.Run("A191-T02", func(t *testing.T) {
+		v1MatrixBytes := []byte(`{"schema_version":"acceptance-matrix/v1","rows":[]}`)
+		v1ManifestBytes := []byte(`{"schema_version":"acceptance-manifest/v1","rows":[]}`)
+		v2MatrixBytes := []byte(`{"schema_version":"acceptance-matrix/v2","manifest_schema_version":"implementation-plan-manifest/v2","rows":[]}`)
+		v2ManifestBytes := []byte(`{"schema_version":"implementation-plan-manifest/v2","rows":[]}`)
+		if pair := ClassifyAcceptanceVersionPair(v1MatrixBytes, v1ManifestBytes); pair != "v1/v1" {
+			t.Fatalf("exact v1 pair did not select the frozen boundary: %s", pair)
+		}
+		if pair := ClassifyAcceptanceVersionPair(v2MatrixBytes, v2ManifestBytes); pair != "v2/v2" {
+			t.Fatalf("exact v2 pair did not select the additive boundary: %s", pair)
+		}
+		if pair := ClassifyAcceptanceVersionPair(v1MatrixBytes, v2ManifestBytes); pair != "version_pair_mixed" {
+			t.Fatalf("v1 matrix/v2 manifest was not mixed: %s", pair)
+		}
+		if pair := ClassifyAcceptanceVersionPair(v2MatrixBytes, v1ManifestBytes); pair != "version_pair_mixed" {
+			t.Fatalf("v2 matrix/v1 manifest was not mixed: %s", pair)
+		}
+		root := t.TempDir()
+		data := []byte("proof")
+		if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		matrix := v2Matrix("implementation-delivery", "ordinary", nil, &AcceptanceBlockerV2{Code: "blocked", Reason: "dispatch mutation", BlockedBy: nil})
+		matrix.ManifestSchemaVersion = AcceptanceManifestSchemaVersion
+		result := ValidateAcceptanceV2(v2Request(matrix, root, AcceptancePolicyV2{}))
+		if result.Code != "version_pair_mixed" {
+			t.Fatalf("unexpected dispatch result: %+v", result)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(canonicalAcceptanceMatrixV2Bytes(v2Matrix("implementation-delivery", "ordinary", nil, &AcceptanceBlockerV2{Code: "blocked", Reason: "dispatch mutation", BlockedBy: nil})), &raw); err != nil {
+			t.Fatal(err)
+		}
+		raw["schema_version"] = "acceptance-matrix/v9"
+		unsupportedBytes, _ := json.Marshal(raw)
+		unsupportedRequest := v2Request(v2Matrix("implementation-delivery", "ordinary", nil, &AcceptanceBlockerV2{Code: "blocked", Reason: "dispatch mutation", BlockedBy: nil}), root, AcceptancePolicyV2{})
+		unsupportedRequest.MatrixBase64 = base64.StdEncoding.EncodeToString(unsupportedBytes)
+		unsupportedRequest.NormalizedFacts.ManifestSchemaVersion = AcceptanceManifestV2SchemaVersion
+		unsupportedRequest.FactsSHA256 = normalizedFactsDigestV1(unsupportedRequest.NormalizedFacts)
+		if unsupported := ValidateAcceptanceV2(unsupportedRequest); unsupported.Code != "version_pair_unsupported" {
+			t.Fatalf("unsupported pair was admitted: %+v", unsupported)
+		}
+		legacyRequest := v2Request(v2Matrix("implementation-delivery", "ordinary", nil, &AcceptanceBlockerV2{Code: "blocked", Reason: "legacy dispatch", BlockedBy: nil}), root, AcceptancePolicyV2{})
+		legacyRequest.MatrixBase64 = base64.StdEncoding.EncodeToString(v1MatrixBytes)
+		legacyRequest.NormalizedFacts.ManifestSchemaVersion = AcceptanceManifestSchemaVersion
+		legacyRequest.FactsSHA256 = normalizedFactsDigestV1(legacyRequest.NormalizedFacts)
+		if legacy := ValidateAcceptanceV2(legacyRequest); legacy.Code != "version_pair_unsupported" {
+			t.Fatalf("v1 pair was projected into v2: %+v", legacy)
+		}
+	})
+	t.Run("A191-T03", func(t *testing.T) {
+		plan, err := os.ReadFile("../../../tests/fixtures/delivery-acceptance-v2/aidev-187-implementation-plan.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := os.ReadFile("../../../tests/fixtures/delivery-acceptance-v2/aidev-187-acceptance-manifest-v2.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := ParseImplementationPlanManifestV2Compatibility(plan, manifest)
+		if result.Status != "valid" || result.Code != "compatibility_tuple_understood" || result.DeliveryAdmitted || len(result.Rows) != 12 {
+			t.Fatalf("unexpected compatibility result: %+v", result)
+		}
+		mutated := bytes.Replace(append([]byte(nil), manifest...), []byte("AIDEV-187-1"), []byte("AIDEV-187-2"), 1)
+		if changed := ParseImplementationPlanManifestV2Compatibility(plan, mutated); changed.Status == "valid" || changed.DeliveryAdmitted {
+			t.Fatalf("mutated compatibility tuple admitted: %+v", changed)
+		}
+	})
+	t.Run("A191-T04", func(t *testing.T) {
+		root := t.TempDir()
+		data := []byte("proof")
+		if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		inventory := writeV2Inventory(t, root)
+		evidence := v2Evidence("proof.txt", data, inventory)
+		matrix := v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+		request := v2Request(matrix, root, AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}})
+		matrix.Repository = "Other/repository"
+		request.MatrixBase64 = base64.StdEncoding.EncodeToString(canonicalAcceptanceMatrixV2Bytes(matrix))
+		result := ValidateAcceptanceV2(request)
+		if result.Code != "binding_mismatch" {
+			t.Fatalf("unexpected result: %+v", result)
+		}
+	})
+	t.Run("A191-T05", func(t *testing.T) {
+		root := t.TempDir()
+		data := []byte("proof")
+		if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		inventory := writeV2Inventory(t, root)
+		evidence := v2Evidence("proof.txt", data, inventory)
+		matrix := v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+		policy := AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}
+		result := ValidateAcceptanceV2(v2Request(matrix, root, policy))
+		if result.Status != "valid" || result.Code != "observed" {
+			t.Fatalf("unexpected result: %+v", result)
+		}
+	})
+	t.Run("A191-T06", func(t *testing.T) {
+		root := t.TempDir()
+		validator, review := []byte(`{"ok":true,"exit_status":0}`), []byte("decision: approved\n")
+		if err := os.WriteFile(filepath.Join(root, "plan-validator-report.json"), validator, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "independent-plan-review.md"), review, 0600); err != nil {
+			t.Fatal(err)
+		}
+		inventory := writeV2Inventory(t, root)
+		evidence := AcceptanceEvidenceV2{Verifier: AcceptanceVerifierV2{ID: "parent", Version: "v1", Environment: "review", Argv: []string{"plan"}}, ExitStatus: 0, StartedAt: v2Now(), CompletedAt: v2Now(), Artifacts: []AcceptanceArtifactV2{{Name: "plan-validator-report.json", Path: "plan-validator-report.json", SHA256: fileSHA256(validator), Bytes: int64(len(validator))}, {Name: "independent-plan-review.md", Path: "independent-plan-review.md", SHA256: fileSHA256(review), Bytes: int64(len(review))}, {Name: "evidence-inventory.json", Path: "evidence-inventory.json", SHA256: fileSHA256(inventory), Bytes: int64(len(inventory))}}}
+		matrix := v2Matrix("plan-publication", "authority", &evidence, nil)
+		result := ValidateAcceptanceV2(v2Request(matrix, root, AcceptancePolicyV2{}))
+		if result.Status != "valid" || result.Code != "specified" {
+			t.Fatalf("unexpected result: %+v", result)
+		}
+	})
+	t.Run("A191-T07", func(t *testing.T) {
+		root := t.TempDir()
+		data := []byte("proof")
+		if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		inventory := writeV2Inventory(t, root)
+		evidence := v2Evidence("proof.txt", data, inventory)
+		evidence.Artifacts[0].SHA256 = strings.Repeat("0", 64)
+		matrix := v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+		policy := AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}
+		result := ValidateAcceptanceV2(v2Request(matrix, root, policy))
+		if result.Code != "artifact_digest_mismatch" {
+			t.Fatalf("unexpected result: %+v", result)
+		}
+		rootObject, err := OpenExternalEvidenceRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		correct := AcceptanceArtifactV2{Name: "proof.txt", Path: "proof.txt", SHA256: fileSHA256(data), Bytes: int64(len(data))}
+		if _, err := ReadVerifiedArtifact(rootObject, correct); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(filepath.Join(root, "proof.txt"), filepath.Join(root, "hardlink.txt")); err == nil {
+			linked := correct
+			linked.Path = "hardlink.txt"
+			if _, err := ReadVerifiedArtifact(rootObject, linked); err == nil {
+				t.Fatal("hard link was accepted")
+			}
+		}
+		if err := os.Symlink(filepath.Join(root, "proof.txt"), filepath.Join(root, "symlink.txt")); err == nil {
+			linked := correct
+			linked.Path = "symlink.txt"
+			if _, err := ReadVerifiedArtifact(rootObject, linked); err == nil {
+				t.Fatal("symlink was accepted")
+			}
+		}
+	})
+	t.Run("A191-T08", func(t *testing.T) {
+		root := t.TempDir()
+		data := []byte("proof")
+		if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		inventory := writeV2Inventory(t, root)
+		evidence := v2Evidence("proof.txt", data, inventory)
+		matrix := v2Matrix("implementation-delivery", "benchmark", &evidence, nil)
+		policy := AcceptancePolicyV2{
+			Classes: []AcceptanceClassPolicyV2{
+				{ID: "benchmark-ci-regression", Kind: "benchmark", Verifier: "benchmark", Environment: "ci", Command: []string{"benchmark"}},
+				{ID: "benchmark-local-10m", Kind: "benchmark", Verifier: "benchmark", Environment: "local", Command: []string{"benchmark"}},
+			},
+		}
+		result := ValidateAcceptanceV2(v2Request(matrix, root, policy))
+		if result.Status != "blocked" || result.Code != "unsupported_class_policy" {
+			t.Fatalf("unexpected result: %+v", result)
+		}
+	})
+	t.Run("A191-T09", func(t *testing.T) {
+		if _, err := os.Stat("../../../contracts/delivery-acceptance-v2-activation.json"); !os.IsNotExist(err) {
+			t.Fatalf("activation declaration unexpectedly present: %v", err)
+		}
+		if _, err := os.Stat("../../../contracts/delivery-acceptance-v2-trusted-map.json"); !os.IsNotExist(err) {
+			t.Fatalf("trusted map unexpectedly present: %v", err)
+		}
+	})
+	t.Run("A191-T10", func(t *testing.T) {
+		plan, _ := os.ReadFile("../../../tests/fixtures/delivery-acceptance-v2/aidev-187-implementation-plan.md")
+		manifest, _ := os.ReadFile("../../../tests/fixtures/delivery-acceptance-v2/aidev-187-acceptance-manifest-v2.json")
+		result := ParseImplementationPlanManifestV2Compatibility(plan, manifest)
+		if len(result.Rows) != 12 || result.Rows[0].ID != "AIDEV-187-1" {
+			t.Fatalf("unexpected tuple: %+v", result)
+		}
+	})
+	t.Run("A191-T11", func(t *testing.T) {
+		matrix := v2Matrix("implementation-delivery", "ordinary", nil, &AcceptanceBlockerV2{Code: "blocked", Reason: "not activated", BlockedBy: nil})
+		one := canonicalAcceptanceMatrixV2Bytes(matrix)
+		two := canonicalAcceptanceMatrixV2Bytes(matrix)
+		if !bytes.Equal(one, two) || !bytes.HasSuffix(one, []byte("\n")) {
+			t.Fatal("matrix canonical bytes are not deterministic")
+		}
+		root := t.TempDir()
+		data := []byte("platform proof")
+		if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		opened, err := OpenExternalEvidenceRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifact := AcceptanceArtifactV2{Name: "proof.txt", Path: "proof.txt", SHA256: fileSHA256(data), Bytes: int64(len(data))}
+		if _, err := ReadVerifiedArtifact(opened, artifact); err != nil {
+			t.Fatalf("platform artifact route failed: %v", err)
+		}
+		inventory, err := InventoryExternalEvidenceRoot(opened)
+		if err != nil || len(inventory.Entries) != 1 || inventory.Entries[0].Path != "proof.txt" {
+			t.Fatalf("platform inventory route failed: %v %+v", err, inventory)
+		}
+	})
+	t.Run("A191-T12", func(t *testing.T) {
+		data, err := os.ReadFile("../../docs/delivery-evidence/acceptance-matrix-v1.schema.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fileSHA256(data) != "c52283e1d360491ff67f90d1801f2f5ee7b98f4df9ff6e4c8c9f8dd3d94c0021" {
+			t.Fatal("frozen v1 schema changed")
+		}
+	})
+}
+
+func publicationV2Request(t *testing.T, validator, review []byte) AcceptanceV2Request {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "plan-validator-report.json"), validator, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "independent-plan-review.md"), review, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory := writeV2Inventory(t, root)
+	evidence := AcceptanceEvidenceV2{Verifier: AcceptanceVerifierV2{ID: "parent", Version: "v1", Environment: "review", Argv: []string{"plan"}}, ExitStatus: 0, StartedAt: v2Now(), CompletedAt: v2Now(), Artifacts: []AcceptanceArtifactV2{
+		{Name: "plan-validator-report.json", Path: "plan-validator-report.json", SHA256: fileSHA256(validator), Bytes: int64(len(validator))},
+		{Name: "independent-plan-review.md", Path: "independent-plan-review.md", SHA256: fileSHA256(review), Bytes: int64(len(review))},
+		{Name: "evidence-inventory.json", Path: "evidence-inventory.json", SHA256: fileSHA256(inventory), Bytes: int64(len(inventory))},
+	}}
+	return v2Request(v2Matrix("plan-publication", "authority", &evidence, nil), root, AcceptancePolicyV2{})
+}
+
+func TestAcceptanceV2PublicationEvidenceIsAnchoredAndStrict(t *testing.T) {
+	cases := []struct {
+		name      string
+		validator []byte
+		review    []byte
+	}{
+		{"validator exit alias", []byte(`{"ok":true,"exit":0}`), []byte("decision: approved")},
+		{"validator extra", []byte(`{"ok":true,"exit_status":0,"extra":1}`), []byte("decision: approved")},
+		{"validator duplicate", []byte(`{"ok":true,"exit_status":0,"exit_status":0}`), []byte("decision: approved")},
+		{"unapproved", []byte(`{"ok":true,"exit_status":0}`), []byte("decision: unapproved")},
+		{"disapproved", []byte(`{"ok":true,"exit_status":0}`), []byte("decision: disapproved")},
+		{"historical", []byte(`{"ok":true,"exit_status":0}`), []byte("historical decision: approved")},
+		{"duplicate decision", []byte(`{"ok":true,"exit_status":0}`), []byte("decision: approved\ndecision: approved")},
+		{"conditional", []byte(`{"ok":true,"exit_status":0}`), []byte("decision: approved\nconditional approval is pending")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ValidateAcceptanceV2(publicationV2Request(t, tc.validator, tc.review))
+			if result.Status != "invalid" || result.Code != "matrix_schema_invalid" {
+				t.Fatalf("unexpected publication result: %+v", result)
+			}
+		})
+	}
+	positive := ValidateAcceptanceV2(publicationV2Request(t, []byte(`{"ok":true,"exit_status":0}`), []byte("decision: approved")))
+	if positive.Status != "valid" || positive.Code != "specified" {
+		t.Fatalf("strict positive rejected: %+v", positive)
+	}
+}
+
+func TestAcceptanceV2ClosedWorldInventoryRejectsExtrasAndNesting(t *testing.T) {
+	root := t.TempDir()
+	data := []byte("proof")
+	if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory := writeV2Inventory(t, root)
+	evidence := v2Evidence("proof.txt", data, inventory)
+	matrix := v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+	if err := os.WriteFile(filepath.Join(root, "unreferenced-secret.txt"), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory = writeV2Inventory(t, root)
+	evidence.Artifacts[1] = AcceptanceArtifactV2{Name: "evidence-inventory.json", Path: "evidence-inventory.json", SHA256: fileSHA256(inventory), Bytes: int64(len(inventory))}
+	matrix.Rows[0].Evidence = &evidence
+	result := ValidateAcceptanceV2(v2Request(matrix, root, AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}))
+	if result.Code != "artifact_path_mismatch" {
+		t.Fatalf("extra file was accepted: %+v", result)
+	}
+
+	root = t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory = writeV2Inventory(t, root)
+	evidence = v2Evidence("proof.txt", data, inventory)
+	matrix = v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", "extra.txt"), []byte("extra"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory = writeV2Inventory(t, root)
+	evidence.Artifacts[1] = AcceptanceArtifactV2{Name: "evidence-inventory.json", Path: "evidence-inventory.json", SHA256: fileSHA256(inventory), Bytes: int64(len(inventory))}
+	matrix.Rows[0].Evidence = &evidence
+	result = ValidateAcceptanceV2(v2Request(matrix, root, AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}))
+	if result.Code != "artifact_path_mismatch" {
+		t.Fatalf("nested file was accepted: %+v", result)
+	}
+
+	for depth := 2; depth <= externalRootMaxDepth; depth++ {
+		root = t.TempDir()
+		parts := make([]string, depth-1)
+		for index := range parts {
+			parts[index] = "d" + strconv.Itoa(index+1)
+		}
+		parts = append(parts, "proof.txt")
+		path := filepath.Join(append([]string{root}, parts[:len(parts)-1]...)...)
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, parts[len(parts)-1]), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		inventory = writeV2Inventory(t, root)
+		evidence = v2Evidence(strings.Join(parts, "/"), data, inventory)
+		matrix = v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+		result = ValidateAcceptanceV2(v2Request(matrix, root, AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}))
+		if result.Status != "valid" || result.Code != "observed" {
+			t.Fatalf("referenced depth %d rejected: %+v", depth, result)
+		}
+	}
+
+	root = t.TempDir()
+	parts := make([]string, externalRootMaxDepth)
+	for index := range parts {
+		parts[index] = "d" + strconv.Itoa(index+1)
+	}
+	path := filepath.Join(append([]string{root}, parts...)...)
+	if err := os.MkdirAll(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "proof.txt"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := OpenExternalEvidenceRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InventoryExternalEvidenceRoot(opened); err == nil || err.(*ExternalEvidenceError).Code != "evidence_path_invalid" {
+		t.Fatalf("depth-11 path was accepted: %v", err)
+	}
+
+	root = t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	evidence = v2Evidence("proof.txt", data, nil)
+	evidence.Artifacts = evidence.Artifacts[:1]
+	matrix = v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+	result = ValidateAcceptanceV2(v2Request(matrix, root, AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}))
+	if result.Code != "artifact_path_mismatch" {
+		t.Fatalf("missing inventory was accepted: %+v", result)
+	}
+}
+
+func TestAcceptanceV2InventoryReportIsCanonicalAndBound(t *testing.T) {
+	root := t.TempDir()
+	proof := []byte("proof")
+	if err := os.WriteFile(filepath.Join(root, "proof.txt"), proof, 0600); err != nil {
+		t.Fatal(err)
+	}
+	report := writeV2Inventory(t, root)
+	computedRoot, err := OpenExternalEvidenceRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	computed, err := InventoryExternalEvidenceRoot(computedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed, ok := parseExternalEvidenceInventoryReport(report); !ok || !externalInventoryEqual(parsed, computed) {
+		t.Fatal("canonical inventory report did not round-trip")
+	}
+	for _, malformed := range [][]byte{
+		[]byte("not an inventory"),
+		[]byte(`{"format":"pi-sampler.external-evidence-inventory/v1","version":1,"entries":[],"extra":true}`),
+		[]byte(`{"version":1,"format":"pi-sampler.external-evidence-inventory/v1","entries":[]}
+`),
+		[]byte(`{"format":"pi-sampler.external-evidence-inventory/v1","version":1,"entries":[],"entries":[]}
+`),
+	} {
+		if _, ok := parseExternalEvidenceInventoryReport(malformed); ok {
+			t.Fatalf("malformed inventory report accepted: %q", malformed)
+		}
+	}
+	if len(computed.Entries) != 1 || computed.Entries[0].Path != "proof.txt" {
+		t.Fatalf("unexpected computed inventory: %+v", computed)
+	}
+	matrix := v2Matrix("implementation-delivery", "ordinary", nil, nil)
+	policy := AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}
+	for _, malformed := range [][]byte{
+		[]byte("not an inventory"),
+		[]byte(`{"format":"pi-sampler.external-evidence-inventory/v1","version":1,"entries":[]}`),
+		[]byte(`{"format":"pi-sampler.external-evidence-inventory/v1","version":1,"entries":[],"extra":true}`),
+		[]byte(`{"format":"pi-sampler.external-evidence-inventory/v1","version":1,"entries":[{"path":"proof.txt","type":"file","bytes":6,"identity":"forged","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]}
+`),
+	} {
+		if err := os.WriteFile(filepath.Join(root, acceptanceV2InventoryReportName), malformed, 0600); err != nil {
+			t.Fatal(err)
+		}
+		evidence := v2Evidence("proof.txt", proof, malformed)
+		matrix.Rows[0].Evidence = &evidence
+		result := ValidateAcceptanceV2(v2Request(matrix, root, policy))
+		if result.Code != "matrix_schema_invalid" {
+			t.Fatalf("malformed inventory report accepted: %+v", result)
+		}
+	}
+}
+
+func TestAcceptanceV2SharedPublicationArtifactsRemainClosedWorld(t *testing.T) {
+	root := t.TempDir()
+	validator, review := []byte(`{"ok":true,"exit_status":0}`), []byte("decision: approved\n")
+	if err := os.WriteFile(filepath.Join(root, "plan-validator-report.json"), validator, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "independent-plan-review.md"), review, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory := writeV2Inventory(t, root)
+	shared := AcceptanceEvidenceV2{Verifier: AcceptanceVerifierV2{ID: "parent", Version: "v1", Environment: "review", Argv: []string{"plan"}}, ExitStatus: 0, StartedAt: v2Now(), CompletedAt: v2Now(), Artifacts: []AcceptanceArtifactV2{
+		{Name: "plan-validator-report.json", Path: "plan-validator-report.json", SHA256: fileSHA256(validator), Bytes: int64(len(validator))},
+		{Name: "independent-plan-review.md", Path: "independent-plan-review.md", SHA256: fileSHA256(review), Bytes: int64(len(review))},
+		{Name: "evidence-inventory.json", Path: "evidence-inventory.json", SHA256: fileSHA256(inventory), Bytes: int64(len(inventory))},
+	}}
+	matrix := v2Matrix("plan-publication", "authority", &shared, nil)
+	second := matrix.Rows[0]
+	second.ID = "AIDEV-191-2"
+	matrix.Rows = append(matrix.Rows, second)
+	result := ValidateAcceptanceV2(v2Request(matrix, root, AcceptancePolicyV2{}))
+	if result.Status != "valid" || result.Code != "specified" || len(result.Rows) != 2 {
+		t.Fatalf("shared publication artifacts rejected: %+v", result)
+	}
+	shared.Artifacts[1].Path = "plan-validator-report.json"
+	matrix.Rows[1].Specification = &shared
+	if result = ValidateAcceptanceV2(v2Request(matrix, root, AcceptancePolicyV2{})); result.Code != "artifact_path_mismatch" && result.Code != "matrix_schema_invalid" {
+		t.Fatalf("conflicting shared artifact accepted: %+v", result)
+	}
+}
+
+func TestAcceptanceV2UTF8ByteContractCoversReasonAndArgv(t *testing.T) {
+	root := t.TempDir()
+	proof := []byte("proof")
+	if err := os.WriteFile(filepath.Join(root, "proof.txt"), proof, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory := writeV2Inventory(t, root)
+	evidence := v2Evidence("proof.txt", proof, inventory)
+	evidence.Verifier.Argv = []string{strings.Repeat("é", 128)}
+	matrix := v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+	matrix.Rows[0].Requirement = strings.Repeat("é", 1024)
+	policy := AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: evidence.Verifier.Argv, Version: "v1"}}}
+	if result := ValidateAcceptanceV2(v2Request(matrix, root, policy)); result.Status != "valid" {
+		t.Fatalf("multibyte exact-limit fields rejected: %+v", result)
+	}
+	evidence.Verifier.Argv = []string{strings.Repeat("é", 129)}
+	matrix.Rows[0].Evidence = &evidence
+	policy.Classes[0].Command = evidence.Verifier.Argv
+	if result := ValidateAcceptanceV2(v2Request(matrix, root, policy)); result.Code != "matrix_schema_invalid" {
+		t.Fatalf("argv byte limit not enforced: %+v", result)
+	}
+	blocked := v2Matrix("implementation-delivery", "ordinary", nil, &AcceptanceBlockerV2{Code: "blocked", Reason: strings.Repeat("é", 1024), BlockedBy: nil})
+	empty := t.TempDir()
+	if result := ValidateAcceptanceV2(v2Request(blocked, empty, AcceptancePolicyV2{})); result.Status != "blocked" {
+		t.Fatalf("multibyte exact-limit reason rejected: %+v", result)
+	}
+}
+
+func TestAcceptanceV2PortablePathCorpus(t *testing.T) {
+	data, err := os.ReadFile("../../docs/delivery-evidence/acceptance-matrix-v2.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Corpus []struct {
+			Value string `json:"value"`
+			Valid bool   `json:"valid"`
+		} `json:"x-portable-path-corpus"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Corpus) == 0 {
+		t.Fatal("shared portable-path corpus is empty")
+	}
+	for _, entry := range document.Corpus {
+		if actual := validV2ArtifactPath(entry.Value); actual != entry.Valid {
+			t.Errorf("portable path %q: runtime=%v schema corpus=%v", entry.Value, actual, entry.Valid)
+		}
+	}
+	if !validV2PortablePath(strings.Repeat("a", 255), 256) || validV2PortablePath(strings.Repeat("a", 256), 256) {
+		t.Fatal("portable path component boundary diverges from schema")
+	}
+}
+
+func TestAcceptanceV2ArtifactNameCorpus(t *testing.T) {
+	data, err := os.ReadFile("../../docs/delivery-evidence/acceptance-matrix-v2.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Corpus []struct {
+			Value    string   `json:"value"`
+			Repeat   int      `json:"repeat"`
+			Suffix   string   `json:"suffix"`
+			Encoding string   `json:"encoding"`
+			BytesHex string   `json:"bytes_hex"`
+			Values   []string `json:"values"`
+			Kind     string   `json:"kind"`
+			Platform string   `json:"platform"`
+			Valid    bool     `json:"valid"`
+		} `json:"x-artifact-name-corpus"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Corpus) == 0 {
+		t.Fatal("shared artifact-name corpus is empty")
+	}
+	for _, entry := range document.Corpus {
+		if entry.Encoding == "invalid-utf8" {
+			raw, err := hex.DecodeString(entry.BytesHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if actual := validV2ArtifactName(string(raw)); actual != entry.Valid {
+				t.Errorf("invalid UTF-8 artifact name: runtime=%v corpus=%v", actual, entry.Valid)
+			}
+			continue
+		}
+		if len(entry.Values) > 0 {
+			actual := true
+			seen := map[string]bool{}
+			for _, value := range entry.Values {
+				key := externalIdentityKey(value)
+				if !validV2ArtifactName(value) || seen[key] {
+					actual = false
+				}
+				seen[key] = true
+			}
+			expected := entry.Valid
+			if entry.Platform == "windows" && runtime.GOOS != "windows" {
+				expected = true
+			}
+			if actual != expected {
+				t.Errorf("artifact-name %s: runtime=%v corpus=%v", entry.Kind, actual, expected)
+			}
+			continue
+		}
+		repeat := entry.Repeat
+		if repeat == 0 {
+			repeat = 1
+		}
+		value := strings.Repeat(entry.Value, repeat) + entry.Suffix
+		if actual := validV2ArtifactName(value); actual != entry.Valid {
+			t.Errorf("artifact name %q: runtime=%v corpus=%v", value, actual, entry.Valid)
+		}
+	}
+	root := t.TempDir()
+	proof := []byte("proof")
+	if err := os.WriteFile(filepath.Join(root, "proof.txt"), proof, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory := writeV2Inventory(t, root)
+	evidence := v2Evidence("proof.txt", proof, inventory)
+	evidence.Artifacts[0].Name = "name with spaces"
+	matrix := v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+	policy := AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}}
+	if result := ValidateAcceptanceV2(v2Request(matrix, root, policy)); result.Status != "valid" {
+		t.Fatalf("contract-valid logical artifact name rejected: %+v", result)
+	}
+}
+
+func TestAcceptanceV2IncrementalEnumerationGuard(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	_, err = collectExternalEntries(func() ([]os.FileInfo, error) {
+		calls++
+		if calls <= externalRootMaxEntries+1 {
+			return []os.FileInfo{info}, nil
+		}
+		return nil, io.EOF
+	})
+	if err == nil {
+		t.Fatal("enumeration bound did not reject entry 1001")
+	}
+	if externalErr, ok := err.(*ExternalEvidenceError); !ok || externalErr.Code != "artifact_too_large" || calls != externalRootMaxEntries+1 {
+		t.Fatalf("unexpected bounded enumeration result: %v calls=%d", err, calls)
+	}
+}
+
+func TestAcceptanceV2ExternalExclusionsAndIncrementalBound(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Dir(root)
+	if _, err := OpenExternalEvidenceRoot(root, parent); err == nil {
+		t.Fatal("ancestor exclusion was accepted")
+	}
+	excluded := t.TempDir()
+	if _, err := OpenExternalEvidenceRoot(root, excluded); err != nil {
+		t.Fatalf("unrelated exclusion rejected: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		large := t.TempDir()
+		for index := 0; index < externalRootMaxEntries+1; index++ {
+			if err := os.WriteFile(filepath.Join(large, "f"+strconv.Itoa(index)), []byte("x"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		opened, err := OpenExternalEvidenceRoot(large)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := InventoryExternalEvidenceRoot(opened); err == nil || err.(*ExternalEvidenceError).Code != "artifact_too_large" {
+			t.Fatalf("large directory result: %v", err)
+		}
+	}
+}
+
+func TestAcceptanceV2WindowsFullVolumeIdentityModel(t *testing.T) {
+	low := externalIdentity{Device: 0x00000001, File: 7, FileHigh: 9, HasDevice: true, HasFile: true, HasFile128: true, Type: 1}
+	high := low
+	high.Device = 0x100000001
+	if externalAncestorIdentitiesEqual(low, high) {
+		t.Fatal("distinct 64-bit volume serials aliased")
+	}
+	if !externalAncestorIdentitiesEqual(low, low) {
+		t.Fatal("equal FILE_ID_INFO identity rejected")
+	}
+}
+
+func TestAcceptanceV2AncestorChurnDoesNotCauseFalseIdentityFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX ancestor churn route")
+	}
+	root := t.TempDir()
+	data := []byte("proof")
+	path := filepath.Join(root, "proof.txt")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := OpenExternalEvidenceRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := AcceptanceArtifactV2{Name: "proof.txt", Path: "proof.txt", SHA256: fileSHA256(data), Bytes: int64(len(data))}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for index := 0; ; index++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			sibling := filepath.Join(filepath.Dir(root), "sibling-"+strconv.Itoa(index%4))
+			_ = os.WriteFile(sibling, []byte("s"), 0600)
+			_ = os.Remove(sibling)
+		}
+	}()
+	for index := 0; index < 100; index++ {
+		if _, err := ReadVerifiedArtifact(opened, artifact); err != nil {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("unrelated sibling churn failed: %v", err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
+func TestAcceptanceV2RequestIsBoundedAndSingleFramed(t *testing.T) {
+	root := t.TempDir()
+	data := []byte("proof")
+	if err := os.WriteFile(filepath.Join(root, "proof.txt"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventory := writeV2Inventory(t, root)
+	evidence := v2Evidence("proof.txt", data, inventory)
+	matrix := v2Matrix("implementation-delivery", "ordinary", &evidence, nil)
+	request := v2Request(matrix, root, AcceptancePolicyV2{Classes: []AcceptanceClassPolicyV2{{ID: "ordinary", Kind: "ordinary", Verifier: "test-verifier", Environment: "local", Command: []string{"test"}, Version: "v1"}}})
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeAcceptanceV2Request(encoded); err != nil {
+		t.Fatalf("bounded request rejected: %v", err)
+	}
+	if _, err := DecodeAcceptanceV2Request(append(encoded, []byte("\n{}")...)); err == nil {
+		t.Fatal("multiple request frames accepted")
+	}
+	if _, err := DecodeAcceptanceV2Request(append(bytes.Repeat([]byte{' '}, 12*1024*1024+1), '{')); err == nil {
+		t.Fatal("limit+1 request accepted")
 	}
 }
 

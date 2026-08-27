@@ -19,7 +19,7 @@
     "validate:final-review-receipt": "node scripts/final-review-receipt.mjs",
     "validate:review-packet": "node scripts/validate-review-packet.mjs",
     "validate:review-packet-schema": "node scripts/validate-review-packet.mjs --schema",
-    "validate:delivery-schemas": "node scripts/validate-delivery-schemas.mjs",
+    "validate:delivery-schemas": "node scripts/validate-delivery-schemas.mjs && node scripts/export-implementation-plan-manifest-v2-schema.mjs --check && node -e \"const s=JSON.parse(require('fs').readFileSync('governance/docs/delivery-evidence/acceptance-matrix-v2.schema.json')); if(s.additionalProperties!==false||s.properties.schema_version.const!=='acceptance-matrix/v2') process.exit(1)\"",
     "validate:delivery-acceptance": "node scripts/validate-delivery-evidence.mjs --mode acceptance",
     "validate:delivery-evidence": "node scripts/validate-delivery-evidence.mjs",
     "validate:delivery-waiver": "node scripts/validate-delivery-waiver.mjs",

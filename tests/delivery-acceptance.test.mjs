@@ -184,6 +184,20 @@ test("signed waivers require external trust and single-use replay state", async 
   }
 });
 
+test("v2 acceptance support is additive and leaves the frozen v1 surface untouched", async () => {
+  const [schema, packageJson, v1Schema] = await Promise.all([
+    text("governance/docs/delivery-evidence/acceptance-matrix-v2.schema.json"),
+    json("package.json"),
+    text("governance/docs/delivery-evidence/acceptance-matrix-v1.schema.json"),
+  ]);
+  const parsed = JSON.parse(schema);
+  assert.equal(parsed.properties.schema_version.const, "acceptance-matrix/v2");
+  assert.equal(parsed.additionalProperties, false);
+  assert.equal(packageJson.scripts["validate:delivery-acceptance"], "node scripts/validate-delivery-evidence.mjs --mode acceptance");
+  assert.match(packageJson.scripts["validate:delivery-schemas"], /acceptance-matrix-v2\.schema\.json/);
+  assert.equal(createHash("sha256").update(v1Schema).digest("hex"), "c52283e1d360491ff67f90d1801f2f5ee7b98f4df9ff6e4c8c9f8dd3d94c0021");
+});
+
 test("delivery skills preserve explicit sticky merge authority", async () => {
   const [delivery, planning, evidence] = await Promise.all([
     text(".agents/skills/project-delivery/SKILL.md"),
