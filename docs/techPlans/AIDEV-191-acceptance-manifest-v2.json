@@ -3,8 +3,8 @@
   "ticket_id": "AIDEV-191",
   "repository": "Zkrausman/pi-sampler",
   "plan_path": "docs/techPlans/AIDEV-191-implementation-plan.md",
-  "plan_sha256": "36ec7b2329c886e09ccdb6096d6aff09de68e2a36e0098f8ce4d6616f8d9d50c",
-  "base_sha": "56e494dcc11b5df701c421ad68d240290d649c6a",
+  "plan_sha256": "dfc3d147dc5b33cfcfe55e9f511df0920f582f9499c5c319a1c4cfefcb0d7c88",
+  "base_sha": "0358e918cbfc5da1e9f6568cd1940a1969cf9ea9",
   "ticket_revision": "80a83a007ceffd8f35a6be12b97c01f781b1f7b67874cc2b7c2185c053e84384",
   "epic": {
     "kind": "standalone"
@@ -124,6 +124,7 @@
   "ownership": {
     "files": [
       "governance/pkg/deliveryevidence/acceptance_v2.go",
+      "governance/pkg/deliveryevidence/acceptance_v2_wire.go",
       "governance/pkg/deliveryevidence/external_root_posix.go",
       "governance/pkg/deliveryevidence/external_root_windows.go",
       "governance/docs/delivery-evidence/acceptance-matrix-v2.schema.json",
@@ -258,7 +259,7 @@
       {
         "kind": "repository_revision",
         "name": "base_sha",
-        "expected": "56e494dcc11b5df701c421ad68d240290d649c6a"
+        "expected": "0358e918cbfc5da1e9f6568cd1940a1969cf9ea9"
       },
       {
         "kind": "ticket_revision",
@@ -268,7 +269,7 @@
       {
         "kind": "plan_digest",
         "name": "plan_sha256",
-        "expected": "36ec7b2329c886e09ccdb6096d6aff09de68e2a36e0098f8ce4d6616f8d9d50c"
+        "expected": "dfc3d147dc5b33cfcfe55e9f511df0920f582f9499c5c319a1c4cfefcb0d7c88"
       },
       {
         "kind": "contract_digest",
