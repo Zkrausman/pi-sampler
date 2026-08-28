@@ -3,8 +3,8 @@
   "ticket_id": "AIDEV-191",
   "repository": "Zkrausman/pi-sampler",
   "plan_path": "docs/techPlans/AIDEV-191-implementation-plan.md",
-  "plan_sha256": "d41ff39d679bb525919089674c906304ee3f59b1d73aa6538315c29baf718061",
-  "base_sha": "3d858a0d4f8219f5ca1db13ad1de72e35ee09758",
+  "plan_sha256": "36ec7b2329c886e09ccdb6096d6aff09de68e2a36e0098f8ce4d6616f8d9d50c",
+  "base_sha": "56e494dcc11b5df701c421ad68d240290d649c6a",
   "ticket_revision": "80a83a007ceffd8f35a6be12b97c01f781b1f7b67874cc2b7c2185c053e84384",
   "epic": {
     "kind": "standalone"
@@ -35,7 +35,7 @@
       "id": "A191-T04",
       "title": "Trusted-base authority",
       "acceptance_class": "authority",
-      "requirement": "Select activation, implementation-plan contract, validator, profile, policy, schema, controller, and Go runtime only from verified regular blobs at the exact trusted base."
+      "requirement": "Select activation, implementation-plan contract, validator, profile, policy, schema, controller entry, controller core, and Go runtime only from verified regular blobs at the exact trusted base."
     },
     {
       "id": "A191-T05",
@@ -103,6 +103,7 @@
       "external-evidence-root/v2",
       "delivery-acceptance-v1-frozen",
       "delivery-acceptance-v2-activation/v1",
+      "scoped-review-packet/v3",
       "final-review-lifecycle/v3",
       "delivery-acceptance-policy/v2",
       "project-profile-schema/v1",
@@ -127,6 +128,7 @@
       "governance/pkg/deliveryevidence/external_root_windows.go",
       "governance/docs/delivery-evidence/acceptance-matrix-v2.schema.json",
       "scripts/trusted-delivery-evidence-controller.mjs",
+      "scripts/trusted-delivery-evidence-controller-core.mjs",
       "tests/delivery-acceptance-v2.test.mjs",
       "tests/fixtures/delivery-acceptance-v2/aidev-187-implementation-plan.md",
       "tests/fixtures/delivery-acceptance-v2/aidev-187-acceptance-manifest-v2.json",
@@ -189,6 +191,7 @@
       "external-evidence-root/v2",
       "delivery-acceptance-v1-frozen",
       "delivery-acceptance-v2-activation/v1",
+      "scoped-review-packet/v3",
       "final-review-lifecycle/v3",
       "delivery-acceptance-policy/v2",
       "project-profile-schema/v1",
@@ -197,7 +200,7 @@
   },
   "compatibility": {
     "assumptions": [
-      "The exact trusted base selects v1 or v2 before candidate bytes are interpreted.",
+      "The exact trusted base selects v1 or v2 before candidate bytes are interpreted; transition and validation authenticate both controller blobs and trusted-worktree bytes before the internal core is imported or candidate bytes are read, while support remains functional-only.",
       "The v1 schemas, acceptance.go, schema.go, fixtures, result strings, and line-ending digest semantics remain byte-and-result frozen.",
       "Packet-v3, receipt-v1, marker-v3, revocation, pre-push, base-selected CI, privacy, DCO, and explicit user-only merge authority remain unchanged.",
       "AIDEV-187 fixtures are exact bytes from Git object 992ba9bbf044dcaecce1e751695834894aa2d9ea and are never aliased or projected."
@@ -255,7 +258,7 @@
       {
         "kind": "repository_revision",
         "name": "base_sha",
-        "expected": "3d858a0d4f8219f5ca1db13ad1de72e35ee09758"
+        "expected": "56e494dcc11b5df701c421ad68d240290d649c6a"
       },
       {
         "kind": "ticket_revision",
@@ -265,7 +268,7 @@
       {
         "kind": "plan_digest",
         "name": "plan_sha256",
-        "expected": "d41ff39d679bb525919089674c906304ee3f59b1d73aa6538315c29baf718061"
+        "expected": "36ec7b2329c886e09ccdb6096d6aff09de68e2a36e0098f8ce4d6616f8d9d50c"
       },
       {
         "kind": "contract_digest",
@@ -286,6 +289,11 @@
         "kind": "contract_digest",
         "name": "project-profile-schema/v1",
         "expected": "7c83a3d308d5b7e193a7333316c55cdbfbbc9b3e181b6fadd4f67fba63fae954"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "scoped-review-packet/v3",
+        "expected": "11ebb005703f69a4431e4a28fdc050409a442e340cc09902c82a348272bff2b2"
       }
     ],
     "required_before": "implementation"
