@@ -9,6 +9,29 @@ Review from a clean, managed review workspace and a distinct reviewer run. The
 consumer profile supplies the base branch, verification commands, required
 checks, prohibited paths, and domain policy.
 
+## Mandatory Herdr review-tab ownership
+
+When an Orchestrator is running inside Herdr, the independent review final result must be owned by a separate Review tab under [`docs/HERDR-DELEGATION.md`](../../../docs/HERDR-DELEGATION.md). Start that tab with exactly `pi --model openai-codex/gpt-5.6-sol --thinking medium` and leave it idle until the Orchestrator supplies the complete frozen review input. The Review tab may use internal subagents, including a bounded fresh child required by a final-review contract, but it must synthesize and return exactly one durable final handoff of its own.
+
+The Review tab is a separate parent-level lane, not another pane in the
+Orchestrator tab and not the Dev tab. Do not substitute a parent-launched
+headless subagent, `workflowScript` child, Herdr project pane opened through
+`project.open`, split pane, or the Dev tab itself for this review result. The
+Dev result is owned by a separate Luna-max tab using exactly
+`pi --model openai-codex/gpt-5.6-luna --thinking max`. If a required Review tab
+cannot be established, review is unavailable and the gate remains blocked;
+do not silently fall back to another model, effort level, workspace, or
+orchestration mechanism.
+
+The Review tab must receive a complete frozen set: exact repository, immutable
+base and candidate head, complete packet, acceptance matrix, verification
+evidence, approved profile, and required review identity. Re-freeze every
+bound input after a change; a delta-only review is invalid. Provision and
+inspect a distinct managed review workspace with its own lease through the
+review-workspace flow; never review in, or share, the Dev tab's writable
+worktree. A review handoff is evidence only and never grants commit, push, PR,
+tracker, publication, cleanup, or merge authority.
+
 ## Review workspace preconditions
 
 - Resolve the exact candidate commit and approved project profile before

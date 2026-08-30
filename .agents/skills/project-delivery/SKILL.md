@@ -7,6 +7,37 @@ description: Plan, implement, verify, and hand off a repository change using an 
 
 Use a project profile for repository source, work-item identifiers, automatic worktree provisioning, verification commands, evidence paths, required checks, and publication policy. Never infer those values from a package default or a ticket-named Git branch.
 
+## Mandatory Herdr delegation topology
+
+When an Orchestrator is running inside Herdr, the only supported parent-level delivery delegation is the tab-owned workflow in [`docs/HERDR-DELEGATION.md`](../../../docs/HERDR-DELEGATION.md). This is a hard topology and authority boundary, not a set of interchangeable options:
+
+- the coordinating session remains the Orchestrator tab and is not a Dev or Review final-result lane;
+- every mutation-owning final result runs in a separate Dev tab using `openai-codex/gpt-5.6-luna` with `--thinking max`;
+- every independent review final result runs in a separate Review tab using `openai-codex/gpt-5.6-sol` with `--thinking medium`;
+- each tab returns exactly one explicit durable final handoff to the Orchestrator;
+- Dev and Review tabs may use subagents internally, but their children are only aids and cannot become parent-level results;
+- the Orchestrator must not replace these tabs with parent-launched headless subagents, `workflowScript` children, Herdr project panes opened through `project.open`, or split-pane delivery lanes.
+
+The model ID and thinking level are exact; do not silently substitute a model,
+effort level, same-tab pane, or fallback. Keep the Review tab idle until the
+Orchestrator freezes and supplies its complete input. That complete input is the
+complete frozen review input, including the exact repository, immutable
+base/head, complete packet, acceptance matrix, verification evidence, profile,
+and required review identity. Any change to a bound input invalidates the
+result and requires a new complete freeze; do not use delta-only review. The
+Review tab uses a distinct managed review workspace
+with its own lease and never shares the Dev tab's writable worktree. If Herdr
+or a required separate tab is unavailable, stop and ask the human rather than
+silently changing topology.
+
+The Dev tab owns mutations in its managed leased worktree. The Orchestrator
+may coordinate, validate identities, freeze inputs, route handoffs, and perform
+separately authorized lifecycle actions, but it must not mutate the candidate
+in a shared or unleased checkout. A Dev or Review handoff is evidence only:
+`do not merge` remains sticky until the exact user action `Merge PR #N`, and no
+review, marker, or tool result grants commit, push, PR, tracker, publication,
+or merge authority.
+
 ## Preconditions
 
 1. Read the target repository's contributor instructions and approved profile.
