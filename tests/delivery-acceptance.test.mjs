@@ -184,6 +184,19 @@ test("signed waivers require external trust and single-use replay state", async 
   }
 });
 
+test("inert v2 support is additive and leaves activation and v1 routes unchanged", async () => {
+  const packageJson = await json("package.json");
+  assert.equal(packageJson.scripts["validate:delivery-acceptance"], "node scripts/validate-delivery-evidence.mjs --mode acceptance");
+  assert.equal(packageJson.scripts["validate:delivery-v2-support"], "node scripts/trusted-delivery-evidence-controller.mjs --mode support --json");
+  assert.equal(packageJson.dependencies?.["@zkrausman/pi-evolution"], undefined);
+  await assert.rejects(access(join(root, "contracts/delivery-acceptance-v2-activation.json")), { code: "ENOENT" });
+  await assert.rejects(access(join(root, "contracts/delivery-acceptance-v2-trusted-map.json")), { code: "ENOENT" });
+  const controller = await text("scripts/trusted-delivery-evidence-controller.mjs");
+  assert.match(controller, /functional-only/);
+  assert.match(controller, /authority: false/);
+  assert.doesNotMatch(controller, /(?:git\\s+push|gh\\s+pr\\s+merge|linear)/i);
+});
+
 test("delivery skills preserve explicit sticky merge authority", async () => {
   const [delivery, planning, evidence] = await Promise.all([
     text(".agents/skills/project-delivery/SKILL.md"),
