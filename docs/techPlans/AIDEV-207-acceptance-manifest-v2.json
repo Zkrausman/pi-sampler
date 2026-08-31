@@ -3,9 +3,9 @@
   "ticket_id": "AIDEV-207",
   "repository": "Zkrausman/pi-sampler",
   "plan_path": "docs/techPlans/AIDEV-207-implementation-plan.md",
-  "plan_sha256": "1ccb354cf35b88ff9270298a782268e411c534fd3269bc01867c93ed97dd6830",
+  "plan_sha256": "c6a15faf76c7deb61ba764292cc5d21d30cd941efb3cd23f54ae8addf6270da5",
   "base_sha": "b57cb97b8f110c5f40bcefee3476a6013a6c7cd0",
-  "ticket_revision": "7495f11df9288325c211328128d19e21b44c0e9bb91b1c3b9d6ed219ecb58ea1",
+  "ticket_revision": "6817ab7d5e37ebec6cb2825e05ca83384b662319a07e9660b1184c6c0dff257f",
   "epic": {
     "kind": "member",
     "epic_id": "AIDEV-168",
@@ -95,13 +95,13 @@
       "id": "A207-T08",
       "title": "Candidate independence",
       "acceptance_class": "authority",
-      "requirement": "Prove candidate code, prompts, panes, environment variables, working-tree bytes, and candidate profile values cannot change trusted policy admission or role resolution; keep model/provider identity separate from authority."
+      "requirement": "Bind the trusted brand to immutable canonical policy bytes and digest; recursively deep-freeze normalized/exposed policy and resolver result graphs; recompute and compare integrity before role, availability, fallback, override, or provider processing; fail closed with no provider/model/availability disclosure when still-schema-valid post-load selected or fallback assignments are tampered; and prove candidate code, prompts, panes, environment variables, working-tree bytes, and candidate profile values cannot change trusted policy admission or role resolution while keeping model/provider identity separate from authority."
     },
     {
       "id": "A207-T09",
       "title": "Frozen planning and delivery gates",
       "acceptance_class": "authority",
-      "requirement": "Preserve exact-base worktree rules, the separately authorized two-file plan-publication gate, one challenge, one integrated revision, one fresh independent review, two-cycle remediation limit, v2 plan validation, packet-v3, receipt-v1, marker-v3, review lifecycle, DCO, and explicit user-only merge authority."
+      "requirement": "Preserve exact-base worktree rules, the separately authorized two-file plan-publication gate, one challenge, one integrated revision, one fresh independent review, the correction-1 same-child exact-head resume on lineage `c1c73461-f296-409c-885d-b844534c0946` with no new challenge/reviewer, two-cycle remediation limit, v2 plan validation, packet-v3, receipt-v1, marker-v3, review lifecycle, DCO, and explicit user-only merge authority."
     },
     {
       "id": "A207-T10",
@@ -185,7 +185,8 @@
       "The original trusted base remains b57cb97b8f110c5f40bcefee3476a6013a6c7cd0 in the parent binding and every child output even though AIDEV-208 starts from the later publication merge.",
       "Child-specific size values are repository-grounded planning evidence only; each child has a separate pre-coding credibility gate and blocks before coding if its cohesive estimate is not credibly at or below 1500.",
       "scripts/review-policy.mjs, packet-v3, receipt-v1, marker-v3, DCO, implementation-plan-manifest/v2 admission, AIDEV-202 activation, and explicit user-only merge authority remain unchanged.",
-      "External-manual assignments are operator handoffs only; no resolver or candidate can launch a provider, prove execution, mutate a tracker, or grant lifecycle authority."
+      "External-manual assignments are operator handoffs only; no resolver or candidate can launch a provider, prove execution, mutate a tracker, or grant lifecycle authority.",
+      "The trusted brand is bound to immutable canonical bytes and digest; normalized policy and every exposed resolver result graph are recursively frozen; resolver integrity is recomputed and compared before role, availability, fallback, override, or provider processing, and tamper failures use the existing no-echo role_policy_invalid envelope."
     ],
     "preserves_v1_readability": true,
     "silently_upgrades_v1": false
@@ -350,12 +351,12 @@
       {
         "kind": "ticket_revision",
         "name": "ticket_revision",
-        "expected": "7495f11df9288325c211328128d19e21b44c0e9bb91b1c3b9d6ed219ecb58ea1"
+        "expected": "6817ab7d5e37ebec6cb2825e05ca83384b662319a07e9660b1184c6c0dff257f"
       },
       {
         "kind": "plan_digest",
         "name": "plan_sha256",
-        "expected": "1ccb354cf35b88ff9270298a782268e411c534fd3269bc01867c93ed97dd6830"
+        "expected": "c6a15faf76c7deb61ba764292cc5d21d30cd941efb3cd23f54ae8addf6270da5"
       },
       {
         "kind": "contract_digest",

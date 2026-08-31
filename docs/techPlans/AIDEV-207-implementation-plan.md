@@ -2,36 +2,44 @@
 
 ## 0. Remediation binding, authority, and frozen identity
 
-This is remediation cycle 1 of the complete AIDEV-207 plan/manifest pair. It
-replaces the rejected one-slice delivery with the exact serial
-`AIDEV-208 -> AIDEV-209 -> AIDEV-210` execution graph and a separately
-authorized plan-publication gate. The pair is still an uncommitted planning
-handoff. This plan grants no implementation, staging, commit, push, PR or
-Linear mutation, publication, activation, merge, or cleanup authority. `do not
-merge` remains sticky; only the exact user action `Merge PR #N` can authorize
-an individual merge.
+This is correction 1 to remediation cycle 1 of the complete AIDEV-207
+plan/manifest pair, following the blocked same-child exact-head review of
+published head `07d09b1b9b44a7c2b0ba4674b1290d8288372d49`. It preserves the
+rejected one-slice replacement, the exact serial
+`AIDEV-208 -> AIDEV-209 -> AIDEV-210` execution graph, and the separately
+authorized plan-publication gate. The corrected pair is still an uncommitted
+planning handoff. This plan grants no implementation, staging, commit, push,
+PR or Linear mutation, publication, activation, merge, or cleanup authority.
+`do not merge` remains sticky; only the exact user action `Merge PR #N` can
+authorize an individual merge.
 
 | Fact | Frozen value |
 |---|---|
 | Work item | `AIDEV-207` |
 | Repository/profile | `Zkrausman/pi-sampler`; `profiles/pi-sampler.json` |
 | Planning branch | `zkrausman/aidev-207-plan-implementation-plan-4bbb3f` |
-| Original trusted base and current `HEAD` | `b57cb97b8f110c5f40bcefee3476a6013a6c7cd0` |
-| Remediated parent ticket revision | `7495f11df9288325c211328128d19e21b44c0e9bb91b1c3b9d6ed219ecb58ea1` |
+| Original trusted base | `b57cb97b8f110c5f40bcefee3476a6013a6c7cd0` |
+| Published head being corrected and required correction parent | `07d09b1b9b44a7c2b0ba4674b1290d8288372d49` |
+| Remediated parent ticket revision | `6817ab7d5e37ebec6cb2825e05ca83384b662319a07e9660b1184c6c0dff257f` |
+| Prior published pair ticket revision | `7495f11df9288325c211328128d19e21b44c0e9bb91b1c3b9d6ed219ecb58ea1` |
 | Previous parent ticket revision | `18831c945a18f61fd4b9f0497c439965b4130207e0511958c68830e559d0d5c7` |
-| Parent revision change | Child creation and the Orchestrator's serial-decomposition comment changed Linear metadata; the scope/acceptance text remains bound and is re-frozen below. |
-| Child snapshot evidence | `.git/pi-handoffs/AIDEV-207/planning/pi-bootstrap/remediation-1/ticket-snapshots/` (external, local only) |
+| Parent revision change | Child creation and the serial-decomposition comment produced the prior published-pair revision; fresh read-only revalidation then captured the later Draft-PR status comment and `updatedAt` change, so correction 1 rebinds the pair to the new selected-snapshot digest while preserving the scope, child revisions, and edges. |
+| Child snapshot evidence | `.git/pi-handoffs/AIDEV-207/planning/pi-bootstrap/remediation-1/ticket-snapshots/` (prior external evidence); correction-1 fresh revalidation is recorded only in the requested external handoff |
 | Base profile SHA-256 | `96e4b00bc78b16b5e544ee48f369137c74a2ef040c7b226b5c88d542d2e6a6c9` |
 | Base profile-schema SHA-256 | `7c83a3d308d5b7e193a7333316c55cdbfbbc9b3e181b6fadd4f67fba63fae954` |
 | Current review-policy SHA-256 | `12d32a4b589dc1d1b05089409cc65e4fffcd7867b5eee438b140688a01cc7b4f` |
 
-The remediated parent revision is the SHA-256 of the exact selected current
-Linear AIDEV-207 issue, including the current comments, plus the selected
-GitHub `Zkrausman/pith#74` mirror, serialized as
+The correction-1 parent revision is the SHA-256 of the exact selected current
+Linear AIDEV-207 issue, including its three selected comments through the
+2026-08-31T18:05:49.639Z Draft-PR status comment and the current selected PR
+attachment, plus the selected GitHub `Zkrausman/pith#74` mirror, serialized as
 `JSON.stringify({ticket:<selected Linear issue>,githubMirror:<selected GitHub issue mirror>}) + LF`.
-The old and new basis, selected objects, child snapshots, and derivation are
-external evidence. No credential or lease token is copied into this plan,
-the manifest, or repository history.
+That fresh basis yields
+`6817ab7d5e37ebec6cb2825e05ca83384b662319a07e9660b1184c6c0dff257f`; the prior
+published pair used `7495f11df9288325c211328128d19e21b44c0e9bb91b1c3b9d6ed219ecb58ea1`
+before the PR attachment/status update. The old and new basis, selected
+objects, child snapshots, and derivation are external evidence. No credential
+or lease token is copied into this plan, the manifest, or repository history.
 
 ### One-time Pi-authored bootstrap exception
 
@@ -58,9 +66,12 @@ The complete corrected delivery has two distinct gates before AIDEV-208:
 
 1. **Planning approval.** The same Sol/medium independent reviewer who issued
    `independent-review-v1` must verify the complete corrected plan and manifest
-   after this remediation. That approval is read-only plan approval and does
-   not authorize publication or coding. No second challenge or reviewer is
-   permitted.
+   after correction 1. The existing Review tab resumes the same-child lineage
+   `c1c73461-f296-409c-885d-b844534c0946` against the corrected exact head; this
+   is not a new challenge or reviewer. That approval is read-only plan approval
+   and does not authorize publication or coding. The prior blocked receipt
+   remains immutable evidence, and no receipt or marker may be published unless
+   the corrected exact-head review is clean.
 2. **Separate plan publication.** The Orchestrator may prepare a publication
    candidate containing exactly the two approved planning files:
    `docs/techPlans/AIDEV-207-implementation-plan.md` and
@@ -208,7 +219,8 @@ public exports:
 - `resolveDeliveryRoleAssignment`
 
 Normalization recursively sorts object keys, sorts assignment IDs and
-set-valued `roles`/`allowedOverrides`, and preserves fallback order.
+set-valued `roles`/`allowedOverrides`, preserves fallback order, and returns a
+new graph whose every object and array node is deeply frozen before exposure.
 Serialization is compact UTF-8 JSON with no BOM or trailing newline. The digest
 uses the domain separator above and lowercase SHA-256.
 
@@ -239,25 +251,61 @@ content additionally obeys the 64 KiB/depth/node/string bounds. Worktree,
 candidate commit, ambient `HEAD`, and caller-selected profile/schema/loader
 paths are never read.
 
-The optional policy property is absent only in the pre-AIDEV-207 base and
-returns `role_policy_unspecified`. A malformed trusted schema/profile/policy,
-invalid grammar, bounds, reference, or canonical bytes returns
-`role_policy_invalid`; catalog failures return their specific codes. The
-loader is read-only and candidate-independent.
+After normalization and serialization, the loader creates a module-private
+brand token and records it in a module-private `WeakMap` with an immutable
+record containing the exact canonical UTF-8 bytes (held as an immutable
+base64 representation, never a mutable Buffer alias) and the digest. It stores
+that token on the policy through the existing non-enumerable, non-writable,
+non-configurable brand property. The token, record, normalized policy graph,
+and load envelope are deeply frozen; the brand property alone is never
+sufficient to establish trust, and caller-supplied bytes or digests are never
+accepted. The optional policy property is absent only in the pre-AIDEV-207 base
+and returns `role_policy_unspecified`. A malformed trusted schema/profile/policy,
+invalid grammar, bounds, reference, canonical bytes, or integrity mismatch
+returns `role_policy_invalid`; catalog failures return their specific codes.
+The loader is read-only and candidate-independent.
 
 `resolveDeliveryRoleAssignment({trustedPolicy,role,operatorOverrideId,availability})`
-accepts exactly those four keys and never launches a backend. It requires the
-trusted-loader brand, validates policy before role selection, validates the
-role enum (`role_invalid`), checks a non-null override against the allowlist
-before availability (`role_override_not_allowed`), constructs
+accepts exactly those four keys and never launches a backend. After the exact
+API-shape check, it first retrieves the private brand record and recomputes
+normalization, canonical bytes, and the domain-separated digest from the
+supplied policy. It compares both bytes and digest to the immutable brand
+record, confirms the exposed policy graph is still deeply frozen, and returns
+exactly `{"ok":false,"code":"role_policy_invalid"}` on any missing brand,
+exception, mismatch, or freeze failure. This integrity gate runs before role
+enum validation, provider/model/profile or catalog processing, availability
+object/key/value inspection, fallback construction, or override allowlist
+processing. Thus a schema-valid tamper cannot redirect resolution or disclose
+provider, model, availability, path, or input values.
+
+Only after the integrity gate does the existing deterministic order apply:
+validate the role enum (`role_invalid`), check a non-null override against the
+allowlist before availability (`role_override_not_allowed`), construct
 `[selected,...fallbacks]` or `[override,...fallbacks excluding override]`
-without implicit selected insertion, and requires availability keys to be
+without implicit selected insertion, and require availability keys to be
 exactly the considered set with values `available|unavailable`. It chooses the
 first available assignment or returns `role_unavailable`. A success envelope
 has exactly `ok`, `role`, `assignment`, `source`, `fallbackIndex`, and
 `rolePolicySha256`; selected/override indexes are `null`, and fallback indexes
-are zero-based indexes in the original fallback array. Resolver failures have
-exactly `ok:false` and a stable code, without value echoing.
+are zero-based indexes in the original fallback array. Every exposed resolver
+success/failure envelope and nested result graph is deeply frozen. Resolver
+failures have exactly `ok:false` and a stable code, without value echoing.
+
+P2 tests must load a real exact-base fixture and assert recursive freezing of
+the normalized policy, its assignment/role graphs, the load envelope, and a
+successful resolver result. They must then create two separate schema-valid
+mutable copies: one changes the planner `selected` assignment while rotating
+the old selected ID into the fallback list, and the other changes fallback
+order/IDs while preserving unique role-valid references. Each copy retains
+only the original hidden brand-token descriptor (the test may obtain that
+non-enumerable symbol reflectively; it adds no public export), is deeply frozen,
+and is passed to the resolver with an availability `Proxy` that would throw if
+its keys or values were inspected. Both calls must return exactly
+`{"ok":false,"code":"role_policy_invalid"}` before any availability or
+provider processing; serialized failures must contain no provider, model,
+availability, path, or input disclosure. Strict-mode direct mutation attempts
+against the loaded policy and a returned result must also fail or leave the
+original graph unchanged.
 
 ## 4. Exact serial child graph and responsibilities
 
@@ -349,10 +397,15 @@ select tracker state.
 `tests/fixtures/role-policy/aidev-207-bootstrap-vectors.json`. Implement the
 self-contained exact-base loader, bounded parser, trusted profile/schema
 validation, catalogs/profile admission, normalizer, serializer, digest,
-trusted brand, deterministic resolver, stable no-echo diagnostics, and the
-non-secret vectors specified in Section 3. Keep the current profile and
-canonical planning documents unchanged/inert. Do not add a candidate verifier,
-packet/receipt/marker successor, or review-policy integration.
+trusted brand token bound to immutable canonical bytes/digest, recursive
+freezing of normalized/exposed policy and resolver result graphs, the
+pre-resolution integrity recompute/compare boundary, deterministic resolver,
+stable no-echo diagnostics, and the non-secret vectors specified in Section 3.
+The tests include still-schema-valid selected and fallback post-load tamper
+probes that fail closed before availability/provider processing. Keep the
+current profile and canonical planning documents unchanged/inert. Do not add a
+candidate verifier, packet/receipt/marker successor, or review-policy
+integration.
 
 **Planning-size evidence, not authority.** The current 911-line
 `scripts/review-policy.mjs` is an analog, not an imported implementation; it
@@ -363,7 +416,7 @@ this repository-grounded upper range:
 |---|---:|---|
 | Fixed Git-root/blob loader and bounded input plumbing | 300 | Two fixed blobs, exact commit/root checks, size-before-read and no-echo failure paths; no review-root policy. |
 | Policy grammar/catalog/profile admission, normalization, brand, digest, resolver | 520 | Six public exports plus fixed precedence and bounds; no lifecycle/provider launch. |
-| Runtime/security/precedence/cross-platform tests | 470 | Temporary Git fixtures, mutation probes, exact envelopes, catalog/availability and malformed-input vectors. |
+| Runtime/security/precedence/cross-platform tests | 520 | Temporary Git fixtures, recursive-freeze and brand-integrity probes, still-valid selected/fallback tamper cases, exact envelopes, catalog/availability and malformed-input vectors. |
 | Canonical JSON fixture vectors | 100 | Non-secret policy, availability, override, fallback, diagnostic, and digest cases. |
 | **P2 upper planning estimate** | **1,390** | Explicit function/test inventory, below 1,500 with 110-line headroom. |
 
@@ -392,9 +445,12 @@ ticket/revision, exact paths, vectors, tests, review, CI, DCO, and user
 authorization. Only `merge_sha` becomes the AIDEV-210 Git predecessor.
 
 P2 owns A207-T03, T04, T05, T06, and T08. It carries T01 from P1 and supplies
-serial evidence for T09/T10; it cannot claim configured planner/docs adoption
-or final completion. Its child packet reports every A207 row and every
-inherited output by exact digest.
+serial evidence for T09/T10; its T08 evidence includes the immutable
+brand-bound canonical bytes/digest, recursive policy/result freezing, the
+pre-role/pre-availability integrity gate, and both still-valid selected/fallback
+post-load tamper failures. It cannot claim configured planner/docs adoption or
+final completion. Its child packet reports every A207 row and every inherited
+output by exact digest.
 
 ### 4.3 Child P3 — AIDEV-210 configured planner and model-neutral planning
 
@@ -476,8 +532,8 @@ may be reused.
 | T05 | AIDEV-209 | Selected/override/fallback/availability envelopes and indexes. |
 | T06 | AIDEV-209 | Catalog, role, reference, override, availability, forged-policy, exhaustion, and no-echo failures. |
 | T07 | AIDEV-210 | Model-neutral canonical skill/documentation and mutation tests. |
-| T08 | AIDEV-209, completed by AIDEV-210 | Candidate/worktree/env/prompt/pane independence and no authority from model diversity. |
-| T09 | Every child, final route AIDEV-210 | Publication separation, exact-base workflow, review/remediation, v1/v2, packet/receipt/marker, DCO, and user-only merge evidence. |
+| T08 | AIDEV-209, completed by AIDEV-210 | Immutable brand-bound canonical policy bytes/digest, recursive policy/result freezing, integrity recompute/compare before role/availability/fallback/override/provider processing, still-valid selected/fallback post-load tamper failures, candidate/worktree/env/prompt/pane independence, and no authority from model diversity. |
+| T09 | Every child, final route AIDEV-210 | Publication separation, exact-base workflow, same-child correction-1 exact-head resume on lineage `c1c73461-f296-409c-885d-b844534c0946` with no new challenge/reviewer, review/remediation, v1/v2, packet/receipt/marker, DCO, and user-only merge evidence. |
 | T10 | Every child, final route AIDEV-210 | Serial graph, child-specific credible size gates, exact outputs, reviews, CI, DCO, user merge, and immutable SHAs. |
 
 The parent plan is complete only after plan publication and all three child
@@ -523,8 +579,8 @@ lockfiles, AIDEV-202 activation/map/controller paths, or unrelated policy.
 - [ ] A207-T05: Resolve selected, allowlisted-override, and ordered-fallback assignments using the exact considered availability set and exact success envelopes, including correct null/zero-based fallback indexes.
 - [ ] A207-T06: Reject unsupported provider/model/thinking/profile/role/reference/override/availability inputs, malformed policy, missing policy, forged policy, and exhausted fallbacks with deterministic precedence and no implicit fallback or launch behavior.
 - [ ] A207-T07: Make canonical planning skill/documentation backend/model-neutral so trusted policy selects the planner and an operator launches the selected backend, with no normative named-provider subscription requirement.
-- [ ] A207-T08: Prove candidate code, prompts, panes, environment variables, working-tree bytes, and candidate profile values cannot change trusted policy admission or role resolution; keep model/provider identity separate from authority.
-- [ ] A207-T09: Preserve exact-base worktree rules, the separately authorized two-file plan-publication gate, one challenge, one integrated revision, one fresh independent review, two-cycle remediation limit, v2 plan validation, packet-v3, receipt-v1, marker-v3, review lifecycle, DCO, and explicit user-only merge authority.
+- [ ] A207-T08: Bind the trusted brand to immutable canonical policy bytes and digest; recursively deep-freeze normalized/exposed policy and resolver result graphs; recompute and compare integrity before role, availability, fallback, override, or provider processing; fail closed with no provider/model/availability disclosure when still-schema-valid post-load selected or fallback assignments are tampered; and prove candidate code, prompts, panes, environment variables, working-tree bytes, and candidate profile values cannot change trusted policy admission or role resolution while keeping model/provider identity separate from authority.
+- [ ] A207-T09: Preserve exact-base worktree rules, the separately authorized two-file plan-publication gate, one challenge, one integrated revision, one fresh independent review, the correction-1 same-child exact-head resume on lineage `c1c73461-f296-409c-885d-b844534c0946` with no new challenge/reviewer, two-cycle remediation limit, v2 plan validation, packet-v3, receipt-v1, marker-v3, review lifecycle, DCO, and explicit user-only merge authority.
 - [ ] A207-T10: Deliver the cohesive implementation through exact serial AIDEV-208 -> AIDEV-209 -> AIDEV-210 children with child-specific credible-at-or-below-1,500 pre-coding gates, exact predecessor outputs, independent exact-head review, protected CI, DCO, explicit `Merge PR #N`, and immutable merge output; block before coding if any child estimate is not credible and never split arbitrary fragments.
 
 ## 8. Validation and authority protocol
@@ -591,7 +647,7 @@ node scripts/validate-implementation-plan.mjs \
   --profile profiles/pi-sampler.json \
   --repository Zkrausman/pi-sampler \
   --ticket AIDEV-207 \
-  --ticket-revision 7495f11df9288325c211328128d19e21b44c0e9bb91b1c3b9d6ed219ecb58ea1 \
+  --ticket-revision 6817ab7d5e37ebec6cb2825e05ca83384b662319a07e9660b1184c6c0dff257f \
   --json
 ```
 
@@ -607,20 +663,22 @@ challenge or reviewer is permitted in this cycle.
 
 The serial decomposition preserves the non-defect strengths from the prior
 pair: exact-base loading, bounded blobs, approved repository binding,
-canonical/digest semantics, exact resolver precedence, no-echo diagnostics,
-optional manual planning, model-neutral documentation, candidate independence,
-v1/v2 readability, packet-v3/receipt-v1/marker-v3, review lifecycle, DCO, and
-human-only merge authority.
+canonical/digest semantics, the immutable brand-bound integrity boundary,
+recursive freezing, exact resolver precedence, no-echo diagnostics, optional
+manual planning, model-neutral documentation, candidate independence, v1/v2
+readability, packet-v3/receipt-v1/marker-v3, review lifecycle, DCO, and human-
+only merge authority.
 
 The pair is stale when the parent/child ticket descriptions, revisions,
 parent/edge graph, plan-publication output, original base, profile/schema/
 review-policy/validator bytes, AIDEV-187 compatibility semantics, assignment
-IDs/catalogs/fallbacks/overrides, digest/diagnostic rules, child allowlists or
-size credibility, output contracts, acceptance requirements, or approval state
-changes. The manifest records portable predecessor-output aliases and
-`predecessor_output_changed` triggers; child output values and merge SHAs are
-JIT evidence and are never fabricated here. A descendant campaign change does
-not silently rewrite this pair; each child must rebind its own predecessor.
+IDs/catalogs/fallbacks/overrides, canonical byte/digest or brand-integrity
+rules, recursive-freeze guarantees, mutation-test obligations, child
+allowlists or size credibility, output contracts, acceptance requirements, or
+approval state changes. The manifest records portable predecessor-output aliases
+and `predecessor_output_changed` triggers; child output values and merge SHAs
+are JIT evidence and are never fabricated here. A descendant campaign change
+does not silently rewrite this pair; each child must rebind its own predecessor.
 
 After authorized P3 merge, AIDEV-202 must regenerate and independently approve
 its own plan against the new trusted planner policy. AIDEV-187 must reconcile
