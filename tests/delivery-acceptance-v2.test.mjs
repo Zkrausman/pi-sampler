@@ -299,7 +299,10 @@ test("A191-T08 activation declarations remain absent", async () => {
 test("A191-T09 support freezes before importing core or spawning tests", async () => {
   let called = false;
   await assert.rejects(
-    () => supportReport({ trustedBase: PLAN_AMENDMENT_4_SHA }, { runCommands: () => { called = true; return []; } }),
+    () => supportReport({ trustedBase: PLAN_AMENDMENT_4_SHA }, {
+      gitIdentity: () => ({ head: SLICE1B_SHA }),
+      runCommands: () => { called = true; return []; },
+    }),
     /trusted_base_invalid/,
   );
   assert.equal(called, false);
