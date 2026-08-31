@@ -640,7 +640,7 @@ export function runTrustedPlanValidator(input, maybeOptions = {}) {
   const options = isRecord(input) ? input : { trustedWorktree: input, ...maybeOptions };
   const trustedWorktree = canonicalDirectory(options.trustedWorktree, "trusted_base_invalid");
   const candidateRoot = canonicalDirectory(options.candidateRoot, "candidate_root_invalid");
-  const validatorPath = join(trustedWorktree, TRUSTED_DELIVERY_PATHS.manifestValidator.replaceAll("/", "/"));
+  const validatorPath = join(trustedWorktree, TRUSTED_DELIVERY_PATHS.manifestValidator);
   const record = readTrustedBlobRecord(trustedWorktree, options.base, TRUSTED_DELIVERY_PATHS.manifestValidator, TRUSTED_DELIVERY_LIMITS.controllerBytes);
   const local = readStableWorking(trustedWorktree, TRUSTED_DELIVERY_PATHS.manifestValidator, TRUSTED_DELIVERY_LIMITS.controllerBytes, "trusted_blob_invalid");
   if (!local.bytes.equals(record.bytes)) fail("trusted_blob_invalid");
