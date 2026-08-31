@@ -20,6 +20,7 @@
     "validate:review-packet": "node scripts/validate-review-packet.mjs",
     "validate:review-packet-schema": "node scripts/validate-review-packet.mjs --schema",
     "validate:delivery-schemas": "node scripts/validate-delivery-schemas.mjs",
+    "validate:delivery-v2-support": "node scripts/trusted-delivery-evidence-controller.mjs --mode support --json",
     "validate:delivery-acceptance": "node scripts/validate-delivery-evidence.mjs --mode acceptance",
     "validate:delivery-evidence": "node scripts/validate-delivery-evidence.mjs",
     "validate:delivery-waiver": "node scripts/validate-delivery-waiver.mjs",
