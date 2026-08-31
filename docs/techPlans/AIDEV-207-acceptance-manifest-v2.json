@@ -1,0 +1,393 @@
+{
+  "schema_version": "implementation-plan-manifest/v2",
+  "ticket_id": "AIDEV-207",
+  "repository": "Zkrausman/pi-sampler",
+  "plan_path": "docs/techPlans/AIDEV-207-implementation-plan.md",
+  "plan_sha256": "1ccb354cf35b88ff9270298a782268e411c534fd3269bc01867c93ed97dd6830",
+  "base_sha": "b57cb97b8f110c5f40bcefee3476a6013a6c7cd0",
+  "ticket_revision": "7495f11df9288325c211328128d19e21b44c0e9bb91b1c3b9d6ed219ecb58ea1",
+  "epic": {
+    "kind": "member",
+    "epic_id": "AIDEV-168",
+    "title": "Harden and simplify the AI-first delivery assurance system",
+    "member_count": 11
+  },
+  "hard_dependencies": [],
+  "predecessor_outputs": [
+    {
+      "ticket_id": "AIDEV-207",
+      "output_id": "AIDEV207-PLAN-SHA",
+      "contract": "pi-sampler.aidev-207-plan-publication/v1"
+    },
+    {
+      "ticket_id": "AIDEV-208",
+      "output_id": "ROLE-POLICY-SCHEMA-SHA",
+      "contract": "pi-sampler.aidev-208-role-policy-schema/v1"
+    },
+    {
+      "ticket_id": "AIDEV-209",
+      "output_id": "ROLE-POLICY-RUNTIME-SHA",
+      "contract": "pi-sampler.aidev-209-role-policy-runtime/v1"
+    },
+    {
+      "ticket_id": "AIDEV-210",
+      "output_id": "PLANNER-POLICY-SHA",
+      "contract": "pi-sampler.aidev-210-planner-policy/v1"
+    }
+  ],
+  "soft_dependencies": [
+    {
+      "ticket_id": "AIDEV-187",
+      "evidence": [
+        {
+          "kind": "contract",
+          "source": "tests/fixtures/delivery-acceptance-v2/aidev-187-implementation-plan.md",
+          "summary": "Frozen AIDEV-187 fixture supplies the compatible role-policy grammar, catalog, resolver precedence, canonical digest, and stable envelopes; broader successor work remains downstream."
+        }
+      ],
+      "confidence": "high"
+    }
+  ],
+  "rows": [
+    {
+      "id": "A207-T01",
+      "title": "Strict role-policy schema",
+      "acceptance_class": "ordinary",
+      "requirement": "Add an optional strict `delivery.rolePolicy` property using the AIDEV-187-compatible format/version, assignment grammar, role keys, profile admission, bounds, and closed-key behavior while preserving profiles that omit the policy."
+    },
+    {
+      "id": "A207-T02",
+      "title": "Configured default planner",
+      "acceptance_class": "authority",
+      "requirement": "Configure `profiles/pi-sampler.json` with an admitted Pi planner selected by default, exact trusted role IDs, ordered Pi fallbacks, and an optional manual Gemini/Antigravity assignment that is never a required subscription."
+    },
+    {
+      "id": "A207-T03",
+      "title": "Exact-base policy loading",
+      "acceptance_class": "authority",
+      "requirement": "Load policy and schema only as verified regular blobs from the supplied exact trusted Git commit, reject mutable/candidate/worktree selectors, and return stable fail-closed diagnostics without leaking raw values."
+    },
+    {
+      "id": "A207-T04",
+      "title": "Canonical policy digest",
+      "acceptance_class": "ordinary",
+      "requirement": "Normalize policy deterministically, preserve fallback order, serialize identical compact UTF-8 bytes across Windows and Linux, and compute the domain-separated v1 SHA-256 digest."
+    },
+    {
+      "id": "A207-T05",
+      "title": "Deterministic role resolution",
+      "acceptance_class": "ordinary",
+      "requirement": "Resolve selected, allowlisted-override, and ordered-fallback assignments using the exact considered availability set and exact success envelopes, including correct null/zero-based fallback indexes."
+    },
+    {
+      "id": "A207-T06",
+      "title": "Fail-closed diagnostics",
+      "acceptance_class": "authority",
+      "requirement": "Reject unsupported provider/model/thinking/profile/role/reference/override/availability inputs, malformed policy, missing policy, forged policy, and exhausted fallbacks with deterministic precedence and no implicit fallback or launch behavior."
+    },
+    {
+      "id": "A207-T07",
+      "title": "Model-neutral planning workflow",
+      "acceptance_class": "authority",
+      "requirement": "Make canonical planning skill/documentation backend/model-neutral so trusted policy selects the planner and an operator launches the selected backend, with no normative named-provider subscription requirement."
+    },
+    {
+      "id": "A207-T08",
+      "title": "Candidate independence",
+      "acceptance_class": "authority",
+      "requirement": "Prove candidate code, prompts, panes, environment variables, working-tree bytes, and candidate profile values cannot change trusted policy admission or role resolution; keep model/provider identity separate from authority."
+    },
+    {
+      "id": "A207-T09",
+      "title": "Frozen planning and delivery gates",
+      "acceptance_class": "authority",
+      "requirement": "Preserve exact-base worktree rules, the separately authorized two-file plan-publication gate, one challenge, one integrated revision, one fresh independent review, two-cycle remediation limit, v2 plan validation, packet-v3, receipt-v1, marker-v3, review lifecycle, DCO, and explicit user-only merge authority."
+    },
+    {
+      "id": "A207-T10",
+      "title": "Bounded serial delivery",
+      "acceptance_class": "resource-bounded",
+      "requirement": "Deliver the cohesive implementation through exact serial AIDEV-208 -> AIDEV-209 -> AIDEV-210 children with child-specific credible-at-or-below-1,500 pre-coding gates, exact predecessor outputs, independent exact-head review, protected CI, DCO, explicit `Merge PR #N`, and immutable merge output; block before coding if any child estimate is not credible and never split arbitrary fragments."
+    }
+  ],
+  "portfolio": {
+    "planning_effort": "very_large",
+    "implementation_size": "very_large",
+    "requirement_readiness": "ready",
+    "information_gain": "high",
+    "downstream_unblock_set": [
+      "AIDEV-202"
+    ],
+    "affected_contracts": [
+      "delivery-role-policy/v1",
+      "project-profile-schema/v1",
+      "planning-workflow/model-neutral/v1",
+      "implementation-plan-manifest/v2-admission",
+      "delivery-review-policy/v1",
+      "implementation-plan-validator/v2",
+      "AIDEV-187-role-policy-compatibility-fixture",
+      "pi-sampler.aidev-207-plan-publication/v1",
+      "pi-sampler.aidev-208-role-policy-schema/v1",
+      "pi-sampler.aidev-209-role-policy-runtime/v1",
+      "pi-sampler.aidev-210-planner-policy/v1"
+    ],
+    "affected_packages": [
+      "node-root-tooling",
+      "planning-skills",
+      "project-profile",
+      "delivery-orchestration"
+    ],
+    "conflict_surface": "high",
+    "staleness_horizon_days": 7,
+    "risk_reduction_value": "high",
+    "unresolved_human_decisions": []
+  },
+  "ownership": {
+    "files": [
+      "profiles/project-profile.schema.json",
+      "tests/project-profiles.test.mjs",
+      "contracts/delivery-role-policy-v1.mjs",
+      "tests/delivery-role-policy.test.mjs",
+      "tests/fixtures/role-policy/aidev-207-bootstrap-vectors.json",
+      "profiles/pi-sampler.json",
+      "docs/IMPLEMENTATION-PLANNING.md",
+      "tests/implementation-plan-skills.test.mjs"
+    ],
+    "symbols": [
+      "path:.agents/skills/create-implementation-plan/SKILL.md",
+      "publication:AIDEV207-PLAN-SHA",
+      "output:AIDEV-208/ROLE-POLICY-SCHEMA-SHA",
+      "output:AIDEV-209/ROLE-POLICY-RUNTIME-SHA",
+      "output:AIDEV-210/PLANNER-POLICY-SHA",
+      "DeliveryRolePolicyV1",
+      "normalizeDeliveryRolePolicyV1",
+      "serializeDeliveryRolePolicyV1",
+      "deliveryRolePolicySha256V1",
+      "loadTrustedDeliveryRolePolicy",
+      "resolveDeliveryRoleAssignment",
+      "delivery.rolePolicy"
+    ],
+    "contracts": [
+      "delivery-role-policy/v1",
+      "project-profile-schema/v1",
+      "planning-workflow/model-neutral/v1",
+      "pi-sampler.aidev-207-plan-publication/v1",
+      "pi-sampler.aidev-208-role-policy-schema/v1",
+      "pi-sampler.aidev-209-role-policy-runtime/v1",
+      "pi-sampler.aidev-210-planner-policy/v1"
+    ]
+  },
+  "compatibility": {
+    "assumptions": [
+      "The AIDEV-187 fixture remains the compatible role-policy authority; this remediation adds no competing format or successor interface.",
+      "AIDEV-207 plan approval and the separately authorized two-file plan publication are distinct; publication produces future AIDEV207_PLAN_SHA and does not authorize implementation.",
+      "AIDEV207_PLAN_SHA is the immutable publication merge commit; child output names map underscore spellings to v2-portable hyphenated predecessor aliases and never act as mutable refs.",
+      "The original trusted base remains b57cb97b8f110c5f40bcefee3476a6013a6c7cd0 in the parent binding and every child output even though AIDEV-208 starts from the later publication merge.",
+      "Child-specific size values are repository-grounded planning evidence only; each child has a separate pre-coding credibility gate and blocks before coding if its cohesive estimate is not credibly at or below 1500.",
+      "scripts/review-policy.mjs, packet-v3, receipt-v1, marker-v3, DCO, implementation-plan-manifest/v2 admission, AIDEV-202 activation, and explicit user-only merge authority remain unchanged.",
+      "External-manual assignments are operator handoffs only; no resolver or candidate can launch a provider, prove execution, mutate a tracker, or grant lifecycle authority."
+    ],
+    "preserves_v1_readability": true,
+    "silently_upgrades_v1": false
+  },
+  "staleness": {
+    "triggers": [
+      {
+        "kind": "plan_changed",
+        "input": "plan_sha256",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "ticket_changed",
+        "input": "ticket_revision",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "base_revision_changed",
+        "input": "base_sha",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "predecessor_output_changed",
+        "input": "AIDEV-207/AIDEV207-PLAN-SHA",
+        "action": "revalidate"
+      },
+      {
+        "kind": "predecessor_output_changed",
+        "input": "AIDEV-208/ROLE-POLICY-SCHEMA-SHA",
+        "action": "revalidate"
+      },
+      {
+        "kind": "predecessor_output_changed",
+        "input": "AIDEV-209/ROLE-POLICY-RUNTIME-SHA",
+        "action": "revalidate"
+      },
+      {
+        "kind": "predecessor_output_changed",
+        "input": "AIDEV-210/PLANNER-POLICY-SHA",
+        "action": "revalidate"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "delivery-role-policy/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "project-profile-schema/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "planning-workflow/model-neutral/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "implementation-plan-manifest/v2-admission",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "delivery-review-policy/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "implementation-plan-validator/v2",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "AIDEV-187-role-policy-compatibility-fixture",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "pi-sampler.aidev-207-plan-publication/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "pi-sampler.aidev-208-role-policy-schema/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "pi-sampler.aidev-209-role-policy-runtime/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "contract_changed",
+        "input": "pi-sampler.aidev-210-planner-policy/v1",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T01",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T02",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T03",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T04",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T05",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T06",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T07",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T08",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T09",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "requirement_changed",
+        "input": "A207-T10",
+        "action": "renew_approval"
+      },
+      {
+        "kind": "approval_expired",
+        "input": "approval",
+        "action": "renew_approval"
+      }
+    ],
+    "descendant_base_campaign_drift_is_not_plan_staleness": true
+  },
+  "just_in_time_revalidation": {
+    "inputs": [
+      {
+        "kind": "repository_revision",
+        "name": "base_sha",
+        "expected": "b57cb97b8f110c5f40bcefee3476a6013a6c7cd0"
+      },
+      {
+        "kind": "ticket_revision",
+        "name": "ticket_revision",
+        "expected": "7495f11df9288325c211328128d19e21b44c0e9bb91b1c3b9d6ed219ecb58ea1"
+      },
+      {
+        "kind": "plan_digest",
+        "name": "plan_sha256",
+        "expected": "1ccb354cf35b88ff9270298a782268e411c534fd3269bc01867c93ed97dd6830"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "project-profile-schema/v1",
+        "expected": "7c83a3d308d5b7e193a7333316c55cdbfbbc9b3e181b6fadd4f67fba63fae954"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "delivery-review-policy/v1",
+        "expected": "12d32a4b589dc1d1b05089409cc65e4fffcd7867b5eee438b140688a01cc7b4f"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "implementation-plan-manifest/v2-admission",
+        "expected": "9c31dc84e57dfd691b3e2a45046b7ab9b2876e51a08e223556bb7e4350824a0e"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "implementation-plan-validator/v2",
+        "expected": "3bea29df796b108ba284ffed25094855253599bc7fe4d8c5c2a920b972ea62fc"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "planning-workflow/model-neutral/v1",
+        "expected": "08c26bbb7cc5dac6bdd7cdcf045c12be11714602f730ab120cd4fab42e21d3e1"
+      },
+      {
+        "kind": "contract_digest",
+        "name": "AIDEV-187-role-policy-compatibility-fixture",
+        "expected": "e88bafec7997fa247e56451dc72fd49007e9ac1128679d9ee21a6cc061848744"
+      }
+    ],
+    "required_before": "implementation"
+  }
+}
