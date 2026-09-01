@@ -1,38 +1,9 @@
 node_modules/
 dist/
 coverage/
-/.pi/
-!/.pi/
-/.pi/*
-# Project-local Excalidraw SQLite database and WAL/SHM recovery sidecars.
-/.pi/excalidraw/
-!/.pi/agents/
-/.pi/agents/*
-!/.pi/agents/*.md
-/.pi-subagents/
-*.log
 .env
 .env.*
 !.env.example
-
-# Runtime lesson-registry private authority must never enter source control.
-.lesson-registry-authority.json
-*.lesson-registry-authority.json
-
-# LLM Wiki runtime state, immutable source packets, and sensitive artifacts stay local.
-.llm-wiki/raw/
-.llm-wiki/meta/
-.llm-wiki/outputs/
-.llm-wiki/.discoveries/
-.llm-wiki/sessions/
-.llm-wiki/session*.json
-.llm-wiki/**/*.token
-.llm-wiki/**/*.pem
-.llm-wiki/**/*.key
-.llm-wiki/wiki/log.md
-/artifacts/tool-output/
-# Acceptance and benchmark packets are local evidence until a separate policy approves publication.
-/artifacts/benchmark/
-/artifacts/delivery/
-# Final Terra receipts, lifecycle records, and complete frozen inputs are local-only.
-/artifacts/final-review/
+*.log
+.DS_Store
+Thumbs.db
