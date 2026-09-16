@@ -10,6 +10,7 @@ import {
 	normalizeEscapedFences,
 	readPersistedCommandBlocks,
 	serializeCommandBlocks,
+	sanitizeBlockForDisplay,
 } from "../src/command-blocks.js";
 
 const slash = String.fromCharCode(92);
@@ -183,7 +184,13 @@ test("surfaces injected clipboard failures and rejects invalid indexes", async (
 	await assert.rejects(() => copyCommandBlock(blocks, 1, async () => {}), /Command block 2 does not exist/);
 });
 
-test("preview sanitizes terminal controls without changing copied content", () => {
-	const code = "echo ok\u001b]52;c;secret\u0007\nnext";
-	assert.equal(formatBlockPreview(code), "echo ok? ↵ next");
+test("display sanitizers remove C1 controls while copy preserves bytes", async () => {
+	const code = "echo ok\u0080\u009bCSI\u009dOSC\u009cST\u009f\nnext";
+	assert.equal(formatBlockPreview("echo ok\u001b]52;c;secret\u0007\nnext"), "echo ok? ↵ next");
+	assert.doesNotMatch(formatBlockPreview(code), /[\u0080-\u009f]/);
+	assert.doesNotMatch(sanitizeBlockForDisplay(code), /[\u0080-\u009f]/);
+
+	const copied = [];
+	await copyCommandBlock([{ code }], 0, async (text) => copied.push(text));
+	assert.deepEqual(copied, [code]);
 });
