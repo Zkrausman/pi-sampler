@@ -1,0 +1,6 @@
+{
+  "name": "@aidev271/token-guard",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --experimental-strip-types tests/token-guard.test.mjs" }
+}
