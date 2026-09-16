@@ -5,5 +5,17 @@ coverage/
 .env.*
 !.env.example
 *.log
+
+# Keep curated project wiki pages; ignore local, generated, and raw wiki state.
+.llm-wiki/raw/
+.llm-wiki/meta/
+.llm-wiki/.discoveries/
+.llm-wiki/config.json
+.llm-wiki/WIKI_SCHEMA.md
+.llm-wiki/wiki/index.md
+.llm-wiki/wiki/log.md
+.llm-wiki/wiki/*/index.md
+.llm-wiki/wiki/sources/
+
 .DS_Store
 Thumbs.db
