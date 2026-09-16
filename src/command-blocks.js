@@ -29,6 +29,7 @@ function splitLines(markdown) {
 				content: markdown.slice(start, contentEnd),
 				start,
 				contentEnd,
+				lineIndex: lines.length,
 				eol: "",
 			});
 			break;
@@ -39,6 +40,7 @@ function splitLines(markdown) {
 			content: markdown.slice(start, contentEnd),
 			start,
 			contentEnd,
+			lineIndex: lines.length,
 			eol: markdown.slice(contentEnd, eolEnd),
 		});
 		start = eolEnd;
@@ -48,22 +50,14 @@ function splitLines(markdown) {
 }
 
 /**
- * Parse only the intentionally supported escaped-fence spelling. This is not
- * a second Markdown grammar: Marked handles all ordinary fence, list, and
- * blockquote semantics after these paired markers are unescaped.
+ * Parse only the intentionally supported top-level spelling: one backslash
+ * before each backtick on a standalone line with at most three spaces. This
+ * deliberately does not guess at blockquote/list containers; raw nested
+ * fences are handled by Marked during extraction.
  */
 function parseEscapedFenceLine(content) {
-	let position = 0;
-	let quoteDepth = 0;
-	while (true) {
-		const quote = /^ {0,3}>[ \t]?/.exec(content.slice(position));
-		if (!quote) break;
-		position += quote[0].length;
-		quoteDepth += 1;
-	}
-
-	const indent = /^ {0,3}/.exec(content.slice(position))?.[0] ?? "";
-	position += indent.length;
+	const indent = /^ {0,3}/.exec(content)?.[0] ?? "";
+	const position = indent.length;
 	const rest = content.slice(position);
 	if (!rest.startsWith("\\`")) return undefined;
 
@@ -78,25 +72,57 @@ function parseEscapedFenceLine(content) {
 		char: BACKTICK,
 		length,
 		info,
-		quoteDepth,
 		markerStart: position,
 		markerEnd: position + length * 2,
 	};
 }
 
 function isEscapedClosingFence(fence, opening) {
-	return fence && fence.style === opening.style && fence.char === opening.char && fence.quoteDepth === opening.quoteDepth && fence.length >= opening.length && fence.info.trim() === "";
+	return fence && fence.style === opening.style && fence.char === opening.char && fence.length >= opening.length && fence.info.trim() === "";
+}
+
+function lineNumberAt(markdown, offset) {
+	let line = 0;
+	for (let index = 0; index < offset; index += 1) {
+		if (markdown[index] === "\n") line += 1;
+	}
+	return line;
+}
+
+/** Return source lines occupied by complete fenced code tokens from Marked. */
+function protectedFenceLines(markdown) {
+	const normalized = markdown.replace(/\r\n?|\r/g, "\n");
+	const protectedLines = new Set();
+	let searchFrom = 0;
+
+	visitTokens(markdownParser.lexer(markdown), (token) => {
+		if (!isCompleteFencedCodeToken(token)) return;
+		const raw = token.raw.replace(/\r\n?|\r/g, "\n");
+		const start = normalized.indexOf(raw, searchFrom);
+		if (start < 0) return;
+
+		const end = start + raw.length;
+		for (let line = lineNumberAt(normalized, start); line <= lineNumberAt(normalized, Math.max(start, end - 1)); line += 1) {
+			protectedLines.add(line);
+		}
+		searchFrom = end;
+	});
+
+	return protectedLines;
 }
 
 function findEscapedFencePairs(markdown) {
 	const lines = splitLines(markdown);
+	const protectedLines = protectedFenceLines(markdown);
 	const pairs = [];
 
 	for (let openingIndex = 0; openingIndex < lines.length; openingIndex += 1) {
+		if (protectedLines.has(openingIndex)) continue;
 		const opening = parseEscapedFenceLine(lines[openingIndex].content);
 		if (!opening) continue;
 
 		for (let closingIndex = openingIndex + 1; closingIndex < lines.length; closingIndex += 1) {
+			if (protectedLines.has(closingIndex)) continue;
 			const closing = parseEscapedFenceLine(lines[closingIndex].content);
 			if (!isEscapedClosingFence(closing, opening)) continue;
 
@@ -115,7 +141,8 @@ function languageFromInfo(info) {
 }
 
 /**
- * Convert paired assistant-escaped fences into ordinary Markdown fences.
+ * Convert paired top-level assistant-escaped fences into ordinary Markdown
+ * fences. Valid fenced code spans are protected before the narrow rewrite.
  * Only fence syntax is changed; prose and command body bytes are preserved.
  * This deliberately cannot distinguish accidental model escaping from an
  * intentional literal example, so callers should double-escape literal

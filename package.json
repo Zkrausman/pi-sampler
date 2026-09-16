@@ -7,15 +7,15 @@
   "type": "module",
   "keywords": ["pi-package"],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "test": "node --test",
     "check": "node --check extension.js && node --check src/command-blocks.js && node --check src/command-block-view.js"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": ">=0.85.1 <0.86.0",
+    "@earendil-works/pi-tui": ">=0.85.1 <0.86.0"
   },
   "devDependencies": {
     "@earendil-works/pi-tui": "0.85.1"

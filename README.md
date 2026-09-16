@@ -22,7 +22,7 @@ The clipboard receives the code token text produced by Pi's Markdown lexer, so M
 
 ## Fence handling
 
-The Markdown transformer runs only for assistant messages. It converts a paired fence written with exactly one backslash before each backtick (for example, a source line containing `\\` followed by each backtick) back to a normal Markdown fence before Pi renders it. Raw backtick and tilde fences are extracted with Pi's public Marked lexer semantics, including ordinary indentation and nested list/blockquote containers. Unclosed fences and double-escaped fences are left alone, so partial prose is not offered as a copy target. Exactly-one-backslash syntax is intentionally ambiguous: it may be accidental model escaping or an intentional literal example, and the transformer cannot infer intent; double-escape a literal example.
+The Markdown transformer runs only for assistant messages. It converts a paired fence written with exactly one backslash before each backtick back to a normal Markdown fence before Pi renders it, but only for standalone lines with at most three leading spaces. Complete fenced spans are protected first, so escaped marker examples inside an already-valid code sample remain literal. Escaped fences in blockquote/list containers, including standard four-space list continuation, are intentionally not normalized; normal raw backtick and tilde fences in those containers are still extracted with Pi's public Marked lexer semantics. Unclosed and double-escaped fences are left alone. Exactly-one-backslash syntax is intentionally ambiguous: it may be accidental model escaping or an intentional literal example, and the transformer cannot infer intent; double-escape a literal example.
 
 Blocks are captured at `turn_end` in a TUI session and stored as Pi custom entries. They are not part of LLM context and survive session reloads/tree navigation.
 
@@ -39,14 +39,14 @@ Manual reproduction:
 Validation evidence for this revision:
 
 - **Actual:** the installed Pi 0.85.1 public `Marked` export tokenizes raw fences as `code`; exactly-one-backslash source as a literal paragraph; and the normalized source as `code`. The regression test compares nested/indented extraction against those tokens. This diagnoses source escaping, not a Pi/Pith renderer defect.
-- **Actual:** `npm test` — 12 passed, 0 failed; `npm run check` passed.
+- **Actual:** `npm test` — 24 passed, 0 failed; `npm run check` passed.
 - **Actual:** Pi 0.85.1 `--mode rpc --offline` smoke loading `./extension.js` succeeded, and `/copy-command` returned the expected no-block warning.
 - **Not performed:** interactive TUI verification on Windows or inside Herdr, mouse-input acceptance, OSC52 delivery, and a real clipboard copy. Tests use injected clipboard writers and invoke no real clipboard command.
 
 ## Compatibility and limitations
 
-The extension targets Pi 0.85's public APIs and public `pi-tui` components. It does not execute commands, modify Pi settings, or send custom entries to LLM context. Mouse controls are fullscreen-only; the shortcut and slash command remain available in regular mode and when `MouseRegion` is unavailable.
+The extension targets Pi 0.85.1's public APIs and public `pi-tui` components (`>=0.85.1 <0.86.0`) on Node `>=22.19.0`. It does not execute commands, modify Pi settings, or send custom entries to LLM context. Mouse controls are fullscreen-only; the shortcut and slash command remain available in regular mode and when `MouseRegion` is unavailable.
 
-On Windows, clipboard behavior is entirely delegated to Pi's `copyToClipboard` helper (including its native/fallback behavior); this package invokes no OS clipboard command and requires the host clipboard to be available. Exactly-one-backslash Markdown fences are normalized for display and copying; unclosed or double-escaped fences are deliberately ignored.
+On Windows, clipboard behavior is entirely delegated to Pi's `copyToClipboard` helper (including its native/fallback behavior); this package invokes no OS clipboard command and requires the host clipboard to be available. Exactly-one-backslash Markdown fences are normalized only at the documented top-level boundary for display and copying; valid fenced code spans are protected, and unclosed, nested-container, or double-escaped fences are deliberately ignored.
 
 There is no Herdr API or product integration. In a Herdr pane, load the extension explicitly as above; Herdr pane focus, terminal key handling, and host clipboard availability remain external constraints. Shared Pi/Herdr configuration and behavior are unchanged. No interactive Windows or Herdr acceptance run was performed for this package.

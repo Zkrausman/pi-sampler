@@ -62,6 +62,29 @@ test("leaves double-escaped fences and prose alone", () => {
 	assert.equal(normalizeEscapedFences(`The literal marker ${escapedFence(1, "text")} is prose.`), `The literal marker ${escapedFence(1, "text")} is prose.`);
 });
 
+test("does not rewrite escaped marker examples inside valid fenced code", () => {
+	const outerFence = tick.repeat(4);
+	const innerOpening = escapedFence(1, "sh");
+	const innerClosing = escapedFence(1);
+	const source = `${outerFence}markdown\n${innerOpening}\necho nested\n${innerClosing}\n${outerFence}`;
+
+	assert.equal(normalizeEscapedFences(source), source);
+	assert.deepEqual(extractFencedBlocks(source).map(({ language, code }) => ({ language, code })), [{
+		language: "markdown",
+		code: `${innerOpening}\necho nested\n${innerClosing}`,
+	}]);
+});
+
+test("documents the narrow top-level escaped-fence normalization boundary", () => {
+	const escapedList = `- item\n    ${escapedFence(1, "sh")}\n    echo listed\n    ${escapedFence(1)}`;
+	const escapedQuote = `> ${escapedFence(1, "sh")}\n> echo quoted\n> ${escapedFence(1)}`;
+	assert.equal(normalizeEscapedFences(escapedList), escapedList);
+	assert.equal(normalizeEscapedFences(escapedQuote), escapedQuote);
+
+	const rawList = `- item\n    ${rawFence("sh")}\n    echo listed\n    ${rawFence()}`;
+	assert.deepEqual(extractFencedBlocks(rawList).map(({ language, code }) => ({ language, code })), [{ language: "sh", code: "echo listed" }]);
+});
+
 test("follows Pi/Marked for spaced fences, tilde fences, tabs, and CRLF", () => {
 	const source = `  ${rawFence(" text")}\r\n  echo hi\r\n\r\n  ${rawFence()}\r\n`;
 	const blocks = extractFencedBlocks(source);
