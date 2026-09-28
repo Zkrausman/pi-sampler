@@ -51,7 +51,12 @@ export class GoalLoop {
     return true;
   }
   wait(): void { this.waiting = true; this.log('await-native-completion'); }
-  toolCompleted(isError: boolean): void { if (!isError) this.completedTools++; }
+  toolCompleted(isError: boolean): void {
+    // Even a failed tool may have changed external state. A caller's ready
+    // snapshot must be taken after the most recent tool result, not before it.
+    if (this.count > 0) this.pendingState = undefined;
+    if (!isError) this.completedTools++;
+  }
   status(): { active: boolean; waiting: boolean; count: number; goal?: string; goalId?: string; audit: string[] } {
     return { active: !!this.goal, waiting: this.waiting, count: this.count, goal: this.goal, goalId: this.goalId, audit: [...this.audit] };
   }

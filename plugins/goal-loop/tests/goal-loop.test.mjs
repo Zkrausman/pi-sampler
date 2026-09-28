@@ -53,6 +53,24 @@ test('work-state blocked, operator gate, event wait, duplicate and stale updates
   assert.equal(stale.receiveWorkState(ready(stale), 1200), true);
   assert.equal(stale.decide(boundary, 32001).reason, 'work-state-unknown');
 });
+test('ready snapshots must follow the latest tool result, including failed tools', () => {
+  const early = new GoalLoop(3, 5000); early.arm('safe', 1000); early.decide(boundary, 1100);
+  assert.equal(early.receiveWorkState(ready(early), 1200), true);
+  early.toolCompleted(false);
+  assert.equal(early.decide(boundary, 1300).reason, 'work-state-unknown');
+
+  const failed = new GoalLoop(3, 5000); failed.arm('safe', 1000); failed.decide(boundary, 1100);
+  failed.toolCompleted(false);
+  assert.equal(failed.receiveWorkState(ready(failed), 1200), true);
+  failed.toolCompleted(true); // a failed tool may still have changed external state
+  assert.equal(failed.decide(boundary, 1300).reason, 'work-state-unknown');
+
+  const fresh = new GoalLoop(3, 5000); fresh.arm('safe', 1000); fresh.decide(boundary, 1100);
+  assert.equal(fresh.receiveWorkState(ready(fresh), 1200), true);
+  fresh.toolCompleted(false); // invalidates the earlier snapshot
+  assert.equal(fresh.receiveWorkState(ready(fresh, 2, 1300), 1300), true);
+  assert.equal(fresh.decide(boundary, 1400).nextAction, 'Read one bounded file');
+});
 test('error, abort, native pending, wait, pause and deadline stop closed', () => {
   for (const [setup, value, reason] of [
     [() => {}, { outcome: 'error' }, 'run-error'],
