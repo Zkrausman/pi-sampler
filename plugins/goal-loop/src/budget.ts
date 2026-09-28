@@ -5,6 +5,9 @@ export function reportedCostSince(branch: readonly any[], startId: string | null
   if (startId !== null && index < 0) return undefined; // branch changed under an armed goal
   let cost = 0;
   for (const entry of branch.slice(index + 1)) {
+    // Pi persists our injected continuation as a zero-cost session entry.
+    // Do not exempt unknown custom messages or entries with unreported usage.
+    if (entry.type === 'custom_message' && entry.customType === 'pi-sampler-goal-loop') continue;
     const usage = entry.type === 'usage' || entry.type === 'compaction' || entry.type === 'branch_summary'
       ? entry.usage : entry.type === 'message' && ['assistant', 'toolResult'].includes(entry.message?.role)
         ? entry.message.usage : undefined;

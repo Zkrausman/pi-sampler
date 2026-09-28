@@ -97,9 +97,10 @@ test('extension never auto-arms, injects one bounded continuation and resets acr
   extension({ on: (name, handler) => handlers.set(name, handler), registerCommand: (name, value) => commands.set(name, value),
     events: { on: (name, handler) => bus.set(name, handler), emit: (name, data) => { if (name === 'pi-sampler:goal-loop:armed') goalId = data.goalId; } },
   });
+  const branch = [{ id: 'reply', type: 'message', message: { role: 'assistant', usage: { cost: { total: 0.01 } } } }];
   const ctx = { hasUI: false, sessionManager: {
     getLeafId: () => null,
-    getBranch: () => [{ id: 'reply', type: 'message', message: { role: 'assistant', usage: { cost: { total: 0.01 } } } }],
+    getBranch: () => branch,
   } };
   const event = { outcome: 'completed', continue: false, context: { canContinue: false, pendingMessages: [] } };
   assert.equal(handlers.get('agent_before_settle')(event, ctx), undefined);
@@ -108,12 +109,15 @@ test('extension never auto-arms, injects one bounded continuation and resets acr
   assert.equal(next.continue, true);
   assert.match(next.entries[0].content, /no authority for consequential actions/i);
   assert.doesNotMatch(next.entries[0].content, /Squire|Gelt|both lanes/i);
-  assert.equal(handlers.get('agent_before_settle')(event, ctx), undefined);
-  await commands.get('goal-loop').handler('start safe tests', ctx);
-  handlers.get('agent_before_settle')(event, ctx);
+  // Pi commits the continuation draft into getBranch(); a second step must
+  // count only provider usage, not treat our zero-cost message as unknown cost.
+  branch.push({ id: 'injected-1', ...next.entries[0] });
+  branch.push({ id: 'answer-2', type: 'message', message: { role: 'assistant', usage: { cost: { total: 0.02 } } } });
   handlers.get('tool_result')({ isError: false });
   bus.get('pi-sampler:goal-loop:work-state')({ goalId, revision: 1, observedAt: Date.now(), disposition: 'ready', nextAction: 'Inspect one file', evidenceRef: 'receipt:1' });
-  assert.match(handlers.get('agent_before_settle')(event, ctx).entries[0].content, /Inspect one file/);
+  const second = handlers.get('agent_before_settle')(event, ctx);
+  assert.equal(second.continue, true);
+  assert.match(second.entries[0].content, /Inspect one file/);
   assert.equal(handlers.get('agent_before_settle')(event, ctx), undefined);
   await commands.get('goal-loop').handler('start safe tests', ctx);
   handlers.get('session_start')();
@@ -147,6 +151,9 @@ test('provider-reported cost uses active branch after arm and rejects unknown or
     { id: 'tool', type: 'message', message: { role: 'toolResult', usage: usd(0.01) } },
   ];
   assert.ok(Math.abs(reportedCostSince(branch, 'arm') - 0.06) < 1e-9);
+  assert.ok(Math.abs(reportedCostSince([...branch, { id: 'injected', type: 'custom_message', customType: 'pi-sampler-goal-loop' }], 'arm') - 0.06) < 1e-9);
+  assert.equal(reportedCostSince([...branch, { id: 'unrelated', type: 'custom_message', customType: 'unknown' }], 'arm'), undefined);
+  assert.equal(reportedCostSince([...branch, { id: 'unknown', type: 'custom' }], 'arm'), undefined);
   assert.equal(reportedCostSince(branch, 'missing'), undefined);
   assert.equal(reportedCostSince([{ id: 'answer', type: 'message', message: { role: 'assistant' } }], null), undefined);
   assert.equal(reportedCostSince([{ id: 'answer', type: 'message', message: { role: 'assistant', usage: usd(-1) } }], null), undefined);
