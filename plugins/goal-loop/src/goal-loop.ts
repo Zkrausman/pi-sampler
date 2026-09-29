@@ -10,11 +10,13 @@ export class GoalLoop {
   private goalId: string | undefined;
   private revision = 0;
   private pendingState: WorkState | undefined;
+  private latestToolResultAt = -Infinity;
   private count = 0;
   private completedTools = 0;
   private seenTools = 0;
   private deadline = 0;
   private waiting = false;
+  private callerRequired = false;
   private cursor: string | null = null;
   private readonly audit: string[] = [];
   private readonly maxContinuations: number;
@@ -32,18 +34,21 @@ export class GoalLoop {
     this.maxReportedCostUSD = maxReportedCostUSD;
   }
   get costCursor(): string | null { return this.cursor; }
-  arm(goal: string, now = Date.now(), cursor: string | null = null): string {
+  arm(goal: string, now = Date.now(), cursor: string | null = null, callerRequired = false): string {
     const text = goal.trim();
     if (!text || text.length > 240) throw new Error('Goal must be 1–240 characters');
-    this.reset(); this.goal = text; this.goalId = randomUUID(); this.deadline = now + this.maxMilliseconds; this.cursor = cursor; this.log('armed');
+    if (typeof callerRequired !== 'boolean') throw new Error('Invalid caller requirement');
+    this.reset(); this.goal = text; this.goalId = randomUUID(); this.deadline = now + this.maxMilliseconds; this.cursor = cursor; this.callerRequired = callerRequired; this.log('armed');
     return this.goalId;
   }
-  reset(): void { this.goal = undefined; this.goalId = undefined; this.revision = 0; this.pendingState = undefined; this.count = 0; this.completedTools = 0; this.seenTools = 0; this.deadline = 0; this.waiting = false; this.cursor = null; this.audit.length = 0; }
+  reset(): void { this.goal = undefined; this.goalId = undefined; this.revision = 0; this.pendingState = undefined; this.latestToolResultAt = -Infinity; this.count = 0; this.completedTools = 0; this.seenTools = 0; this.deadline = 0; this.waiting = false; this.callerRequired = false; this.cursor = null; this.audit.length = 0; }
   pause(reason = 'operator-paused'): void { this.goal = undefined; this.goalId = undefined; this.pendingState = undefined; this.log(reason); }
   receiveWorkState(input: unknown, now = Date.now()): boolean {
     if (!this.goalId) return false;
     const state = validateWorkState(input, this.goalId, this.revision, now);
-    if (!state) { this.pause('invalid-work-state'); return false; }
+    if (!state || (state.disposition === 'ready' && state.observedAt <= this.latestToolResultAt)) {
+      this.pause('invalid-work-state'); return false;
+    }
     this.revision = state.revision;
     if (state.disposition !== 'ready') { this.pause(`work-${state.disposition}`); return true; }
     this.pendingState = state;
@@ -51,10 +56,13 @@ export class GoalLoop {
     return true;
   }
   wait(): void { this.waiting = true; this.log('await-native-completion'); }
-  toolCompleted(isError: boolean): void {
-    // Even a failed tool may have changed external state. A caller's ready
-    // snapshot must be taken after the most recent tool result, not before it.
-    if (this.count > 0) this.pendingState = undefined;
+  toolCompleted(isError: boolean, now = Date.now()): void {
+    if (!this.goalId) return;
+    // Delivery order is not observation order: a delayed ready event observed
+    // before a tool result must not authorize the next continuation.
+    if (!Number.isSafeInteger(now)) { this.pause('invalid-tool-time'); return; }
+    this.latestToolResultAt = Math.max(this.latestToolResultAt, now);
+    if (this.count > 0 || this.callerRequired) this.pendingState = undefined;
     if (!isError) this.completedTools++;
   }
   status(): { active: boolean; waiting: boolean; count: number; goal?: string; goalId?: string; audit: string[] } {
@@ -73,8 +81,9 @@ export class GoalLoop {
     // The first continuation follows the operator's explicit arm. Each later
     // one needs a fresh caller snapshot AND new tool evidence; neither alone
     // establishes authority. A pre-first snapshot cannot authorize step two.
-    const next = this.count > 0 ? this.pendingState : undefined;
-    if (this.count > 0 && (!next || !validateWorkState(next, this.goalId!, next.revision - 1, now))) return stop('work-state-unknown');
+    const needsSnapshot = this.count > 0 || this.callerRequired;
+    const next = needsSnapshot ? this.pendingState : undefined;
+    if (needsSnapshot && (!next || !validateWorkState(next, this.goalId!, next.revision - 1, now))) return stop('work-state-unknown');
     if (this.count > 0 && this.completedTools === this.seenTools) return stop('no-new-tool-evidence');
     this.pendingState = undefined;
     this.seenTools = this.completedTools;

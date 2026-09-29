@@ -18,17 +18,24 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const input = args.trim();
       try {
-        if (input.startsWith('start ') || input.startsWith('resume ')) {
-          // Resume requires a freshly named operator-approved goal; never restore
-          // a stale paused goal, cursor, work-state assertion or budget.
-          const goalId = loop.arm(input.slice(input.indexOf(' ') + 1), Date.now(), ctx.sessionManager.getLeafId());
-          pi.events.emit('pi-sampler:goal-loop:armed', { goalId });
+        const words = input.split(/\s+/);
+        if ((words[0] === 'start' || words[0] === 'resume') && words.length > 1) {
+          // Parse tokens before arming. Never silently downgrade a malformed or
+          // misplaced caller-required flag to the unconditional first-step mode.
+          const goalWords = words.slice(1);
+          const callerRequired = goalWords[0] === '--caller-required';
+          if (goalWords.some((word, index) => word.startsWith('--caller-required') && (!callerRequired || index !== 0)) ||
+              (callerRequired && goalWords.length < 2)) throw new Error('Invalid caller-required goal');
+          const goal = goalWords.slice(callerRequired ? 1 : 0).join(' ');
+          const goalId = loop.arm(goal, Date.now(), ctx.sessionManager.getLeafId(), callerRequired);
+          pi.events.emit('pi-sampler:goal-loop:armed', { goalId, goal, callerRequired });
         }
         else if (input === 'pause' || input === 'stop') loop.pause();
         else if (input === 'wait') loop.wait();
-        else if (input !== 'status') throw new Error('Usage: /goal-loop start|resume <approved goal> | status | wait | pause | stop');
+        else if (input !== 'status') throw new Error('Usage: /goal-loop start|resume [--caller-required] <approved goal> | status | wait | pause | stop');
         if (ctx.hasUI) ctx.ui.notify(`Goal loop: ${JSON.stringify(loop.status())}`, 'info');
       } catch (error) {
+        loop.pause('invalid-command');
         if (ctx.hasUI) ctx.ui.notify(error instanceof Error ? error.message : 'Invalid goal loop command', 'error');
       }
     },
